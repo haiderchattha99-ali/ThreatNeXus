@@ -8,7 +8,8 @@ const {
     getAllThreats,
     uploadThreatCSV,
     searchThreats,
-    updateThreatStatus
+    updateThreatStatus,
+    deleteThreat
 } = require("../controllers/threatController");
 
 // Get all threats
@@ -25,5 +26,10 @@ router.patch(
     "/:id/status",
     authenticate,
     updateThreatStatus
+);
+router.delete(
+    "/:id",
+    authenticate,
+    deleteThreat
 );
 module.exports = router;

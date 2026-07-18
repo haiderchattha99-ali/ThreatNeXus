@@ -10,18 +10,33 @@ const { detectIOCType } = require("../services/iocValidationService");
 // Get All Threats
 // ==============================
 const getAllThreats = async (req, res) => {
-
     try {
 
+        const page = parseInt(req.query.page) || 1;
+        const limit = parseInt(req.query.limit) || 10;
+        const sort = req.query.sort || "createdAt";
+        const order = req.query.order === "asc" ? "asc" : "desc";
+
+        const skip = (page - 1) * limit;
+
+        const totalRecords = await prisma.threat.count();
+
         const threats = await prisma.threat.findMany({
+            skip,
+            take: limit,
             orderBy: {
-                createdAt: "desc"
+                [sort]: order
             }
         });
 
+        const totalPages = Math.ceil(totalRecords / limit);
+
         return res.json({
             success: true,
-            count: threats.length,
+            page,
+            limit,
+            totalRecords,
+            totalPages,
             data: threats
         });
 
@@ -35,7 +50,6 @@ const getAllThreats = async (req, res) => {
         });
 
     }
-
 };
 const searchThreats = async (req, res) => {
     try {
@@ -176,6 +190,46 @@ const updateThreatStatus = async (req, res) => {
 
     }
 };
+const deleteThreat = async (req, res) => {
+    try {
+
+        const { id } = req.params;
+
+        const threat = await prisma.threat.findUnique({
+            where: {
+                id: Number(id)
+            }
+        });
+
+        if (!threat) {
+            return res.status(404).json({
+                success: false,
+                message: "Threat not found."
+            });
+        }
+
+        await prisma.threat.delete({
+            where: {
+                id: Number(id)
+            }
+        });
+
+        return res.json({
+            success: true,
+            message: "Threat deleted successfully."
+        });
+
+    } catch (err) {
+
+        console.error(err);
+
+        return res.status(500).json({
+            success: false,
+            message: "Server Error"
+        });
+
+    }
+};
 
 // ==============================
 // Upload CSV
@@ -288,5 +342,6 @@ module.exports = {
     getAllThreats,
     uploadThreatCSV,
     searchThreats,
-    updateThreatStatus
+    updateThreatStatus,
+    deleteThreat
 };

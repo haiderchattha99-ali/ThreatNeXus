@@ -82,7 +82,65 @@ const getDashboardStats = async (req, res) => {
     }
 
 };
+const getDashboardCharts = async (req, res) => {
 
+    try {
+
+        const threats = await prisma.threat.findMany();
+
+        const severity = [
+            { name: "Critical", value: 0 },
+            { name: "High", value: 0 },
+            { name: "Medium", value: 0 },
+            { name: "Low", value: 0 }
+        ];
+
+        const status = {};
+        const iocTypes = {};
+
+        threats.forEach((threat) => {
+
+            const sev = severity.find(s => s.name === threat.severity);
+            if (sev) sev.value++;
+
+            if (threat.status) {
+                status[threat.status] = (status[threat.status] || 0) + 1;
+            }
+
+            if (threat.iocType) {
+                iocTypes[threat.iocType] = (iocTypes[threat.iocType] || 0) + 1;
+            }
+
+        });
+
+        res.json({
+            success: true,
+            data: {
+                severity,
+                status: Object.entries(status).map(([name, value]) => ({
+                    name,
+                    value
+                })),
+                iocTypes: Object.entries(iocTypes).map(([name, value]) => ({
+                    name,
+                    value
+                }))
+            }
+        });
+
+    } catch (err) {
+
+        console.error(err);
+
+        res.status(500).json({
+            success: false,
+            message: "Server Error"
+        });
+
+    }
+
+};
 module.exports = {
-    getDashboardStats
+    getDashboardStats,
+    getDashboardCharts
 };
