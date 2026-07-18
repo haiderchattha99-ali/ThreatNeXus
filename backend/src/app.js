@@ -4,7 +4,7 @@ const cors = require("cors");
 const authRoutes = require("./routes/authRoutes");
 const profileRoutes = require("./routes/profileRoutes");
 const threatRoutes = require("./routes/threatRoutes");
-
+const dashboardRoutes = require("./routes/dashboardRoutes");
 const app = express();
 
 // Middlewares
@@ -15,7 +15,7 @@ app.use(express.json());
 app.use("/api/auth", authRoutes);
 app.use("/api/profile", profileRoutes);
 app.use("/api/threats", threatRoutes);
-
+app.use("/api/dashboard", dashboardRoutes);
 // Home Route
 app.get("/", (req, res) => {
   res.json({
