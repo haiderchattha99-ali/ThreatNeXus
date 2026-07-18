@@ -1,0 +1,4 @@
+-- AlterTable
+ALTER TABLE "Threat" ADD COLUMN     "iocType" TEXT,
+ALTER COLUMN "riskScore" DROP DEFAULT,
+ALTER COLUMN "status" DROP DEFAULT;

@@ -16,13 +16,14 @@ model User {
   createdAt DateTime @default(now())
 }
 model Threat {
-  id        Int      @id @default(autoincrement())
-  ip        String?
-  domain    String?
-  hash      String?
-  severity  String
-  source    String
-  riskScore Int      @default(0)
-  status    String   @default("New")
-  createdAt DateTime @default(now())
+  id         Int      @id @default(autoincrement())
+  ip         String?
+  domain     String?
+  hash       String?
+  severity   String
+  source     String
+  riskScore  Int
+  status     String
+  iocType    String?
+  createdAt  DateTime @default(now())
 }
