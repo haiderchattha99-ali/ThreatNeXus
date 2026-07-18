@@ -1,7 +1,7 @@
 const prisma = require("../config/prisma");
 const fs = require("fs");
 const csv = require("csv-parser");
-
+const { calculateRiskScore } = require("../services/riskScoringService");
 // Get all threats
 const getAllThreats = async (req, res) => {
   try {
@@ -42,11 +42,13 @@ const uploadThreatCSV = async (req, res) => {
       .pipe(csv())
       .on("data", (row) => {
         threats.push({
-          ip: row.ip || null,
-          domain: row.domain || null,
-          hash: row.hash || null,
-          severity: row.severity || "Low",
-          source: row.source || "CSV",
+  ip: row.ip || null,
+  domain: row.domain || null,
+  hash: row.hash || null,
+  severity: row.severity || "Low",
+  source: row.source || "CSV",
+  riskScore: calculateRiskScore(row.severity),
+  status: "New",
         });
       })
       .on("end", async () => {
