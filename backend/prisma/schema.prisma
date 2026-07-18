@@ -1,0 +1,28 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        Int      @id @default(autoincrement())
+  name      String
+  email     String   @unique
+  password  String
+  role      String   @default("analyst")
+  createdAt DateTime @default(now())
+}
+model Threat {
+  id        Int      @id @default(autoincrement())
+  ip        String?
+  domain    String?
+  hash      String?
+  severity  String
+  source    String
+  riskScore Int      @default(0)
+  status    String   @default("New")
+  createdAt DateTime @default(now())
+}
