@@ -7,38 +7,87 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum Role {
+  ADMIN
+  ANALYST
+  REVIEWER
+  VIEWER
+}
+
+enum TlpLabel {
+  CLEAR
+  GREEN
+  AMBER
+  AMBER_STRICT
+  RED
+}
+
+enum AuditOutcome {
+  SUCCESS
+  FAILURE
+  DENIED
+}
+
 model User {
   id        Int      @id @default(autoincrement())
   name      String
   email     String   @unique
   password  String
-  role      String   @default("analyst")
+  role      Role     @default(VIEWER)
   createdAt DateTime @default(now())
 }
+
 model Threat {
-  id         Int      @id @default(autoincrement())
-  ip         String?
-  domain     String?
-  hash       String?
-  severity   String
-  source     String
-  riskScore  Int
-  status     String
-  iocType    String?
-  createdAt  DateTime @default(now())
+  id        Int      @id @default(autoincrement())
+  ip        String?
+  domain    String?
+  hash      String?
+  severity  String
+  source    String
+  riskScore Int
+  status    String
+  iocType   String?
+  createdAt DateTime @default(now())
 }
+
+model AuditLog {
+  id          Int          @id @default(autoincrement())
+  occurredAt  DateTime     @default(now())
+  action      String
+  outcome     AuditOutcome
+  actorUserId String?
+  actorEmail  String?
+  actorRole   Role?
+  sourceIp    String?
+  requestId   String?
+  method      String?
+  path        String?
+  entityType  String?
+  entityId    String?
+  before      Json?
+  after       Json?
+  tlp         TlpLabel     @default(AMBER)
+  reason      String?
+
+  @@index([occurredAt])
+  @@index([actorUserId])
+  @@index([entityType, entityId])
+  @@index([action])
+}
+
 model Case {
-  id          Int      @id @default(autoincrement())
-  title       String
-  threatType  String
+  id           Int      @id @default(autoincrement())
+  title        String
+  threatType   String
   organization String
-  priority    String   @default("Medium")
-  status      String   @default("Open")
-  analyst     String
-  description String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  priority     String   @default("Medium")
+  status       String   @default("Open")
+  analyst      String
+  description  String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 }
+
 model Notification {
   id        Int      @id @default(autoincrement())
   title     String
@@ -48,6 +97,7 @@ model Notification {
   type      String   @default("System")
   createdAt DateTime @default(now())
 }
+
 model Organization {
   id            Int      @id @default(autoincrement())
   name          String
