@@ -1,0 +1,35 @@
+# ThreatNeXus — local development database only (Phase 0).
+#
+# This file starts PostgreSQL for local backend development and testing. It
+# does not run the backend or frontend, and it is not used for any deployed
+# environment — there is no production compose file.
+#
+# If the T4-era disposable container "threatnexus-phase0-postgres" is already
+# running, it holds port 5432 and `docker compose up` here will fail to bind.
+# Stop that container first if you want to use this file instead:
+#   docker stop threatnexus-phase0-postgres
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: threatnexus-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: threatnexus
+      POSTGRES_USER: threatnexus
+      # Local development default only — never used outside a developer's own
+      # machine. Override by exporting POSTGRES_PASSWORD before running
+      # `docker compose up` if you want a different local value.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-threatnexus_local_dev_only}
+    ports:
+      - "5432:5432"
+    volumes:
+      - threatnexus_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U threatnexus -d threatnexus"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  threatnexus_postgres_data:

@@ -1,0 +1,184 @@
+"use strict";
+
+const ROLE_VALUES = Object.freeze(["ADMIN", "ANALYST", "REVIEWER", "VIEWER"]);
+
+const DEFAULT_ROLE = "VIEWER";
+
+// Legacy role strings that predate the Role enum. Anything not listed here —
+// including null, undefined, non-strings and typos — falls back to
+// DEFAULT_ROLE. The fallback is always the least-privileged role, never ADMIN.
+const LEGACY_ROLE_ALIASES = Object.freeze({
+  USER: "VIEWER",
+  MEMBER: "VIEWER",
+  BASIC: "VIEWER",
+  UNKNOWN: "VIEWER",
+});
+
+// Phase 0 capability set. Authorization is expressed in terms of these rather
+// than a role ranking, so no role can accidentally inherit another's authority.
+const CAPABILITIES = Object.freeze({
+  READ_DASHBOARD: "read:dashboard",
+  READ_FINDINGS: "read:findings",
+  INGEST_REPORTS: "ingest:reports",
+  TRIAGE_FINDINGS: "triage:findings",
+  MANAGE_CASES: "manage:cases",
+  REVIEW_NOTIFICATIONS: "review:notifications",
+  REVIEW_AI_SUGGESTIONS: "review:ai-suggestions",
+  MANAGE_USERS: "manage:users",
+  MANAGE_SYSTEM: "manage:system",
+  DELETE_RECORDS: "delete:records",
+});
+
+const CAPABILITY_VALUES = Object.freeze(Object.values(CAPABILITIES));
+
+const READ_ONLY_CAPABILITIES = [
+  CAPABILITIES.READ_DASHBOARD,
+  CAPABILITIES.READ_FINDINGS,
+];
+
+// Explicit grants per role — deliberately NOT a hierarchy. ANALYST does the
+// work (ingest, triage, cases) and REVIEWER approves it (notifications, AI
+// suggestions); neither inherits the other, which keeps separation of duties
+// intact for the approval-before-export rule. Only ADMIN holds the
+// user/system/delete capabilities.
+const ROLE_CAPABILITIES = Object.freeze({
+  VIEWER: Object.freeze([...READ_ONLY_CAPABILITIES]),
+  REVIEWER: Object.freeze([
+    ...READ_ONLY_CAPABILITIES,
+    CAPABILITIES.REVIEW_NOTIFICATIONS,
+    CAPABILITIES.REVIEW_AI_SUGGESTIONS,
+  ]),
+  ANALYST: Object.freeze([
+    ...READ_ONLY_CAPABILITIES,
+    CAPABILITIES.INGEST_REPORTS,
+    CAPABILITIES.TRIAGE_FINDINGS,
+    CAPABILITIES.MANAGE_CASES,
+  ]),
+  ADMIN: Object.freeze([...CAPABILITY_VALUES]),
+});
+
+function isValidRole(role) {
+  return typeof role === "string" && ROLE_VALUES.includes(role);
+}
+
+function isValidCapability(capability) {
+  return (
+    typeof capability === "string" && CAPABILITY_VALUES.includes(capability)
+  );
+}
+
+// Fails safe rather than throwing: callers normalizing untrusted input (legacy
+// JWT payloads, request bodies) get VIEWER instead of an error or elevation.
+function normalizeRole(role) {
+  if (typeof role !== "string") return DEFAULT_ROLE;
+
+  const candidate = role.trim().toUpperCase();
+  if (candidate === "") return DEFAULT_ROLE;
+
+  if (ROLE_VALUES.includes(candidate)) return candidate;
+  if (Object.prototype.hasOwnProperty.call(LEGACY_ROLE_ALIASES, candidate)) {
+    return LEGACY_ROLE_ALIASES[candidate];
+  }
+
+  return DEFAULT_ROLE;
+}
+
+// Authorization resolution is deliberately STRICTER than normalizeRole.
+// normalizeRole answers "what role should we store/display?" and falls back to
+// VIEWER, which is right for persistence but wrong for access control: an
+// unrecognised role such as "superuser" would silently acquire VIEWER's read
+// capabilities. Here anything not explicitly recognised resolves to null and
+// therefore holds no capability at all — unknown roles fail closed.
+// Known legacy spellings ("analyst", "  Admin  ") still resolve, so JWTs
+// issued before the Role enum keep working.
+function resolveAuthorizationRole(role) {
+  if (typeof role !== "string") return null;
+
+  const candidate = role.trim().toUpperCase();
+  if (candidate === "") return null;
+
+  if (ROLE_VALUES.includes(candidate)) return candidate;
+  if (Object.prototype.hasOwnProperty.call(LEGACY_ROLE_ALIASES, candidate)) {
+    return LEGACY_ROLE_ALIASES[candidate];
+  }
+
+  return null;
+}
+
+// Configuration guards. These throw because a bad required role/capability is
+// a programming error in route setup, not untrusted runtime input — it must
+// surface at boot rather than silently guarding nothing.
+function assertValidRequiredRole(role) {
+  if (!isValidRole(role)) {
+    throw new Error(
+      `roles: invalid required role (expected one of ${ROLE_VALUES.join(", ")})`
+    );
+  }
+  return role;
+}
+
+function assertValidCapability(capability) {
+  if (!isValidCapability(capability)) {
+    throw new Error(
+      `roles: invalid capability (expected one of ${CAPABILITY_VALUES.join(", ")})`
+    );
+  }
+  return capability;
+}
+
+function assertNonEmptyList(list, label) {
+  if (!Array.isArray(list) || list.length === 0) {
+    throw new Error(`roles: ${label} must be a non-empty array`);
+  }
+  return list;
+}
+
+// Exact match, never a ranking: requireRole("ANALYST") does not admit ADMIN.
+// Use requireAnyRole([...]) or a capability when several roles should pass.
+function hasRole(userRole, requiredRole) {
+  assertValidRequiredRole(requiredRole);
+  return resolveAuthorizationRole(userRole) === requiredRole;
+}
+
+function hasAnyRole(userRole, requiredRoles) {
+  assertNonEmptyList(requiredRoles, "requiredRoles");
+  requiredRoles.forEach(assertValidRequiredRole);
+
+  const resolved = resolveAuthorizationRole(userRole);
+  if (resolved === null) return false;
+  return requiredRoles.includes(resolved);
+}
+
+function hasCapability(userRole, capability) {
+  assertValidCapability(capability);
+
+  const resolved = resolveAuthorizationRole(userRole);
+  if (resolved === null) return false;
+
+  const granted = ROLE_CAPABILITIES[resolved];
+  return Array.isArray(granted) && granted.includes(capability);
+}
+
+function hasAnyCapability(userRole, capabilities) {
+  assertNonEmptyList(capabilities, "capabilities");
+  capabilities.forEach(assertValidCapability);
+  return capabilities.some((capability) => hasCapability(userRole, capability));
+}
+
+module.exports = {
+  ROLE_VALUES,
+  DEFAULT_ROLE,
+  CAPABILITIES,
+  CAPABILITY_VALUES,
+  ROLE_CAPABILITIES,
+  isValidRole,
+  isValidCapability,
+  normalizeRole,
+  resolveAuthorizationRole,
+  assertValidRequiredRole,
+  assertValidCapability,
+  hasRole,
+  hasAnyRole,
+  hasCapability,
+  hasAnyCapability,
+};
