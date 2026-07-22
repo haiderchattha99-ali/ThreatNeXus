@@ -27,3 +27,37 @@ model Threat {
   iocType    String?
   createdAt  DateTime @default(now())
 }
+model Case {
+  id          Int      @id @default(autoincrement())
+  title       String
+  threatType  String
+  organization String
+  priority    String   @default("Medium")
+  status      String   @default("Open")
+  analyst     String
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+model Notification {
+  id        Int      @id @default(autoincrement())
+  title     String
+  message   String
+  severity  String   @default("Low")
+  status    String   @default("Unread")
+  type      String   @default("System")
+  createdAt DateTime @default(now())
+}
+model Organization {
+  id            Int      @id @default(autoincrement())
+  name          String
+  industry      String
+  location      String
+  contactPerson String
+  email         String   @unique
+  phone         String?
+  securityScore Int      @default(100)
+  activeThreats Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}

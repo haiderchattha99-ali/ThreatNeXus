@@ -1,152 +1,24 @@
 import React, { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Container, Box, TextField, Button, Typography, Card, Alert } from '@mui/material'
+import { Container, Box, TextField, Button, Typography, Card, Alert, Chip } from '@mui/material'
 import { useAuth } from '../hooks/useAuth'
 import { authService } from '../services/api'
 import toast from 'react-hot-toast'
-import { FiShield } from 'react-icons/fi'
+import { FiShield, FiArrowRight, FiActivity } from 'react-icons/fi'
 
 export const Login = () => {
-  const navigate = useNavigate()
-  const { login } = useAuth()
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
-
-  const handleLogin = async (e) => {
-    e.preventDefault()
-    setError('')
-    setLoading(true)
-
-    try {
-      if (!email || !password) {
-        setError('Please fill in all fields')
-        setLoading(false)
-        return
-      }
-
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-        setError('Please enter a valid email address')
-        setLoading(false)
-        return
-      }
-
-      const response = await authService.login(email, password)
-      const { token, user, success } = response.data
-
-      if (success) {
-        login(token, user)
-        toast.success('Login successful!')
-        navigate('/dashboard')
-      } else {
-        setError('Login failed. Please try again.')
-      }
-    } catch (err) {
-      const errorMessage = err.response?.data?.message || 'Login failed. Please try again.'
-      setError(errorMessage)
-      toast.error(errorMessage)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  return (
-    <Box
-      sx={{
-        minHeight: '100vh',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        background: 'linear-gradient(135deg, #0d1117 0%, #161b22 100%)',
-      }}
-    >
-      <Container maxWidth="sm">
-        <Card
-          sx={{
-            p: 4,
-            backgroundColor: '#161b22',
-            boxShadow: '0 8px 32px rgba(88, 166, 255, 0.1)',
-            border: '1px solid rgba(88, 166, 255, 0.2)',
-          }}
-        >
-          <Box sx={{ textAlign: 'center', mb: 3 }}>
-            <Box sx={{ display: 'flex', justifyContent: 'center', mb: 2 }}>
-              <FiShield size={40} color="#58a6ff" />
-            </Box>
-            <Typography variant="h3" sx={{ color: '#58a6ff', mb: 1 }}>
-              ThreatNeXus
-            </Typography>
-            <Typography variant="body2" sx={{ color: 'rgba(255, 255, 255, 0.6)' }}>
-              Cybersecurity Threat Intelligence Platform
-            </Typography>
-          </Box>
-
-          <form onSubmit={handleLogin}>
-            {error && (
-              <Alert severity="error" sx={{ mb: 2 }}>
-                {error}
-              </Alert>
-            )}
-
-            <TextField
-              fullWidth
-              label="Email"
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              margin="normal"
-              disabled={loading}
-              sx={{
-                '& .MuiOutlinedInput-root': {
-                  borderRadius: 2,
-                },
-              }}
-            />
-
-            <TextField
-              fullWidth
-              label="Password"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              margin="normal"
-              disabled={loading}
-              sx={{
-                '& .MuiOutlinedInput-root': {
-                  borderRadius: 2,
-                },
-              }}
-            />
-
-            <Button
-              fullWidth
-              variant="contained"
-              size="large"
-              sx={{
-                mt: 3,
-                backgroundColor: '#58a6ff',
-                color: '#0d1117',
-                fontWeight: 600,
-                '&:hover': {
-                  backgroundColor: '#1f6feb',
-                },
-              }}
-              onClick={handleLogin}
-              disabled={loading}
-            >
-              {loading ? 'Logging in...' : 'Login'}
-            </Button>
-
-            <Typography
-              variant="caption"
-              sx={{ display: 'block', mt: 2, textAlign: 'center', color: 'rgba(255, 255, 255, 0.6)' }}
-            >
-              Demo: ali@example.com / password123
-            </Typography>
-          </form>
-        </Card>
-      </Container>
-    </Box>
-  )
+  const navigate = useNavigate(); const { login } = useAuth()
+  const [email, setEmail] = useState(''); const [password, setPassword] = useState(''); const [loading, setLoading] = useState(false); const [error, setError] = useState('')
+  const submit = async (event) => { event.preventDefault(); setError(''); if (!email || !password) return setError('Enter your email and password'); setLoading(true); try { const response = await authService.login(email, password); if (response.data.success) { login(response.data.token, response.data.user); toast.success('Welcome back'); navigate('/dashboard') } else setError('Login failed. Please try again.') } catch (err) { setError(err.response?.data?.message || 'Login failed. Please try again.') } finally { setLoading(false) } }
+  return <Box sx={{ minHeight: '100vh', display: 'grid', placeItems: 'center', p: 2, background: 'radial-gradient(circle at 15% 15%,rgba(110,231,199,.12),transparent 26rem),radial-gradient(circle at 85% 85%,rgba(118,136,255,.13),transparent 32rem),#080c14' }}>
+    <Container maxWidth="sm">
+      <Box sx={{ textAlign: 'center', mb: 3 }}><Box sx={{ mx: 'auto', mb: 2, width: 50, height: 50, display: 'grid', placeItems: 'center', borderRadius: 3, bgcolor: '#6ee7c7', color: '#071018' }}><FiShield size={28} /></Box><Typography sx={{ fontSize: 28, fontWeight: 800, letterSpacing: '-.06em' }}>ThreatNeXus</Typography><Typography className="mono" sx={{ color: '#7c8b9f', fontSize: 10, letterSpacing: '.1em', mt: .6 }}>INTELLIGENCE OPERATIONS PLATFORM</Typography></Box>
+      <Card className="surface" sx={{ p: { xs: 2.5, sm: 4 } }}>
+        <Chip icon={<FiActivity size={13} />} label="Secure analyst access" size="small" sx={{ mb: 2.5, bgcolor: 'rgba(110,231,199,.09)', color: '#6ee7c7', '& .MuiChip-icon': { color: '#6ee7c7' }, fontWeight: 700, fontSize: 10 }} />
+        <Typography sx={{ fontSize: 22, fontWeight: 800 }}>Sign in to your workspace</Typography><Typography sx={{ fontSize: 13, color: '#8290a5', mt: .7, mb: 2.5 }}>Use your authorized intelligence platform credentials.</Typography>
+        <form onSubmit={submit}>{error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}<TextField label="Work email" type="email" fullWidth value={email} onChange={(event) => setEmail(event.target.value)} disabled={loading} sx={{ mb: 2 }} /><TextField label="Password" type="password" fullWidth value={password} onChange={(event) => setPassword(event.target.value)} disabled={loading} /><Button type="submit" fullWidth variant="contained" endIcon={<FiArrowRight />} disabled={loading} sx={{ mt: 3, py: 1.25, bgcolor: '#6ee7c7', color: '#081018', '&:hover': { bgcolor: '#98f1d9' } }}>{loading ? 'Authenticating...' : 'Continue securely'}</Button></form>
+        <Typography className="mono" sx={{ display: 'block', mt: 2.5, textAlign: 'center', fontSize: 10, color: '#69788c' }}>DEMO // ali@example.com / password123</Typography>
+      </Card>
+    </Container>
+  </Box>
 }
