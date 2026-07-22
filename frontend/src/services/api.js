@@ -1,6 +1,24 @@
 import axios from 'axios'
 
-const API_BASE_URL = 'http://localhost:5000/api'
+// Falls back to the local backend's mounted API prefix only when
+// VITE_API_BASE_URL is not set (e.g. no .env in local development). The
+// backend mounts every route under /api (see backend/src/app.js), so the
+// default must include it too, not just the bare host.
+const DEFAULT_API_BASE_URL = 'http://localhost:5000/api'
+
+function resolveApiBaseUrl() {
+  const configured = import.meta.env.VITE_API_BASE_URL
+  const value =
+    typeof configured === 'string' && configured.trim() !== ''
+      ? configured.trim()
+      : DEFAULT_API_BASE_URL
+
+  // Strip trailing slashes so a base URL like ".../api/" doesn't combine with
+  // a call site's leading "/" (e.g. apiClient.get('/threats')) into "//threats".
+  return value.replace(/\/+$/, '')
+}
+
+export const API_BASE_URL = resolveApiBaseUrl()
 
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
