@@ -27,3 +27,49 @@ model Threat {
   iocType    String?
   createdAt  DateTime @default(now())
 }
+
+enum Role {
+  ADMIN
+  ANALYST
+  REVIEWER
+  VIEWER
+}
+
+enum TlpLabel {
+  CLEAR
+  GREEN
+  AMBER
+  AMBER_STRICT
+  RED
+}
+
+enum AuditOutcome {
+  SUCCESS
+  FAILURE
+  DENIED
+}
+
+model AuditLog {
+  id           Int          @id @default(autoincrement())
+  occurredAt   DateTime     @default(now())
+  action       String
+  outcome      AuditOutcome
+  actorUserId  String?
+  actorEmail   String?
+  actorRole    Role?
+  sourceIp     String?
+  requestId    String?
+  method       String?
+  path         String?
+  entityType   String?
+  entityId     String?
+  before       Json?
+  after        Json?
+  tlp          TlpLabel     @default(AMBER)
+  reason       String?
+
+  @@index([occurredAt])
+  @@index([actorUserId])
+  @@index([entityType, entityId])
+  @@index([action])
+}
