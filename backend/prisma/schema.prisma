@@ -12,7 +12,7 @@ model User {
   name      String
   email     String   @unique
   password  String
-  role      String   @default("analyst")
+  role      Role     @default(VIEWER)
   createdAt DateTime @default(now())
 }
 model Threat {
