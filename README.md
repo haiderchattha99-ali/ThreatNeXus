@@ -6,8 +6,9 @@
 
 This repository is being built in phase-gated increments. **Phase 0** covers
 the foundation only: secure environment/config handling, audit logging,
-role/capability authorization (implemented but not yet enforced on every
-route — see [`docs/API_CONTRACT_PHASE0.md`](docs/API_CONTRACT_PHASE0.md)),
+role/capability authorization enforced on every protected route (see the
+authorization matrix in
+[`docs/API_CONTRACT_PHASE0.md`](docs/API_CONTRACT_PHASE0.md)),
 hardened auth, upload cleanup, and this local dev setup. It does **not**
 include the Shadowserver ingestion pipeline, the Finding/Case/Notification
 model, IOC/vulnerability enrichment, or AI assistance — those are later
@@ -141,9 +142,12 @@ npm run build
 - Write actions (auth, threat create/update/delete/import) are recorded to
   the `AuditLog` table via `safeLogAuditEvent`; an audit write failure never
   blocks the underlying request.
-- Role/capability authorization middleware exists (`requireRole.js`,
-  `roles.js`) but is **not yet wired into every route** — see the limitations
-  section of `docs/API_CONTRACT_PHASE0.md`.
+- Every protected route is capability-gated via `requireCapability`
+  (`requireRole.js`, `roles.js`): reads need `read:dashboard`/`read:findings`,
+  import needs `ingest:reports`, status updates need `triage:findings`, and
+  deletes need `delete:records` (ADMIN only). Denials return a generic `403`
+  and are audited. See the authorization matrix in
+  `docs/API_CONTRACT_PHASE0.md`.
 - AI assistance is unimplemented and disabled by default (`AI_ENABLED=false`).
   Live Shadowserver ingestion, automatic notification sending, and automatic
   remediation verification are all out of scope for the entire project, not

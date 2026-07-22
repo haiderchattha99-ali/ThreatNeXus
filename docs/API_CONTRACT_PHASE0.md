@@ -37,6 +37,43 @@ Most endpoints return JSON of the shape:
   case (`"Authentication required."` / `"Forbidden."`) deliberately, to avoid
   leaking which check failed.
 
+## Authorization
+
+Every protected route runs `authenticate` first, then a `requireCapability`
+guard. A caller with no valid token gets `401 Authentication required.`; a
+caller who is authenticated but whose role lacks the required capability gets
+`403 Forbidden.`
+
+The 403 body is a fixed `{success, message, requestId}` — it never names the
+missing capability or the caller's role, since that would tell an unauthorized
+caller exactly what to acquire. The required capability *is* recorded in the
+`AuditLog` row (`action: "authorization.denied"`, `outcome: DENIED`,
+`entityType: "Authorization"`) for investigation.
+
+An unrecognized role in a token resolves to no capabilities at all rather than
+falling back to `VIEWER`, so it is denied everywhere — including read routes.
+
+| Route | Capability | ADMIN | ANALYST | REVIEWER | VIEWER |
+|---|---|:-:|:-:|:-:|:-:|
+| `GET /dashboard/stats` | `read:dashboard` | ✅ | ✅ | ✅ | ✅ |
+| `GET /dashboard/charts` | `read:dashboard` | ✅ | ✅ | ✅ | ✅ |
+| `GET /threats` | `read:findings` | ✅ | ✅ | ✅ | ✅ |
+| `GET /threats/search` | `read:findings` | ✅ | ✅ | ✅ | ✅ |
+| `POST /threats/upload` | `ingest:reports` | ✅ | ✅ | ❌ | ❌ |
+| `PATCH /threats/:id/status` | `triage:findings` | ✅ | ✅ | ❌ | ❌ |
+| `DELETE /threats/:id` | `delete:records` | ✅ | ❌ | ❌ | ❌ |
+| `GET /profile` | *(authentication only)* | ✅ | ✅ | ✅ | ✅ |
+
+`ANALYST` and `REVIEWER` are deliberately **not** ranked relative to each
+other: the analyst does the work (ingest, triage, cases) and the reviewer
+approves it (`review:notifications`, `review:ai-suggestions`), and neither
+inherits the other's authority. `delete:records`, `manage:users` and
+`manage:system` are ADMIN-only.
+
+On `POST /threats/upload`, the capability check runs **before** multer. A
+denied caller therefore never causes a temp file to be written at all, so an
+unauthorized upload cannot consume disk.
+
 ## Auth endpoints
 
 ### `POST /auth/register`
@@ -112,14 +149,13 @@ The underlying `Threat` model is a **generic IOC record** (`ip`, `domain`,
 Phase 0's audit/role work. It is not the Shadowserver-specific finding model
 described in the Phase 1 plan — see [Limitations](#limitations).
 
-All four routes below require `Authorization: Bearer <JWT>` via
-`authMiddleware`. **None of them currently enforce role or capability
-checks** — `requireRole`/`requireCapability` (added in Phase 0 for role
-authorization) exist in `backend/src/middleware/requireRole.js` but are not
-wired into `threatRoutes.js`. Any authenticated user, including a `VIEWER`,
-can currently import, update, or delete threats.
+All five routes below require `Authorization: Bearer <JWT>` via
+`authMiddleware`, **and each additionally requires a capability** enforced by
+`requireCapability` (see [Authorization](#authorization)). An authenticated
+caller whose role lacks the capability receives `403 Forbidden.`
 
 ### `GET /threats`
+- **Capability:** `read:findings`
 - **Query params:** `page` (default 1), `limit` (default 10), `sort` (default
   `createdAt`), `order` (`asc`|`desc`, default `desc`).
 - **Success (200):**
@@ -129,6 +165,7 @@ can currently import, update, or delete threats.
 - **Errors:** `500` on unexpected failure.
 
 ### `GET /threats/search`
+- **Capability:** `read:findings`
 - **Query params (all optional):** `ip`, `domain`, `hash` (case-insensitive
   substring match), `severity`, `status`, `iocType` (exact match), `source`
   (case-insensitive substring match).
@@ -136,6 +173,7 @@ can currently import, update, or delete threats.
 - **Errors:** `500` on unexpected failure.
 
 ### `PATCH /threats/:id/status`
+- **Capability:** `triage:findings` (ADMIN, ANALYST)
 - **Body:** `{ "status": string }` — one of `New`, `Investigating`,
   `Mitigated`, `Resolved`, `False Positive`.
 - **Behavior:** Audited as `threat.update` (`SUCCESS`/`FAILURE`) with small
@@ -146,12 +184,15 @@ can currently import, update, or delete threats.
   failure.
 
 ### `DELETE /threats/:id`
+- **Capability:** `delete:records` (ADMIN only)
 - **Behavior:** Audited as `threat.delete` with a `before` summary only (the
   row no longer exists for an `after`).
 - **Success (200):** `{ "success": true, "message": "Threat deleted successfully." }`
 - **Errors:** `404` threat not found; `500` unexpected failure.
 
 ### `POST /threats/upload`
+- **Capability:** `ingest:reports` (ADMIN, ANALYST) — checked before multer,
+  so a denied caller never causes a temp file to be written.
 - **Body:** `multipart/form-data`, field name `file` — a CSV with columns
   `ip, domain, hash, severity, source` (any subset; missing columns default
   `severity` to `Low` and `source` to `CSV`).
@@ -174,10 +215,11 @@ can currently import, update, or delete threats.
 
 ## Dashboard endpoints
 
-Both require `Authorization: Bearer <JWT>` via `authMiddleware`, with no
-further role/capability check.
+Both require `Authorization: Bearer <JWT>` via `authMiddleware` plus the
+`read:dashboard` capability, which every current role holds.
 
 ### `GET /dashboard/stats`
+- **Capability:** `read:dashboard`
 - **Success (200):**
   ```json
   {
@@ -192,6 +234,7 @@ further role/capability check.
 - **Errors:** `500` on unexpected failure.
 
 ### `GET /dashboard/charts`
+- **Capability:** `read:dashboard`
 - **Success (200):**
   ```json
   {
@@ -216,11 +259,21 @@ Being explicit about what this contract does **not** claim:
   does not implement the `(indicator_value, port, protocol, report_type)`
   dedup key, persistence/recurrence semantics, or IOC/vulnerability
   enrichment.
-- **Role authorization exists but is not enforced on these routes.**
-  `requireRole`/`requireCapability` middleware and the `Role`/capability model
-  (T7) are implemented and unit-tested, but `threatRoutes.js` and
-  `dashboardRoutes.js` currently gate only on authentication, not role or
-  capability. Any authenticated user can perform any threat write.
+- **Role authorization is enforced, but roles are only as current as the
+  token.** Every route in the table above is capability-gated, but
+  `authMiddleware` reads the role from the JWT without a database lookup, so a
+  role change does not take effect until the existing token expires
+  (`JWT_EXPIRES_IN`, default 24h). There is no token revocation or refresh
+  mechanism in Phase 0.
+- **Capabilities beyond the routes above are defined but unused.**
+  `manage:cases`, `review:notifications`, `review:ai-suggestions`,
+  `manage:users` and `manage:system` exist in the capability model and are
+  granted to roles, but no route consumes them yet — the features they guard
+  do not exist.
+- **There is no way to obtain a privileged account through the API.** Public
+  registration always creates a `VIEWER`, and no role-management endpoint
+  exists. ADMIN/ANALYST/REVIEWER accounts come only from the local seed script
+  (`npm run seed:users`) or a direct database change.
 - **No IOC reputation or vulnerability enrichment** (AbuseIPDB, KEV, EPSS,
   NVD) is wired up. The env vars for it are declared and validated but
   unconsumed.

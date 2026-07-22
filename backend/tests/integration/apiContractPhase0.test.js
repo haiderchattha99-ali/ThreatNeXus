@@ -35,6 +35,7 @@ const prismaStub = {
 let originalEnv;
 let app;
 let token;
+let analystToken;
 
 beforeAll(() => {
   originalEnv = { ...process.env };
@@ -53,7 +54,16 @@ beforeAll(() => {
   };
 
   app = require("../../src/app");
+  // VIEWER holds read:dashboard and read:findings, which covers every read
+  // route documented in the contract.
   token = jwt.sign({ id: 1, email: "contract@example.test", role: "VIEWER" }, JWT_SECRET);
+  // The upload route needs ingest:reports, which VIEWER does not hold. Per-role
+  // enforcement itself is covered in routeAuthorization.test.js; here the point
+  // is only to reach the controller and assert the documented response shape.
+  analystToken = jwt.sign(
+    { id: 2, email: "contract-analyst@example.test", role: "ANALYST" },
+    JWT_SECRET
+  );
 });
 
 afterAll(() => {
@@ -65,6 +75,10 @@ afterAll(() => {
 
 function auth(req) {
   return req.set("Authorization", `Bearer ${token}`);
+}
+
+function authAnalyst(req) {
+  return req.set("Authorization", `Bearer ${analystToken}`);
 }
 
 describe("API contract — health and 404", () => {
@@ -163,7 +177,7 @@ describe("API contract — documented success shapes", () => {
   });
 
   it("POST /api/threats/upload with no file returns the documented 400", async () => {
-    const res = await auth(request(app).post("/api/threats/upload"));
+    const res = await authAnalyst(request(app).post("/api/threats/upload"));
     expect(res.status).toBe(400);
     expect(res.body).toEqual({
       success: false,

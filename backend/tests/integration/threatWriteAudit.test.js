@@ -70,6 +70,7 @@ const prismaStub = {
 let originalEnv;
 let app;
 let token;
+let adminToken;
 
 beforeAll(() => {
   originalEnv = { ...process.env };
@@ -88,7 +89,12 @@ beforeAll(() => {
   };
 
   app = require("../../src/app");
+  // ANALYST holds ingest:reports and triage:findings, so it covers the import
+  // and status-update paths exercised here.
   token = jwt.sign({ id: 5, email: "analyst@example.test", role: "ANALYST" }, JWT_SECRET);
+  // delete:records is ADMIN-only, so the delete paths need their own actor.
+  // Route-level enforcement of that split is covered in routeAuthorization.test.js.
+  adminToken = jwt.sign({ id: 9, email: "admin@example.test", role: "ADMIN" }, JWT_SECRET);
 });
 
 afterAll(() => {
@@ -121,6 +127,11 @@ afterEach(() => {
 
 function auth(req) {
   return req.set("Authorization", `Bearer ${token}`);
+}
+
+// Used for the delete paths, which require the ADMIN-only delete:records.
+function authAdmin(req) {
+  return req.set("Authorization", `Bearer ${adminToken}`);
 }
 
 function seedThreat(overrides = {}) {
@@ -395,7 +406,7 @@ describe("threat delete auditing", () => {
   it("audits a successful delete with a before summary", async () => {
     const threat = seedThreat({ status: "Resolved", severity: "Low" });
 
-    const res = await auth(request(app).delete(`/api/threats/${threat.id}`));
+    const res = await authAdmin(request(app).delete(`/api/threats/${threat.id}`));
 
     expect(res.status).toBe(200);
     expect(store.threats).toHaveLength(0);
@@ -416,7 +427,7 @@ describe("threat delete auditing", () => {
   });
 
   it("audits a not-found delete as FAILURE", async () => {
-    const res = await auth(request(app).delete("/api/threats/999"));
+    const res = await authAdmin(request(app).delete("/api/threats/999"));
 
     expect(res.status).toBe(404);
     expect(auditFor("threat.delete")[0].outcome).toBe("FAILURE");
@@ -426,7 +437,7 @@ describe("threat delete auditing", () => {
     const threat = seedThreat();
     store.failAuditWrite = true;
 
-    const res = await auth(request(app).delete(`/api/threats/${threat.id}`));
+    const res = await authAdmin(request(app).delete(`/api/threats/${threat.id}`));
 
     expect(res.status).toBe(200);
     expect(store.threats).toHaveLength(0);
@@ -442,7 +453,7 @@ describe("write audits never carry credentials or raw request data", () => {
       .query({ token: "SHOULD_NOT_PERSIST" })
       .send({ status: "Resolved", note: "SHOULD_NOT_PERSIST" });
 
-    await auth(request(app).delete(`/api/threats/${threat.id}`)).set(
+    await authAdmin(request(app).delete(`/api/threats/${threat.id}`)).set(
       "Cookie",
       "session=SHOULD_NOT_PERSIST"
     );
