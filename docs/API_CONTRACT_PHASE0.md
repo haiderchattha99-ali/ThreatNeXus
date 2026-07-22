@@ -63,12 +63,25 @@ falling back to `VIEWER`, so it is denied everywhere — including read routes.
 | `PATCH /threats/:id/status` | `triage:findings` | ✅ | ✅ | ❌ | ❌ |
 | `DELETE /threats/:id` | `delete:records` | ✅ | ❌ | ❌ | ❌ |
 | `GET /profile` | *(authentication only)* | ✅ | ✅ | ✅ | ✅ |
+| `/cases` *(all methods)* | `manage:cases` | ✅ | ✅ | ❌ | ❌ |
+| `/notifications` *(all methods)* | `review:notifications` | ✅ | ❌ | ✅ | ❌ |
+| `/organizations` *(all methods)* | `manage:system` | ✅ | ❌ | ❌ | ❌ |
 
 `ANALYST` and `REVIEWER` are deliberately **not** ranked relative to each
 other: the analyst does the work (ingest, triage, cases) and the reviewer
 approves it (`review:notifications`, `review:ai-suggestions`), and neither
 inherits the other's authority. `delete:records`, `manage:users` and
 `manage:system` are ADMIN-only.
+
+For the three resource groups the guard is applied at **router level**
+(`router.use(authenticate, requireCapability(...))`), so a route added to one
+of those files later cannot be left unguarded by omission. One consequence is
+that **reads are gated by the same capability as writes** in those groups —
+`VIEWER` cannot list cases, and `ANALYST` cannot list notifications. That is
+the conservative default, not an oversight: case and organization records name
+constituents and contacts, which is narrower information than the generic
+threat feed. If a read-only view is needed later, it should be a separate,
+explicitly documented capability rather than a widening of these.
 
 On `POST /threats/upload`, the capability check runs **before** multer. A
 denied caller therefore never causes a temp file to be written at all, so an
@@ -248,13 +261,105 @@ Both require `Authorization: Bearer <JWT>` via `authMiddleware` plus the
   ```
 - **Errors:** `500` on unexpected failure.
 
+## Case, Notification and Organization endpoints
+
+These three CRUD groups were added alongside Phase 0 on a parallel branch and
+were merged in an unauthenticated, unaudited, unvalidated state. They are now
+guarded, audited and validated; the models themselves are unchanged.
+
+**These are not the Phase 1 workflow models.** `Case` here is a flat record
+(`title`, `threatType`, `organization` as a free-text string, `priority`,
+`status`, `analyst`, `description`) with no link to a `Finding`; `Notification`
+has no approval, `approved_by` or export path and nothing sends it. See
+[Limitations](#limitations).
+
+All three groups share the same conventions:
+
+- Every method requires `Authorization: Bearer <JWT>` plus the group's
+  capability. Missing/invalid token → `401 Authentication required.`;
+  authenticated but lacking the capability → `403 Forbidden.` (fixed body, the
+  capability is never named to the client).
+- `:id` must be a plain positive integer. Anything else returns `400 Invalid
+  <resource> id.` without reaching Prisma.
+- Bodies are **allow-listed**. Keys outside the writable set (`id`,
+  `createdAt`, `updatedAt`, unknown columns) are dropped rather than forwarded.
+  An update whose body contains no writable key returns `400 No updatable
+  fields supplied.`
+- Writes are audited via `safeLogAuditEvent` — `SUCCESS` on a completed write,
+  `FAILURE` on a rejected or failed one (invalid id, missing/blank required
+  fields, record not found, persistence error). A failed audit never breaks the
+  response.
+- Audit records carry **small allow-listed summaries only** — never the raw
+  request body, headers, cookies, bearer token or query string. Free text
+  (`Case.description`, `Notification.message`) and organization contact PII
+  (`email`, `phone`, `contactPerson`) are deliberately excluded from the
+  summaries.
+- Unexpected errors return a fixed `500 {success:false, message:"Server Error"}`.
+  Prisma error text and stack traces stay server-side.
+
+### `/cases` — capability `manage:cases` (ADMIN, ANALYST)
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/cases` | All cases, newest first. `{success, data: []}` |
+| GET | `/cases/:id` | `404 Case not found.` if absent |
+| POST | `/cases` | Required: `title`, `threatType`, `organization`, `analyst` (non-blank). Optional: `priority`, `status`, `description`. `201 {success, data}` |
+| PUT | `/cases/:id` | Writable: the seven fields above. Blank required field → `400`. `404` if absent |
+| DELETE | `/cases/:id` | `404` if absent |
+
+Audit actions: `case.create`, `case.update`, `case.delete` (`entityType: "Case"`).
+Summary keys: `id`, `title`, `threatType`, `organization`, `priority`, `status`.
+
+### `/notifications` — capability `review:notifications` (ADMIN, REVIEWER)
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/notifications` | Newest first |
+| GET | `/notifications/:id` | `404 Notification not found.` if absent |
+| POST | `/notifications` | Required: `title`, `message`. Optional: `severity`, `status`, `type` |
+| PUT | `/notifications/:id` | Writable: the five fields above |
+| DELETE | `/notifications/:id` | `404` if absent |
+
+Audit actions: `notification.create`, `notification.update`,
+`notification.delete` (`entityType: "Notification"`). Summary keys: `id`,
+`title`, `severity`, `status`, `type` — `message` is excluded.
+
+`ANALYST` is deliberately excluded: notifications are the approval surface, and
+the analyst who produces the work must not be the one who approves it.
+
+### `/organizations` — capability `manage:system` (ADMIN only)
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/organizations` | Newest first |
+| GET | `/organizations/:id` | `404 Organization not found.` if absent |
+| POST | `/organizations` | Required: `name`, `industry`, `location`, `contactPerson`, `email` (format-checked, trimmed + lowercased). Optional: `phone`, `securityScore`, `activeThreats` (non-negative integers) |
+| PUT | `/organizations/:id` | Same field rules; only supplied keys change |
+| DELETE | `/organizations/:id` | `404` if absent |
+
+- Invalid/missing fields → `400 {success, message: "Missing or invalid fields.", fields: [...]}` — the response names the *keys*, never the submitted values.
+- Duplicate `email` → `409 An organization with that email already exists.`
+  (Prisma `P2002` handled explicitly rather than surfacing as a 500).
+
+Audit actions: `organization.create`, `organization.update`,
+`organization.delete` (`entityType: "Organization"`). Summary keys: `id`,
+`name`, `industry`, `securityScore`, `activeThreats` — contact details are
+excluded.
+
 ## Limitations
 
 Being explicit about what this contract does **not** claim:
 
 - **The `Threat` model is legacy/generic**, not the Shadowserver Accessible-RDP
-  finding model the locked build plan describes. It has no `Finding`, `Case`,
-  `RawReport`, `ReportType`, or `Notification` model — none of those exist yet.
+  finding model the locked build plan describes. There is no `Finding`,
+  `RawReport` or `ReportType` model. `Case`, `Notification` and `Organization`
+  tables *do* exist, but they are flat CRUD records from parallel UI work —
+  they are **not** the Phase 1 workflow: a `Case` is not linked to a `Finding`,
+  there is no dedup/persistence/recurrence logic behind it, and a
+  `Notification` has no approval state, no `approved_by`, and no export path.
+- **Phase 1 Shadowserver ingestion does not exist.** No scheduled or manual
+  Shadowserver report ingestion, no `(indicator_value, port, protocol,
+  report_type)` dedup key, no recurrence handling.
 - **CSV upload is a generic importer**, not the Phase 1 ingestion pipeline. It
   does not implement the `(indicator_value, port, protocol, report_type)`
   dedup key, persistence/recurrence semantics, or IOC/vulnerability
@@ -265,11 +370,11 @@ Being explicit about what this contract does **not** claim:
   role change does not take effect until the existing token expires
   (`JWT_EXPIRES_IN`, default 24h). There is no token revocation or refresh
   mechanism in Phase 0.
-- **Capabilities beyond the routes above are defined but unused.**
-  `manage:cases`, `review:notifications`, `review:ai-suggestions`,
-  `manage:users` and `manage:system` exist in the capability model and are
-  granted to roles, but no route consumes them yet — the features they guard
-  do not exist.
+- **Two capabilities are still defined but unused.**
+  `manage:cases`, `review:notifications` and `manage:system` are now consumed
+  by the three resource groups above. `review:ai-suggestions` and
+  `manage:users` remain granted but unrouted — the features they guard do not
+  exist.
 - **There is no way to obtain a privileged account through the API.** Public
   registration always creates a `VIEWER`, and no role-management endpoint
   exists. ADMIN/ANALYST/REVIEWER accounts come only from the local seed script
@@ -278,7 +383,13 @@ Being explicit about what this contract does **not** claim:
   NVD) is wired up. The env vars for it are declared and validated but
   unconsumed.
 - **AI is not implemented** and remains disabled by default (`AI_ENABLED=false`).
-- **No notification/export workflow** exists, so there is nothing yet to
-  gate behind analyst approval.
+- **No notification/export workflow** exists. The `/notifications` CRUD group
+  stores records and nothing more: there is no approval state, no
+  `approved_by`, no export endpoint, and deliberately no SMTP or webhook
+  client anywhere in the codebase — nothing is ever sent.
+- **`frontend/dist` is not tracked in git.** It is a build output, ignored via
+  `.gitignore`; the previously committed copies were removed from the index so
+  `npm run build` no longer dirties tracked files. Deployment builds the
+  frontend rather than consuming a committed bundle.
 - This document makes **no production-readiness or compliance claim**. It
   describes Phase 0 behavior only.

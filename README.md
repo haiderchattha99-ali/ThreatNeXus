@@ -10,9 +10,23 @@ role/capability authorization enforced on every protected route (see the
 authorization matrix in
 [`docs/API_CONTRACT_PHASE0.md`](docs/API_CONTRACT_PHASE0.md)),
 hardened auth, upload cleanup, and this local dev setup. It does **not**
-include the Shadowserver ingestion pipeline, the Finding/Case/Notification
-model, IOC/vulnerability enrichment, or AI assistance — those are later
-phases in `../ThreatNeXus-Planning/planning/BUILD_PLAN.md`.
+include the Shadowserver ingestion pipeline, the Finding/RawReport model,
+IOC/vulnerability enrichment, or AI assistance — those are later phases in
+`../ThreatNeXus-Planning/planning/BUILD_PLAN.md`.
+
+Three CRUD groups added by parallel UI work — `/api/cases`,
+`/api/notifications`, `/api/organizations` — are also present. They now sit
+behind the same authenticate + capability guard as everything else
+(`manage:cases`, `review:notifications` and `manage:system` respectively), with
+audit logging and input validation on every write. They are **flat CRUD tables
+backing the UI, not the Phase 1 workflow**: a case is not linked to a finding,
+and a notification has no approval state and is never sent anywhere.
+
+There is still **no Shadowserver ingestion** — that is Phase 1 and has not
+started.
+
+Build outputs are not committed: `frontend/dist` is ignored and untracked, so
+`npm run build` produces no tracked diffs.
 
 See [`docs/API_CONTRACT_PHASE0.md`](docs/API_CONTRACT_PHASE0.md) for exactly
 which endpoints exist today and their known limitations.
@@ -139,15 +153,24 @@ npm run build
   templates, which contain placeholder values only.
 - Public registration (`POST /api/auth/register`) always creates a `VIEWER`
   account — a `role` field in the request body is ignored, not honored.
-- Write actions (auth, threat create/update/delete/import) are recorded to
-  the `AuditLog` table via `safeLogAuditEvent`; an audit write failure never
-  blocks the underlying request.
+- Write actions (auth, threat create/update/delete/import, and case /
+  notification / organization create/update/delete) are recorded to the
+  `AuditLog` table via `safeLogAuditEvent`; an audit write failure never
+  blocks the underlying request. Audit rows carry small allow-listed summaries
+  only — never the raw request body, headers, cookies, bearer token or query
+  string.
 - Every protected route is capability-gated via `requireCapability`
   (`requireRole.js`, `roles.js`): reads need `read:dashboard`/`read:findings`,
   import needs `ingest:reports`, status updates need `triage:findings`, and
-  deletes need `delete:records` (ADMIN only). Denials return a generic `403`
-  and are audited. See the authorization matrix in
-  `docs/API_CONTRACT_PHASE0.md`.
+  deletes need `delete:records` (ADMIN only). The three resource groups need
+  `manage:cases` (`/api/cases`), `review:notifications`
+  (`/api/notifications`) and `manage:system` (`/api/organizations`) — applied
+  at router level so a route added later cannot be left unguarded. Denials
+  return a generic `403` that never names the missing capability, and are
+  audited. See the authorization matrix in `docs/API_CONTRACT_PHASE0.md`.
+- Build artifacts are not tracked. `frontend/dist` is gitignored and untracked,
+  so a local `npm run build` cannot introduce a tracked diff or ship a stale
+  bundle from the repository.
 - AI assistance is unimplemented and disabled by default (`AI_ENABLED=false`).
   Live Shadowserver ingestion, automatic notification sending, and automatic
   remediation verification are all out of scope for the entire project, not

@@ -105,6 +105,24 @@ describe("API contract — every protected route requires auth", () => {
     ["post", "/api/threats/upload"],
     ["patch", "/api/threats/1/status"],
     ["delete", "/api/threats/1"],
+    // Case / Notification / Organization groups. The stub client has no table
+    // for these models on purpose: a 401 must be produced by the middleware
+    // chain before any controller touches Prisma.
+    ["get", "/api/cases"],
+    ["get", "/api/cases/1"],
+    ["post", "/api/cases"],
+    ["put", "/api/cases/1"],
+    ["delete", "/api/cases/1"],
+    ["get", "/api/notifications"],
+    ["get", "/api/notifications/1"],
+    ["post", "/api/notifications"],
+    ["put", "/api/notifications/1"],
+    ["delete", "/api/notifications/1"],
+    ["get", "/api/organizations"],
+    ["get", "/api/organizations/1"],
+    ["post", "/api/organizations"],
+    ["put", "/api/organizations/1"],
+    ["delete", "/api/organizations/1"],
   ];
 
   it.each(protectedRoutes)(
