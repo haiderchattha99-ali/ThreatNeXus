@@ -33,6 +33,13 @@ function buildApp() {
     next(err);
   });
 
+  app.get("/payload-too-large", (req, res, next) => {
+    const err = new Error("request entity too large: internal parser detail");
+    err.status = 413;
+    err.type = "entity.too.large";
+    next(err);
+  });
+
   app.use((req, res) => {
     res.status(404).json({ success: false, message: "Route not found" });
   });
@@ -82,5 +89,26 @@ describe("errorHandler middleware", () => {
     expect(res.status).toBe(500);
     expect(res.body.message).toBe("An unexpected error occurred.");
     expect(res.body.message).not.toContain("teapot");
+  });
+
+  it("preserves 413 as a safe payload-too-large response instead of 500", async () => {
+    const res = await request(buildApp()).get("/payload-too-large");
+    expect(res.status).toBe(413);
+    expect(res.body.success).toBe(false);
+    expect(res.body.message).toBe("Payload too large.");
+  });
+
+  it("does not leak the underlying parser error message for a 413", async () => {
+    const res = await request(buildApp()).get("/payload-too-large");
+    expect(res.body.message).not.toContain("entity.too.large");
+    expect(res.body.message).not.toContain("internal parser detail");
+  });
+
+  it("does not leak a stack trace or extra fields for a 413 response", async () => {
+    const res = await request(buildApp()).get("/payload-too-large");
+    expect(res.body.stack).toBeUndefined();
+    expect(Object.keys(res.body).sort()).toEqual(
+      ["message", "requestId", "success"].sort()
+    );
   });
 });

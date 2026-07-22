@@ -87,15 +87,16 @@ describe("Express app hardening (integration)", () => {
     expect(res.body.success).toBe(false);
   });
 
-  it("configures a JSON body limit from env.UPLOAD_MAX_BYTES and safely rejects oversized payloads", async () => {
+  it("configures a JSON body limit from env.UPLOAD_MAX_BYTES and returns a safe 413 for oversized payloads", async () => {
     process.env.UPLOAD_MAX_BYTES = "50";
     const oversizedBody = JSON.stringify({ note: "x".repeat(500) });
     const res = await request(loadFreshApp())
       .post("/api/does-not-exist")
       .set("Content-Type", "application/json")
       .send(oversizedBody);
-    expect(res.status).toBe(500);
+    expect(res.status).toBe(413);
     expect(res.body.success).toBe(false);
-    expect(res.body.message).toBe("An unexpected error occurred.");
+    expect(res.body.message).toBe("Payload too large.");
+    expect(res.body.stack).toBeUndefined();
   });
 });

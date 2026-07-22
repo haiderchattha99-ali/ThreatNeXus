@@ -2,7 +2,14 @@
 
 const { redact } = require("../lib/redact");
 
-const SAFE_STATUS_CODES = new Set([400, 401, 403, 404, 409, 422]);
+const SAFE_STATUS_CODES = new Set([400, 401, 403, 404, 409, 413, 422]);
+
+// Fixed, controlled messages for statuses whose underlying error message may
+// come from a library (e.g. body-parser) rather than app code, so we never
+// pass through implementation-specific text.
+const FIXED_SAFE_MESSAGES = {
+  413: "Payload too large.",
+};
 
 function resolveStatus(err) {
   if (typeof err.status === "number" && SAFE_STATUS_CODES.has(err.status)) {
@@ -20,6 +27,9 @@ function resolveStatus(err) {
 function resolveMessage(err, status) {
   if (status === 500) {
     return "An unexpected error occurred.";
+  }
+  if (FIXED_SAFE_MESSAGES[status]) {
+    return FIXED_SAFE_MESSAGES[status];
   }
   if (typeof err.message === "string" && err.message.trim() !== "") {
     return err.message;
