@@ -5,6 +5,39 @@ const csv = require("csv-parser");
 const { calculateRiskScore } = require("../services/riskScoringService");
 const { detectIOCType } = require("../services/iocValidationService");
 
+const {
+    AUDIT_OUTCOMES,
+    buildAuditContext,
+    safeLogAuditEvent
+} = require("../services/auditService");
+
+const THREAT_ENTITY_TYPE = "Threat";
+
+// Audit writes must never turn a successful threat write into an error.
+// safeLogAuditEvent swallows its own failures; the extra guard covers anything
+// thrown before it is reached.
+const audit = async (req, event) => {
+    try {
+        await safeLogAuditEvent({ ...buildAuditContext(req), ...event });
+    } catch (err) {
+        console.error("Threat audit failed", { name: err && err.name });
+    }
+};
+
+// Only the small allow-listed fields below are ever persisted to the audit
+// trail. Raw rows, raw request bodies and uploaded CSV content are never
+// recorded — a threat row carries indicator values that do not belong in an
+// audit summary.
+const threatSummary = (threat) => {
+    if (!threat || typeof threat !== "object") return null;
+    return {
+        id: threat.id,
+        status: threat.status,
+        severity: threat.severity,
+        iocType: threat.iocType
+    };
+};
+
 
 // ==============================
 // Get All Threats
@@ -145,6 +178,14 @@ const updateThreatStatus = async (req, res) => {
         ];
 
         if (!validStatuses.includes(status)) {
+            await audit(req, {
+                action: "threat.update",
+                outcome: AUDIT_OUTCOMES.FAILURE,
+                entityType: THREAT_ENTITY_TYPE,
+                entityId: id,
+                reason: "Threat status update rejected: invalid status value"
+            });
+
             return res.status(400).json({
                 success: false,
                 message: "Invalid status."
@@ -158,11 +199,23 @@ const updateThreatStatus = async (req, res) => {
         });
 
         if (!threat) {
+            await audit(req, {
+                action: "threat.update",
+                outcome: AUDIT_OUTCOMES.FAILURE,
+                entityType: THREAT_ENTITY_TYPE,
+                entityId: id,
+                reason: "Threat status update rejected: threat not found"
+            });
+
             return res.status(404).json({
                 success: false,
                 message: "Threat not found."
             });
         }
+
+        // Snapshotted before the write so the "before" state cannot be
+        // affected by the update that follows.
+        const beforeSummary = threatSummary(threat);
 
         const updatedThreat = await prisma.threat.update({
             where: {
@@ -171,6 +224,16 @@ const updateThreatStatus = async (req, res) => {
             data: {
                 status
             }
+        });
+
+        await audit(req, {
+            action: "threat.update",
+            outcome: AUDIT_OUTCOMES.SUCCESS,
+            entityType: THREAT_ENTITY_TYPE,
+            entityId: updatedThreat.id,
+            before: beforeSummary,
+            after: threatSummary(updatedThreat),
+            reason: "Threat status updated"
         });
 
         return res.json({
@@ -202,16 +265,37 @@ const deleteThreat = async (req, res) => {
         });
 
         if (!threat) {
+            await audit(req, {
+                action: "threat.delete",
+                outcome: AUDIT_OUTCOMES.FAILURE,
+                entityType: THREAT_ENTITY_TYPE,
+                entityId: id,
+                reason: "Threat deletion rejected: threat not found"
+            });
+
             return res.status(404).json({
                 success: false,
                 message: "Threat not found."
             });
         }
 
+        // Snapshotted before the row is removed.
+        const beforeSummary = threatSummary(threat);
+        const deletedId = threat.id;
+
         await prisma.threat.delete({
             where: {
                 id: Number(id)
             }
+        });
+
+        await audit(req, {
+            action: "threat.delete",
+            outcome: AUDIT_OUTCOMES.SUCCESS,
+            entityType: THREAT_ENTITY_TYPE,
+            entityId: deletedId,
+            before: beforeSummary,
+            reason: "Threat deleted"
         });
 
         return res.json({
@@ -239,6 +323,13 @@ const uploadThreatCSV = async (req, res) => {
     try {
 
         if (!req.file) {
+            await audit(req, {
+                action: "threat.import",
+                outcome: AUDIT_OUTCOMES.FAILURE,
+                entityType: THREAT_ENTITY_TYPE,
+                reason: "CSV import rejected: no file supplied"
+            });
+
             return res.status(400).json({
                 success: false,
                 message: "Please upload a CSV file."
@@ -247,8 +338,32 @@ const uploadThreatCSV = async (req, res) => {
 
         const threats = [];
 
-        fs.createReadStream(req.file.path)
-            .pipe(csv())
+        // The temp file is removed by the cleanupUpload middleware once the
+        // response finishes, so every branch below — including the error
+        // handlers — is covered without an unlink call of its own.
+        const stream = fs.createReadStream(req.file.path).pipe(csv());
+
+        // Without this the stream's "error" event has no listener, so an
+        // unreadable or malformed file throws instead of returning a response.
+        stream.on("error", async (err) => {
+            console.error("CSV parse failed", { name: err && err.name });
+
+            await audit(req, {
+                action: "threat.import",
+                outcome: AUDIT_OUTCOMES.FAILURE,
+                entityType: THREAT_ENTITY_TYPE,
+                reason: "CSV import failed: file could not be parsed"
+            });
+
+            if (res.headersSent) return;
+
+            return res.status(400).json({
+                success: false,
+                message: "Could not parse the uploaded CSV file."
+            });
+        });
+
+        stream
             .on("data", (row) => {
 
                 threats.push({
@@ -276,10 +391,12 @@ const uploadThreatCSV = async (req, res) => {
 
             .on("end", async () => {
 
-                try {
+                // Declared outside the try so the failure audit below can still
+                // report how far the import got.
+                let added = 0;
+                let duplicates = 0;
 
-                    let added = 0;
-                    let duplicates = 0;
+                try {
 
                     for (const threat of threats) {
 
@@ -303,7 +420,18 @@ const uploadThreatCSV = async (req, res) => {
                         added++;
                     }
 
-                    fs.unlinkSync(req.file.path);
+                    await audit(req, {
+                        action: "threat.import",
+                        outcome: AUDIT_OUTCOMES.SUCCESS,
+                        entityType: THREAT_ENTITY_TYPE,
+                        // Counts only — never the parsed rows or file contents.
+                        after: {
+                            rows: threats.length,
+                            added,
+                            duplicates
+                        },
+                        reason: "CSV import completed"
+                    });
 
                     return res.json({
                         success: true,
@@ -314,7 +442,19 @@ const uploadThreatCSV = async (req, res) => {
 
                 } catch (err) {
 
-                    console.error(err);
+                    console.error("CSV import failed", { name: err && err.name });
+
+                    await audit(req, {
+                        action: "threat.import",
+                        outcome: AUDIT_OUTCOMES.FAILURE,
+                        entityType: THREAT_ENTITY_TYPE,
+                        after: {
+                            rows: threats.length,
+                            added,
+                            duplicates
+                        },
+                        reason: "CSV import failed while persisting rows"
+                    });
 
                     return res.status(500).json({
                         success: false,
