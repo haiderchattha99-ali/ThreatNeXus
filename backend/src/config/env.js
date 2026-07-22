@@ -128,8 +128,11 @@ function buildConfig() {
     LOG_LEVEL: process.env.LOG_LEVEL || "info",
     UPLOAD_MAX_BYTES: uploadMaxBytes,
 
-    SEED_ADMIN_EMAIL: process.env.SEED_ADMIN_EMAIL || "",
-    SEED_DEFAULT_PASSWORD: process.env.SEED_DEFAULT_PASSWORD || "",
+    // Seeding is not configured here. backend/src/scripts/seedUsers.js reads
+    // SEED_USER_PASSWORD straight from process.env so the value stays a
+    // one-off shell variable and never becomes part of the app's config
+    // surface. The former SEED_ADMIN_EMAIL / SEED_DEFAULT_PASSWORD entries
+    // belonged to a seed script that never existed.
 
     // Phase 2 — declared, not consumed by anything in Phase 0.
     IOC_ENRICHMENT_PROVIDER: process.env.IOC_ENRICHMENT_PROVIDER || "mock",
