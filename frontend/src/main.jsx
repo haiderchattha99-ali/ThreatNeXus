@@ -11,14 +11,14 @@ const theme = createTheme({
   palette: {
     mode: 'dark',
     primary: {
-      main: '#58a6ff',
+      main: '#6ee7c7',
     },
     secondary: {
-      main: '#1f6feb',
+      main: '#7688ff',
     },
     background: {
-      default: '#0d1117',
-      paper: '#161b22',
+      default: '#080c14',
+      paper: '#101723',
     },
     error: {
       main: '#f85149',
@@ -34,7 +34,7 @@ const theme = createTheme({
     },
   },
   typography: {
-    fontFamily: '"Roboto", "Helvetica", "Arial", sans-serif',
+    fontFamily: '"Manrope", "Segoe UI", sans-serif',
     h1: {
       fontSize: '2.5rem',
       fontWeight: 600,
@@ -52,15 +52,16 @@ const theme = createTheme({
     MuiCard: {
       styleOverrides: {
         root: {
-          borderRadius: 12,
-          backgroundColor: '#161b22',
+          borderRadius: 16,
+          backgroundColor: '#101723',
+          border: '1px solid #202d40',
         },
       },
     },
     MuiButton: {
       styleOverrides: {
         root: {
-          borderRadius: 8,
+          borderRadius: 10,
           textTransform: 'none',
           fontWeight: 600,
         },

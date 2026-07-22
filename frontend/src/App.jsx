@@ -10,6 +10,11 @@ import { Dashboard } from './pages/Dashboard'
 import { Threats } from './pages/Threats'
 import { Upload } from './pages/Upload'
 import { Profile } from './pages/Profile'
+import Cases from './pages/Cases'
+import Notifications from "./pages/Notifications";
+import Analytics from "./pages/Analytics";
+import Organizations from "./pages/Organizations";
+import Settings from "./pages/Settings";
 import './App.css'
 
 function App() {
@@ -40,16 +45,21 @@ function App() {
                 <Box
                   sx={{
                     marginLeft: `${DRAWER_WIDTH}px`,
-                    marginTop: '64px',
+                    marginTop: '72px',
                     flex: 1,
-                    minHeight: 'calc(100vh - 64px)',
-                    backgroundColor: '#0d1117',
-                  }}
+                    minHeight: 'calc(100vh - 72px)',
+                    backgroundColor: '#080c14',
+                  }} className="app-content"
                 >
                   <Routes>
                     <Route path="/dashboard" element={<Dashboard />} />
                     <Route path="/threats" element={<Threats />} />
                     <Route path="/upload" element={<Upload />} />
+                    <Route path="/cases" element={<Cases />} />
+                    <Route path="/analytics" element={<Analytics />} />
+                    <Route path="/notifications" element={<Notifications />} />
+                    <Route path="/organizations" element={<Organizations />} />
+                    <Route path="/settings" element={<Settings />} />
                     <Route path="/profile" element={<Profile />} />
                     <Route path="/" element={<Navigate to="/dashboard" replace />} />
                   </Routes>

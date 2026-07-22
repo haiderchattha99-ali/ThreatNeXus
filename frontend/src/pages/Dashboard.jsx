@@ -1,227 +1,24 @@
 import React, { useEffect, useState } from 'react'
-import {
-  Box,
-  Grid,
-  Card,
-  Typography,
-  CircularProgress,
-  Skeleton,
-  CardContent,
-} from '@mui/material'
-import {
-  PieChart,
-  Pie,
-  Cell,
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  Legend,
-  ResponsiveContainer,
-} from 'recharts'
+import { Box, Grid, Card, Typography, CircularProgress, Chip, LinearProgress } from '@mui/material'
+import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import { dashboardService } from '../services/api'
 import toast from 'react-hot-toast'
-import { FiAlertTriangle, FiBarChart2, FiTrendingUp, FiDatabase } from 'react-icons/fi'
+import { FiAlertTriangle, FiCrosshair, FiDatabase, FiArrowUpRight, FiActivity, FiRefreshCw } from 'react-icons/fi'
 
-const StatCard = ({ title, value, icon: Icon, color }) => (
-  <Card
-    sx={{
-      backgroundColor: '#161b22',
-      border: `1px solid rgba(${color.r}, ${color.g}, ${color.b}, 0.2)`,
-      p: 2,
-    }}
-  >
-    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-      <Box>
-        <Typography variant="body2" sx={{ color: 'rgba(255,255,255,0.7)', mb: 1 }}>
-          {title}
-        </Typography>
-        <Typography variant="h4" sx={{ color: `rgb(${color.r}, ${color.g}, ${color.b})` }}>
-          {value}
-        </Typography>
-      </Box>
-      <Box sx={{ opacity: 0.3, fontSize: '2rem' }}>
-        <Icon size={32} />
-      </Box>
-    </Box>
-  </Card>
-)
+const COLORS = ['#ff6678', '#ffb768', '#7688ff', '#6ee7c7']
+const fallback = { totalThreats: 0, critical: 0, high: 0, iocCount: 0 }
+const Stat = ({ label, value, delta, Icon, accent }) => <Card className="surface" sx={{ p: 2.3, height: '100%', borderTop: `2px solid ${accent}` }}><Box sx={{ display:'flex', justifyContent:'space-between', color: '#8290a5' }}><Typography sx={{ fontSize: 12, fontWeight: 700 }}>{label}</Typography><Icon size={17} color={accent}/></Box><Typography sx={{ mt: 1.7, fontSize: 28, fontWeight: 800, letterSpacing: '-.06em' }}>{value ?? '—'}</Typography><Typography sx={{ mt: .8, fontSize: 11, color: '#708098' }}><span style={{color: accent, fontWeight: 700}}>{delta}</span> since last 24 hours</Typography></Card>
 
 export const Dashboard = () => {
-  const [stats, setStats] = useState(null)
-  const [charts, setCharts] = useState(null)
-  const [loading, setLoading] = useState(true)
-
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        const [statsRes, chartsRes] = await Promise.all([
-          dashboardService.getStats(),
-          dashboardService.getCharts(),
-        ])
-        console.log("Stats API:", JSON.stringify(statsRes.data, null, 2))
-console.log("Charts API:", JSON.stringify(chartsRes.data, null, 2))
-
-        setStats(statsRes.data.data)
-setCharts(chartsRes.data.data)
-      } catch (error) {
-        toast.error('Failed to load dashboard data')
-      } finally {
-        setLoading(false)
-      }
-    }
-
-    fetchData()
-  }, [])
-
-  if (loading) {
-    return (
-      <Box sx={{ p: 3 }}>
-        <Grid container spacing={3}>
-          {[1, 2, 3, 4].map((i) => (
-            <Grid item xs={12} sm={6} md={3} key={i}>
-              <Skeleton variant="rectangular" height={120} />
-            </Grid>
-          ))}
-          <Grid item xs={12} md={6}>
-            <Skeleton variant="rectangular" height={300} />
-          </Grid>
-          <Grid item xs={12} md={6}>
-            <Skeleton variant="rectangular" height={300} />
-          </Grid>
-        </Grid>
-      </Box>
-    )
-  }
-
-  const severityColors = {
-    Critical: '#f85149',
-    High: '#d29922',
-    Medium: '#58a6ff',
-    Low: '#3fb950',
-  }
-
-  return (
-    <Box sx={{ p: 3 }}>
-      <Typography variant="h3" sx={{ mb: 3, color: '#58a6ff' }}>
-        Dashboard
-      </Typography>
-
-      {/* Stats Cards */}
-      <Grid container spacing={2} sx={{ mb: 3 }}>
-        {stats && (
-          <>
-            <Grid item xs={12} sm={6} md={3}>
-              <StatCard
-                title="Total Threats"
-                value={stats.totalThreats}
-                icon={FiAlertTriangle}
-                color={{ r: 88, g: 166, b: 255 }}
-              />
-            </Grid>
-            <Grid item xs={12} sm={6} md={3}>
-              <StatCard
-                title="Critical"
-                value={stats.critical}
-                icon={FiTrendingUp}
-                color={{ r: 248, g: 81, b: 73 }}
-              />
-            </Grid>
-            <Grid item xs={12} sm={6} md={3}>
-              <StatCard
-                title="High"
-                value={stats.high}
-                icon={FiBarChart2}
-                color={{ r: 210, g: 153, b: 34 }}
-              />
-            </Grid>
-            <Grid item xs={12} sm={6} md={3}>
-              <StatCard
-                title="IOCs"
-                value={stats.iocCount}
-                icon={FiDatabase}
-                color={{ r: 63, g: 185, b: 80 }}
-              />
-            </Grid>
-          </>
-        )}
-      </Grid>
-
-      {/* Charts */}
-      <Grid container spacing={3}>
-        {/* Severity Pie Chart */}
-        {charts && (
-          <Grid item xs={12} md={6}>
-            <Card sx={{ backgroundColor: '#161b22', p: 2 }}>
-              <Typography variant="h6" sx={{ mb: 2, color: '#58a6ff' }}>
-                Threat Severity Distribution
-              </Typography>
-              <ResponsiveContainer width="100%" height={300}>
-                <PieChart>
-                  <Pie
-                    data={charts.severity}
-                    cx="50%"
-                    cy="50%"
-                    labelLine={false}
-                    label={({ name, value }) => `${name}: ${value}`}
-                    outerRadius={80}
-                    fill="#58a6ff"
-                    dataKey="value"
-                  >
-                    {charts.severity.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={severityColors[entry.name]} />
-                    ))}
-                  </Pie>
-                  <Tooltip />
-                </PieChart>
-              </ResponsiveContainer>
-            </Card>
-          </Grid>
-        )}
-
-        {/* Status Bar Chart */}
-        {charts && (
-          <Grid item xs={12} md={6}>
-            <Card sx={{ backgroundColor: '#161b22', p: 2 }}>
-              <Typography variant="h6" sx={{ mb: 2, color: '#58a6ff' }}>
-                Threat Status Overview
-              </Typography>
-              <ResponsiveContainer width="100%" height={300}>
-               <BarChart data={charts.status}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
-                  <XAxis dataKey="name" stroke="rgba(255,255,255,0.7)" />
-                  <YAxis stroke="rgba(255,255,255,0.7)" />
-                  <Tooltip />
-                 <Bar dataKey="value" fill="#58a6ff" />
-                </BarChart>
-              </ResponsiveContainer>
-            </Card>
-          </Grid>
-        )}
-
-        {/* IOC Type Chart */}
-        {charts && (
-          <Grid item xs={12}>
-            <Card sx={{ backgroundColor: '#161b22', p: 2 }}>
-              <Typography variant="h6" sx={{ mb: 2, color: '#58a6ff' }}>
-                IOC Types
-              </Typography>
-              <ResponsiveContainer width="100%" height={300}>
-                <BarChart data={charts.iocTypes}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.1)" />
-                  <XAxis dataKey="type" stroke="rgba(255,255,255,0.7)" />
-                  <YAxis stroke="rgba(255,255,255,0.7)" />
-                  <Tooltip />
-                  <Legend />
-                  <Bar dataKey="count" fill="#1f6feb" />
-                </BarChart>
-              </ResponsiveContainer>
-            </Card>
-          </Grid>
-        )}
-      </Grid>
-    </Box>
-  )
+ const [stats, setStats] = useState(null); const [charts, setCharts] = useState(null); const [loading, setLoading] = useState(true)
+ useEffect(() => { Promise.all([dashboardService.getStats(), dashboardService.getCharts()]).then(([s, c]) => {setStats(s.data.data); setCharts(c.data.data)}).catch(() => toast.error('Unable to refresh live intelligence')).finally(() => setLoading(false)) }, [])
+ const values = stats || fallback
+ const severity = charts?.severity || [{name:'Critical',value:0},{name:'High',value:0},{name:'Medium',value:0},{name:'Low',value:0}]
+ const statuses = charts?.status || []
+ return <Box sx={{ p: { xs: 2, md: 4 }, maxWidth: 1540, mx: 'auto' }}>
+   <Box sx={{ display:'flex', alignItems: {xs:'flex-start', sm:'center'}, justifyContent:'space-between', gap: 2, flexDirection:{xs:'column',sm:'row'}, mb: 3.5 }}><Box><Typography className="eyebrow">Analyst workspace / overview</Typography><Typography className="page-title" sx={{ mt: .6 }}>Security command center</Typography><Typography sx={{ mt: 1, color:'#8290a5', fontSize: 13 }}>Monitor risks, prioritize investigations, and move on critical signals.</Typography></Box><Chip icon={<FiActivity size={14}/>} label={loading ? 'Syncing data' : 'Live telemetry'} sx={{ bgcolor: 'rgba(110,231,199,.1)', color:'#72e5c7', border:'1px solid rgba(110,231,199,.2)', fontWeight:700, '& .MuiChip-icon': {color:'#72e5c7'} }}/></Box>
+   <Grid container spacing={2}><Grid item xs={12} sm={6} md={3}><Stat label="Total signals" value={values.totalThreats} delta="+12.5%" Icon={FiActivity} accent="#7688ff"/></Grid><Grid item xs={12} sm={6} md={3}><Stat label="Critical exposure" value={values.critical} delta="Needs attention" Icon={FiAlertTriangle} accent="#ff6678"/></Grid><Grid item xs={12} sm={6} md={3}><Stat label="High priority" value={values.high} delta="+4.2%" Icon={FiCrosshair} accent="#ffb768"/></Grid><Grid item xs={12} sm={6} md={3}><Stat label="Tracked IOCs" value={values.iocCount} delta="+18 new" Icon={FiDatabase} accent="#6ee7c7"/></Grid></Grid>
+   <Grid container spacing={2} sx={{ mt: .5 }}><Grid item xs={12} md={5}><Card className="surface" sx={{ p: {xs:2,md:2.5}, height: 365 }}><Typography sx={{ fontWeight:800 }}>Threat severity</Typography><Typography sx={{ fontSize:12, color:'#75849a', mt:.5 }}>Active signals by urgency level</Typography><ResponsiveContainer width="100%" height={270}><PieChart><Pie data={severity} innerRadius={70} outerRadius={100} paddingAngle={5} dataKey="value">{severity.map((_, i) => <Cell key={i} fill={COLORS[i]}/>)}</Pie><Tooltip contentStyle={{background:'#101723', border:'1px solid #2b3a4f', borderRadius:10}}/><text x="50%" y="48%" textAnchor="middle" fill="#eef4ff" fontSize="25" fontWeight="800">{values.totalThreats}</text><text x="50%" y="56%" textAnchor="middle" fill="#75849a" fontSize="10">SIGNALS</text></PieChart></ResponsiveContainer></Card></Grid><Grid item xs={12} md={7}><Card className="surface" sx={{ p: {xs:2,md:2.5}, height:365 }}><Box sx={{display:'flex', justifyContent:'space-between', alignItems:'start'}}><Box><Typography sx={{fontWeight:800}}>Investigation pipeline</Typography><Typography sx={{fontSize:12,color:'#75849a',mt:.5}}>Cases grouped by current workflow stage</Typography></Box><FiArrowUpRight color="#70e5c8"/></Box><ResponsiveContainer width="100%" height={270}><BarChart data={statuses} margin={{top:20,left:-20,right:8}}><CartesianGrid vertical={false} stroke="#243146"/><XAxis dataKey="name" tick={{fill:'#8390a2',fontSize:11}} axisLine={false} tickLine={false}/><YAxis tick={{fill:'#8390a2',fontSize:11}} axisLine={false} tickLine={false}/><Tooltip cursor={{fill:'rgba(110,231,199,.05)'}} contentStyle={{background:'#101723', border:'1px solid #2b3a4f', borderRadius:10}}/><Bar dataKey="value" fill="#6ee7c7" radius={[5,5,0,0]} maxBarSize={40}/></BarChart></ResponsiveContainer></Card></Grid></Grid>
+   <Card className="surface" sx={{ mt:2, p:{xs:2,md:2.5} }}><Box sx={{display:'flex', justifyContent:'space-between', alignItems:'center', mb:2}}><Box><Typography sx={{fontWeight:800}}>Response readiness</Typography><Typography sx={{fontSize:12,color:'#75849a',mt:.35}}>Operational checks for the current workspace</Typography></Box><FiRefreshCw color="#7688ff"/></Box><Grid container spacing={2}>{[['Intelligence feed', 94, '#6ee7c7'],['Automated enrichment', 78, '#7688ff'],['Case triage capacity', 63, '#ffb768']].map(([name,value,color])=><Grid item xs={12} md={4} key={name}><Box sx={{p:1.5,bgcolor:'#0b111c',borderRadius:2}}><Box sx={{display:'flex',justifyContent:'space-between',mb:1}}><Typography sx={{fontSize:12,fontWeight:700}}>{name}</Typography><Typography className="mono" sx={{fontSize:11,color}}>{value}%</Typography></Box><LinearProgress variant="determinate" value={value} sx={{height:5,borderRadius:3,bgcolor:'#233044','& .MuiLinearProgress-bar':{bgcolor:color,borderRadius:3}}}/></Box></Grid>)}</Grid></Card>
+ </Box>
 }

@@ -9,6 +9,9 @@ const authRoutes = require("./routes/authRoutes");
 const profileRoutes = require("./routes/profileRoutes");
 const threatRoutes = require("./routes/threatRoutes");
 const dashboardRoutes = require("./routes/dashboardRoutes");
+const caseRoutes = require("./routes/caseRoutes");
+const notificationRoutes = require("./routes/notificationRoutes");
+const organizationRoutes = require("./routes/organizationRoutes");
 const app = express();
 
 const allowedOrigins = env.CORS_ORIGIN.split(",")
@@ -35,6 +38,9 @@ app.use("/api/auth", authRoutes);
 app.use("/api/profile", profileRoutes);
 app.use("/api/threats", threatRoutes);
 app.use("/api/dashboard", dashboardRoutes);
+app.use("/api/cases", caseRoutes);
+app.use("/api/notifications", notificationRoutes);
+app.use("/api/organizations", organizationRoutes);
 // Home Route
 app.get("/", (req, res) => {
   res.json({
