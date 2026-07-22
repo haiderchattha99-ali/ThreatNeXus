@@ -230,12 +230,29 @@ describe("upload temp-file cleanup", () => {
   });
 
   it("rejects a request with no file without creating anything", async () => {
-    const before = uploadDirFiles();
-    const res = await auth(request(app).post("/api/threats/upload"));
+    // UPLOAD_TEMP_DIR is the real, process-wide upload directory (see
+    // fileCleanup.js) — every vitest worker running upload tests in parallel
+    // shares it. A before/after *count* of that directory races: another
+    // worker's upload test can create or remove a file in the same window,
+    // making this test's own before/after snapshot mismatch even though this
+    // request never touched the filesystem at all.
+    //
+    // Multer's disk storage (node_modules/multer/storage/disk.js) writes a
+    // file via fs.createWriteStream(finalPath) only when a "file" field is
+    // present in the request. This request sends no file, so spying on that
+    // one call proves "nothing was written" directly and deterministically —
+    // with no dependency on the shared directory's contents at all.
+    const writeStreamSpy = vi.spyOn(fs, "createWriteStream");
 
-    expect(res.status).toBe(400);
-    expect(store.threats).toHaveLength(0);
-    expect(uploadDirFiles().length).toBe(before.length);
+    try {
+      const res = await auth(request(app).post("/api/threats/upload"));
+
+      expect(res.status).toBe(400);
+      expect(store.threats).toHaveLength(0);
+      expect(writeStreamSpy).not.toHaveBeenCalled();
+    } finally {
+      writeStreamSpy.mockRestore();
+    }
   });
 
   it("still returns a successful response when cleanup fails", async () => {

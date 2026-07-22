@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, afterEach } from "vitest";
 
 const request = require("supertest");
 
@@ -32,6 +32,23 @@ function loadFreshApp() {
   );
   return require("../../src/app");
 }
+
+// Only the config/env and src/app cache entries are ever evicted above, so
+// every dependency app.js pulls in transitively — express, cors, all route/
+// controller/service files, and native modules like bcrypt — is required
+// exactly once per worker process, on whichever test happens to call
+// loadFreshApp() first. That one-time cost is ordinarily well under a second,
+// but under parallel-worker CPU contention (many vitest workers cold-starting
+// bcrypt's native binding and Prisma at once) it has been observed to exceed
+// the 5s default testTimeout, failing whichever test paid for it.
+//
+// Paying that cost here instead — inside beforeAll, which gets vitest's
+// larger default hookTimeout — means every `it()` below (including the first)
+// starts with a warm require cache and a fast, predictable app load.
+beforeAll(() => {
+  Object.assign(process.env, BASE_ENV);
+  loadFreshApp();
+});
 
 describe("Express app hardening (integration)", () => {
   it("keeps existing route mounts working", async () => {
