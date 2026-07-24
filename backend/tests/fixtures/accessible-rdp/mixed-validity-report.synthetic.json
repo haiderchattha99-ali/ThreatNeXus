@@ -1,0 +1,45 @@
+{
+  "contractVersion": "accessible-rdp.synthetic.v1",
+  "description": "Realistic mixed report: some rows valid, some invalid, one non-fatal duplicate.",
+  "expectedValidCount": 3,
+  "expectedInvalidCount": 3,
+  "rows": [
+    {
+      "timestamp": "2026-02-01T12:00:00Z",
+      "ip": "192.0.2.5",
+      "port": "3389",
+      "protocol": "tcp"
+    },
+    {
+      "timestamp": "2026-02-01T12:00:00Z",
+      "ip": "192.0.2.5",
+      "port": "3389",
+      "protocol": "tcp"
+    },
+    {
+      "timestamp": "not-a-timestamp",
+      "ip": "192.0.2.6",
+      "port": "3389",
+      "protocol": "tcp"
+    },
+    {
+      "timestamp": "2026-02-01T12:05:00Z",
+      "ip": "192.0.2.7",
+      "port": "70000",
+      "protocol": "tcp"
+    },
+    {
+      "timestamp": "2026-02-01T12:10:00Z",
+      "ip": "192.0.2.8",
+      "port": "3389",
+      "protocol": "udp"
+    },
+    {
+      "timestamp": "2026-02-01T12:15:00Z",
+      "ip": "192.0.2.9",
+      "port": "3389",
+      "protocol": "tcp",
+      "country_code": "US"
+    }
+  ]
+}

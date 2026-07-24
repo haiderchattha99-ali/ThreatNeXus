@@ -1,0 +1,25 @@
+{
+  "contractVersion": "accessible-rdp.synthetic.v1",
+  "description": "Rows sharing the same natural key (ip, port, protocol) within a single report. The row validator has no cross-row state and validates each row independently — duplicate-in-report detection is future report-parser logic, not row validation.",
+  "naturalKeyFields": ["ip", "port", "protocol"],
+  "rows": [
+    {
+      "timestamp": "2026-03-01T00:00:00Z",
+      "ip": "203.0.113.50",
+      "port": "3389",
+      "protocol": "tcp"
+    },
+    {
+      "timestamp": "2026-03-01T00:00:00Z",
+      "ip": "203.0.113.50",
+      "port": "3389",
+      "protocol": "tcp"
+    },
+    {
+      "timestamp": "2026-03-01T06:00:00Z",
+      "ip": "203.0.113.50",
+      "port": "3389",
+      "protocol": "TCP"
+    }
+  ]
+}
