@@ -6,8 +6,87 @@ _Operational status / handoff note. Authoritative plan lives in
 ## Current
 
 - **Branch:** `feat/phase-1-ingestion`
-- **Latest commit:** `923aec8` — `feat(phase-1): add raw-report identity & retry classification service (P1-T3)`
+- **Latest commit:** `4c4107d` — `feat(phase-1): add finding normalization/dedup/persistence/recurrence service (P1-T4)`
 - **Phase:** 1 (Ingest → Finding). Phase 0 + pre-Phase-1 hardening are merged to `main` (PR #1, PR #2 / `87178cd`). No PR opened yet for this branch.
+
+## Completed — P1-T4 (finding normalization, dedup, persistence, recurrence)
+
+`backend/src/services/normalization/findingNormalizer.js` —
+`normalizeAccessibleRdpFindingIdentity(validatorResult)`: pure function, takes
+a VALID `accessibleRdpRowValidator` result and returns exactly
+`{indicatorValue, port, protocol, reportType, observedAt}`. `observedAt`
+comes from the row's own UTC-normalized timestamp (never upload time);
+hostname/asn/as_name/country_code are deliberately excluded — never copied
+onto a Finding. Throws `TypeError` for anything that isn't a VALID result.
+
+`backend/src/services/normalization/dedupService.js` —
+`recordFindingObservation({rawReportId, reportType, indicatorValue, port,
+protocol, observedAt}, {client})`, run inside a single Prisma transaction:
+
+- **Identity:** exactly `(indicatorValue, port, protocol, reportType)` — the
+  schema's `finding_identity` composite unique constraint is the final
+  concurrency authority.
+- **New identity → CREATED**: Finding created OPEN, `firstSeen=lastSeen=
+  observedAt`, `occurrenceCount=1`, `recurrenceCount=0`.
+- **Existing OPEN, `observedAt >= lastSeen` → PERSISTED**: `lastSeen` and
+  `firstSeen` move via MAX/MIN, `occurrenceCount += 1`, status/recurrence
+  unchanged. Equal timestamp is **not** "before" — it is PERSISTED (documented
+  tie-break).
+- **Existing OPEN, `observedAt < lastSeen` → HISTORICAL**: out-of-order
+  evidence; `firstSeen` may move backward via MIN, `lastSeen` never regresses
+  (MAX), status stays OPEN, `occurrenceCount += 1`, `recurrenceCount`
+  unchanged.
+- **Existing CLOSED, `observedAt > closedThroughObservedAt` → RECURRED**:
+  reopens — status → OPEN, `recurrenceCount += 1`, `occurrenceCount += 1`,
+  `firstSeen`/`lastSeen` via MIN/MAX, and `closedAt`/`closedByUserId`/
+  `closureReason`/`closedThroughObservedAt` are all cleared to `null` (see
+  **Closure-field-clearing decision** below).
+- **Existing CLOSED, `observedAt <= closedThroughObservedAt` → HISTORICAL**:
+  does **not** reopen (equal timestamp included); `occurrenceCount += 1`,
+  `firstSeen` may move backward, closure fields untouched.
+- **CLOSED with no `closedThroughObservedAt`**: throws — a data-integrity
+  violation, never guessed.
+- **Occurrence semantics:** exactly one `FindingOccurrence` per
+  `(findingId, rawReportId)` (`@@unique` is the authority). A second call
+  for the same pair — duplicate rows in one report, a retried report, or a
+  genuine idempotent replay — returns the existing occurrence unchanged with
+  `idempotent: true` and **no** projection mutation (never a second
+  `occurrenceCount`/`recurrenceCount` increment, never a second lifecycle
+  action).
+- **Concurrency:** Finding-create and FindingOccurrence-create races both
+  resolve via catch-P2002-then-reload (same convention as
+  `reportIdentityService.js`); a lost occurrence-create race never touches
+  the projection a second time. `firstSeen`/`lastSeen` (no atomic MIN/MAX
+  operator exists in Prisma) are updated via an optimistic-concurrency
+  compare-and-swap on the existing `updatedAt` (`@updatedAt`) column through
+  `updateMany({where:{id, updatedAt}})`, retried on a CAS miss — no schema
+  change, no raw SQL, no advisory/application-global lock.
+- Returns `{finding, occurrence, action, findingCreated, idempotent,
+  recurrence, historical}`. No `AuditLog` writes here (no request/actor
+  context) — the future ingestion-orchestration task uses this result to
+  write aggregate events like `finding.reopened`.
+- 26 unit tests across `findingNormalizer.test.js` (9) and
+  `dedupService.test.js` (17, in-memory fake Prisma client — no real DB, no
+  `backend/.env`), covering every lifecycle branch, idempotent replay,
+  in-report duplicates, both P2002 races, the CAS-retry path, and input
+  validation.
+
+### Closure-field-clearing decision (durable)
+
+On RECURRED, `closedAt`/`closedByUserId`/`closureReason`/
+`closedThroughObservedAt` are all cleared to `null`. This was flagged by the
+task packet as a design question ("stop if clearing would destroy the only
+historical record of closure"). Resolution: no finding-close code path exists
+yet anywhere in this repo (the status endpoint is future work), so these four
+columns have never held anything but hypothetical state; per
+`schema.prisma`'s own `FindingStatus` comment they describe *current* closure
+state, evaluated only while a Finding is CLOSED. The permanent evidence of
+record is (a) the immutable `FindingOccurrence` row this same call creates
+(`action=RECURRED`, its `observedAt`), and (b) the `AuditLog` event the
+future close-endpoint task will write at the moment of closing (with actor
+context this module doesn't have). Clearing these four mutable projection
+columns on reopen does not destroy either. Not re-litigated unless a
+closure-history model is introduced later.
 
 ## Completed — P1-T2 (accessible-rdp.synthetic.v1 row validator)
 
@@ -96,11 +175,16 @@ parsers, or services (those are later Phase 1 tasks).
 P1-T1: `prisma format` · `prisma validate` · `prisma migrate status` (9
 migrations, in sync) · migration applied to disposable local Postgres.
 
-P1-T2 + P1-T3 (this round): `npx prisma validate` (schema untouched — no
-migration in this task, as required) · full backend suite **576/576** (was
-485; +91 new: 64 validator + 27 identity-service, run with `backend/.env`
-absent — see blocker) · `git diff --cached --check` clean (only expected
-LF→CRLF autocrlf notices, no real whitespace errors) · diffs reviewed.
+P1-T2 + P1-T3: `npx prisma validate` (schema untouched — no migration in this
+task, as required) · full backend suite **576/576** (was 485; +91 new: 64
+validator + 27 identity-service, run with `backend/.env` absent — see
+blocker) · `git diff --cached --check` clean (only expected LF→CRLF autocrlf
+notices, no real whitespace errors) · diffs reviewed.
+
+P1-T4 (this round): `npx prisma validate` (schema untouched, no migration
+generated) · full backend suite **602/602** (was 576; +26 new: 9 normalizer +
+17 dedup-service, `backend/.env` absent) · `git diff --check` clean · diff
+and status reviewed.
 
 ## Blocker / local-env note
 
@@ -130,15 +214,30 @@ no database at all (pure function + stubbed-Prisma unit tests only).
   to a plain integer): no prior repo convention existed either way; chosen
   as the more permissive, still-conservative reading of the synthetic-v1
   contract's "if approved project conventions support both" clause.
+- **Closure-field clearing on RECURRED** (P1-T4): `closedAt`,
+  `closedByUserId`, `closureReason`, `closedThroughObservedAt` are all set to
+  `null` when a CLOSED finding reopens. See "Closure-field-clearing decision"
+  above — resolved, not blocked, but flagged here since it reads live Finding
+  columns a not-yet-built close endpoint will also write.
+- **`updatedAt`-based optimistic concurrency for `firstSeen`/`lastSeen`**
+  (P1-T4): Prisma has no atomic MIN/MAX field operator, so concurrent updates
+  to the same existing Finding's `firstSeen`/`lastSeen` from two different
+  reports are serialized via a compare-and-swap on the existing `updatedAt`
+  column (`updateMany({where:{id, updatedAt}})`, retried on a miss) rather
+  than raw SQL or a new lock primitive. `occurrenceCount`/`recurrenceCount`
+  double-increment for the *same* report is separately, and more simply,
+  prevented by the `FindingOccurrence` unique constraint (P2002 → reload,
+  never re-touch the projection) — that path needed no CAS.
 
-## Exact next task — P1-T4
+## Exact next task — P1-T5
 
-Parser/route wiring is still out of scope per the P1-T2/P1-T3 task packet.
-The next task is the CSV parser/report ingestion orchestration that: streams
-a report through `multer` + `csv-parser`, calls
-`validateAccessibleRdpRow` per row and `createRawReportRecordOrResolveExisting`
-for the file-identity step, persists `RawReportRow` evidence (valid and
-invalid), and — the core invariant — implements the dedup/persistence/
-recurrence logic against `Finding`/`FindingOccurrence` per the locked key
-`(indicatorValue, port, protocol, reportType)`. This is also where the
-RawReport-create `AuditLog` event belongs (deferred above).
+Parser/route wiring is still out of scope per the P1-T2/P1-T3/P1-T4 task
+packets. The next task is the CSV parser/report ingestion orchestration that:
+streams a report through `multer` + `csv-parser`, calls
+`validateAccessibleRdpRow` per row, `createRawReportRecordOrResolveExisting`
+for the file-identity step, `normalizeAccessibleRdpFindingIdentity` +
+`recordFindingObservation` per valid row for dedup/persistence/recurrence,
+and persists `RawReportRow` evidence (valid, invalid, and — pointing at the
+resulting `FindingOccurrence` — duplicate-in-report rows). This is also where
+the `AuditLog` events for the RawReport-create path and for
+`finding.reopened` belong (both deferred above and in the P1-T4 section).
