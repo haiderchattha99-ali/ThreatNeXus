@@ -1,7 +1,25 @@
 import { describe, it, expect, vi } from "vitest";
 
+// SCOPE NOTE — what these tests are and are not.
+//
+// These are unit tests against an in-memory fake Prisma client. They prove
+// the service's *decision logic*: lifecycle classification, projection
+// arithmetic, idempotent replay, the retry policy, and input validation.
+//
+// They are explicitly NOT proof of PostgreSQL transaction semantics. A fake
+// cannot reproduce SERIALIZABLE conflict detection or the 25P02
+// aborted-transaction behaviour that motivated the P1-T4 concurrency repair.
+// The fake models rollback-on-throw so the whole-transaction retry path can
+// be exercised realistically, but real-database guarantees are covered by
+// backend/tests/integration/dedupServiceConcurrency.test.js, which runs
+// against a disposable PostgreSQL instance.
+
 const {
   PRISMA_UNIQUE_VIOLATION,
+  PRISMA_TRANSACTION_CONFLICT,
+  MAX_TRANSACTION_ATTEMPTS,
+  TRANSACTION_ISOLATION_LEVEL,
+  isRetryableConcurrencyError,
   classifyObservation,
   recordFindingObservation,
 } = require("../../src/services/normalization/dedupService");
@@ -15,17 +33,34 @@ function prismaError(code, message) {
   return error;
 }
 
-// Minimal in-memory fake of the two Prisma models dedupService touches, plus
-// a pass-through $transaction — matches the stub-Prisma pattern established
-// by reportIdentityService.test.js, extended to support the multi-step read/
-// write coordination and compare-and-swap semantics this service relies on.
-// No real database, no PrismaClient, no backend/.env.
+// In-memory fake of the two models dedupService touches, plus a $transaction
+// that models atomicity: on a thrown error the store is restored to its
+// pre-transaction snapshot, exactly as a real ROLLBACK would. `setAfterRollback`
+// lets a test simulate a *different* transaction having committed first — that
+// write is applied after the rollback, so it survives, which is what makes the
+// whole-transaction retry path testable.
 function createFakeClient() {
   let nextFindingId = 1;
   let nextOccurrenceId = 1;
-  let nextVersion = 1;
-  const findings = new Map();
-  const occurrences = new Map();
+  let findings = new Map();
+  let occurrences = new Map();
+  const isolationLevels = [];
+  let afterRollback = null;
+
+  function snapshot() {
+    return {
+      findings: new Map([...findings].map(([k, v]) => [k, { ...v }])),
+      occurrences: new Map([...occurrences].map(([k, v]) => [k, { ...v }])),
+      nextFindingId,
+      nextOccurrenceId,
+    };
+  }
+  function restore(snap) {
+    findings = snap.findings;
+    occurrences = snap.occurrences;
+    nextFindingId = snap.nextFindingId;
+    nextOccurrenceId = snap.nextOccurrenceId;
+  }
 
   function findFindingByIdentity(identity) {
     for (const f of findings.values()) {
@@ -54,29 +89,20 @@ function createFakeClient() {
         if (where.id !== undefined) return findings.get(where.id) || null;
         return findFindingByIdentity(where.finding_identity);
       }),
-      findUniqueOrThrow: vi.fn(async ({ where }) => {
-        const row = findings.get(where.id);
-        if (!row) throw new Error(`finding ${where.id} not found`);
-        return row;
-      }),
       create: vi.fn(async ({ data }) => {
         if (findFindingByIdentity(data)) {
           throw prismaError(PRISMA_UNIQUE_VIOLATION, "Unique constraint failed on finding_identity");
         }
-        const row = { id: nextFindingId, updatedAt: new Date(nextVersion), ...data };
+        const row = { id: nextFindingId, updatedAt: new Date("2026-01-01T00:00:00Z"), ...data };
         nextFindingId += 1;
-        nextVersion += 1;
         findings.set(row.id, row);
         return row;
       }),
-      updateMany: vi.fn(async ({ where, data }) => {
+      update: vi.fn(async ({ where, data }) => {
         const row = findings.get(where.id);
-        if (!row || row.updatedAt.getTime() !== where.updatedAt.getTime()) {
-          return { count: 0 };
-        }
-        Object.assign(row, data, { updatedAt: new Date(nextVersion) });
-        nextVersion += 1;
-        return { count: 1 };
+        if (!row) throw prismaError("P2025", "Record to update not found");
+        Object.assign(row, data, { updatedAt: new Date("2026-06-01T00:00:00Z") });
+        return { ...row };
       }),
     },
     findingOccurrence: {
@@ -86,7 +112,10 @@ function createFakeClient() {
       }),
       create: vi.fn(async ({ data }) => {
         if (findOccurrenceByPair(data.findingId, data.rawReportId)) {
-          throw prismaError(PRISMA_UNIQUE_VIOLATION, "Unique constraint failed on findingId_rawReportId");
+          throw prismaError(
+            PRISMA_UNIQUE_VIOLATION,
+            "Unique constraint failed on findingId_rawReportId"
+          );
         }
         const row = { id: nextOccurrenceId, ...data };
         nextOccurrenceId += 1;
@@ -94,10 +123,32 @@ function createFakeClient() {
         return row;
       }),
     },
-    $transaction: vi.fn(async (fn) => fn(client)),
+    $transaction: vi.fn(async (fn, options) => {
+      isolationLevels.push(options && options.isolationLevel);
+      const snap = snapshot();
+      try {
+        return await fn(client);
+      } catch (error) {
+        restore(snap);
+        if (afterRollback) {
+          const apply = afterRollback;
+          afterRollback = null;
+          apply({ findings, occurrences });
+        }
+        throw error;
+      }
+    }),
   };
 
-  return { client, findings, occurrences };
+  return {
+    client,
+    isolationLevels,
+    getFindings: () => findings,
+    getOccurrences: () => occurrences,
+    setAfterRollback: (fn) => {
+      afterRollback = fn;
+    },
+  };
 }
 
 function baseInput(overrides = {}) {
@@ -110,6 +161,16 @@ function baseInput(overrides = {}) {
     observedAt: new Date("2026-01-05T12:00:00.000Z"),
     ...overrides,
   };
+}
+
+function closeFindingInStore(findings, findingId, closedThroughObservedAt) {
+  Object.assign(findings.get(findingId), {
+    status: "CLOSED",
+    closedAt: new Date("2026-01-06T00:00:00Z"),
+    closedByUserId: 7,
+    closureReason: "remediated",
+    closedThroughObservedAt,
+  });
 }
 
 describe("classifyObservation", () => {
@@ -129,6 +190,33 @@ describe("classifyObservation", () => {
   it("throws on a CLOSED finding missing closedThroughObservedAt rather than guessing", () => {
     const finding = { status: "CLOSED", closedThroughObservedAt: null };
     expect(() => classifyObservation(finding, new Date())).toThrow(/data integrity violation/i);
+  });
+});
+
+describe("isRetryableConcurrencyError", () => {
+  it("retries only P2002 and P2034", () => {
+    expect(isRetryableConcurrencyError(prismaError(PRISMA_UNIQUE_VIOLATION))).toBe(true);
+    expect(isRetryableConcurrencyError(prismaError(PRISMA_TRANSACTION_CONFLICT))).toBe(true);
+  });
+
+  it("does not retry validation, programmer, or unknown-code errors", () => {
+    // A PrismaClientUnknownRequestError has code undefined — this is exactly
+    // the 25P02 aborted-transaction signature and must never be retried.
+    expect(isRetryableConcurrencyError(new Error("current transaction is aborted"))).toBe(false);
+    expect(isRetryableConcurrencyError(new TypeError("bad input"))).toBe(false);
+    expect(isRetryableConcurrencyError(prismaError("P2025"))).toBe(false);
+    expect(isRetryableConcurrencyError(prismaError("P1001"))).toBe(false);
+    expect(isRetryableConcurrencyError(null)).toBe(false);
+    expect(isRetryableConcurrencyError(undefined)).toBe(false);
+  });
+});
+
+describe("recordFindingObservation — transaction configuration", () => {
+  it("runs at SERIALIZABLE isolation", async () => {
+    const { client, isolationLevels } = createFakeClient();
+    await recordFindingObservation(baseInput(), { client });
+    expect(isolationLevels).toEqual([TRANSACTION_ISOLATION_LEVEL]);
+    expect(TRANSACTION_ISOLATION_LEVEL).toBe("Serializable");
   });
 });
 
@@ -173,6 +261,24 @@ describe("recordFindingObservation — persistence", () => {
     expect(second.finding.recurrenceCount).toBe(0);
     expect(second.finding.status).toBe("OPEN");
     expect(second.finding.id).toBe(first.finding.id);
+  });
+
+  it("returns the actual committed post-update Finding row, not a locally merged object", async () => {
+    const { client, getFindings } = createFakeClient();
+    const created = await recordFindingObservation(
+      baseInput({ rawReportId: 1, observedAt: new Date("2026-01-01T00:00:00Z") }),
+      { client }
+    );
+    const result = await recordFindingObservation(
+      baseInput({ rawReportId: 2, observedAt: new Date("2026-01-03T00:00:00Z") }),
+      { client }
+    );
+
+    const stored = getFindings().get(created.finding.id);
+    expect(result.finding).toEqual(stored);
+    // updatedAt reflects the update the database actually performed, not the
+    // pre-update value that was read at the start of the transaction.
+    expect(result.finding.updatedAt).toEqual(new Date("2026-06-01T00:00:00Z"));
   });
 });
 
@@ -219,43 +325,13 @@ describe("recordFindingObservation — equal-time OPEN", () => {
 });
 
 describe("recordFindingObservation — recurrence", () => {
-  async function makeClosedFinding(client, { closedThroughObservedAt }) {
+  it("observedAt after closedThroughObservedAt: RECURRED, reopens, counters +1, closure fields cleared", async () => {
+    const { client, getFindings } = createFakeClient();
     const created = await recordFindingObservation(
       baseInput({ rawReportId: 1, observedAt: new Date("2026-01-01T00:00:00Z") }),
       { client }
     );
-    const closed = {
-      ...created.finding,
-      status: "CLOSED",
-      closedAt: new Date("2026-01-02T00:00:00Z"),
-      closedByUserId: 7,
-      closureReason: "remediated",
-      closedThroughObservedAt,
-    };
-    client.finding.findUnique.mockImplementationOnce(async () => closed);
-    // Seed the underlying store too, since later calls in the same test may
-    // look the row up again via id (findUniqueOrThrow) after this point.
-    return closed;
-  }
-
-  it("observedAt after closedThroughObservedAt: RECURRED, reopens, recurrenceCount and occurrenceCount +1, closure fields cleared", async () => {
-    const { client, findings } = createFakeClient();
-    const created = await recordFindingObservation(
-      baseInput({ rawReportId: 1, observedAt: new Date("2026-01-01T00:00:00Z") }),
-      { client }
-    );
-
-    // Simulate a prior manual closure directly on the store (no close
-    // endpoint exists yet in this phase — this mirrors the state it would
-    // leave behind).
-    const stored = findings.get(created.finding.id);
-    Object.assign(stored, {
-      status: "CLOSED",
-      closedAt: new Date("2026-01-02T00:00:00Z"),
-      closedByUserId: 7,
-      closureReason: "remediated",
-      closedThroughObservedAt: new Date("2026-01-01T00:00:00Z"),
-    });
+    closeFindingInStore(getFindings(), created.finding.id, new Date("2026-01-01T00:00:00Z"));
 
     const result = await recordFindingObservation(
       baseInput({ rawReportId: 2, observedAt: new Date("2026-01-10T00:00:00Z") }),
@@ -279,19 +355,12 @@ describe("recordFindingObservation — recurrence", () => {
 
 describe("recordFindingObservation — historical CLOSED", () => {
   it("observedAt before closedThroughObservedAt: HISTORICAL, remains CLOSED, recurrenceCount unchanged", async () => {
-    const { client, findings } = createFakeClient();
+    const { client, getFindings } = createFakeClient();
     const created = await recordFindingObservation(
       baseInput({ rawReportId: 1, observedAt: new Date("2026-01-05T00:00:00Z") }),
       { client }
     );
-    const stored = findings.get(created.finding.id);
-    Object.assign(stored, {
-      status: "CLOSED",
-      closedAt: new Date("2026-01-06T00:00:00Z"),
-      closedByUserId: 7,
-      closureReason: "remediated",
-      closedThroughObservedAt: new Date("2026-01-05T00:00:00Z"),
-    });
+    closeFindingInStore(getFindings(), created.finding.id, new Date("2026-01-05T00:00:00Z"));
 
     const result = await recordFindingObservation(
       baseInput({ rawReportId: 2, observedAt: new Date("2026-01-02T00:00:00Z") }),
@@ -311,19 +380,12 @@ describe("recordFindingObservation — historical CLOSED", () => {
 
 describe("recordFindingObservation — equal-time CLOSED", () => {
   it("observedAt equal to closedThroughObservedAt: does not reopen, HISTORICAL", async () => {
-    const { client, findings } = createFakeClient();
+    const { client, getFindings } = createFakeClient();
     const created = await recordFindingObservation(
       baseInput({ rawReportId: 1, observedAt: new Date("2026-01-05T00:00:00Z") }),
       { client }
     );
-    const stored = findings.get(created.finding.id);
-    Object.assign(stored, {
-      status: "CLOSED",
-      closedAt: new Date("2026-01-06T00:00:00Z"),
-      closedByUserId: 7,
-      closureReason: "remediated",
-      closedThroughObservedAt: new Date("2026-01-05T00:00:00Z"),
-    });
+    closeFindingInStore(getFindings(), created.finding.id, new Date("2026-01-05T00:00:00Z"));
 
     const result = await recordFindingObservation(
       baseInput({ rawReportId: 2, observedAt: new Date("2026-01-05T00:00:00Z") }),
@@ -337,8 +399,8 @@ describe("recordFindingObservation — equal-time CLOSED", () => {
 });
 
 describe("recordFindingObservation — idempotency", () => {
-  it("same Finding + same RawReport invoked twice: returns the existing occurrence, no second occurrence, no projection increment, idempotent=true", async () => {
-    const { client, occurrences } = createFakeClient();
+  it("same Finding + same RawReport twice: existing occurrence returned, no second occurrence, no counter mutation", async () => {
+    const { client, getOccurrences } = createFakeClient();
     const input = baseInput({ rawReportId: 1, observedAt: new Date("2026-01-05T00:00:00Z") });
 
     const first = await recordFindingObservation(input, { client });
@@ -348,132 +410,86 @@ describe("recordFindingObservation — idempotency", () => {
     expect(second.findingCreated).toBe(false);
     expect(second.occurrence.id).toBe(first.occurrence.id);
     expect(second.finding.occurrenceCount).toBe(1);
-    expect(occurrences.size).toBe(1);
+    expect(getOccurrences().size).toBe(1);
   });
 
   it("duplicate rows in one report: one occurrence only, one occurrenceCount increment only", async () => {
-    const { client, occurrences } = createFakeClient();
+    const { client, getOccurrences } = createFakeClient();
     const input = baseInput({ rawReportId: 1, observedAt: new Date("2026-01-05T00:00:00Z") });
 
     await recordFindingObservation(input, { client });
     await recordFindingObservation(input, { client });
     const third = await recordFindingObservation(input, { client });
 
-    expect(occurrences.size).toBe(1);
+    expect(getOccurrences().size).toBe(1);
     expect(third.finding.occurrenceCount).toBe(1);
   });
 });
 
-describe("recordFindingObservation — concurrency", () => {
-  it("concurrent Finding-create P2002: loads the winning Finding, continues safely, no duplicate Finding", async () => {
-    const { client, findings } = createFakeClient();
-    const input = baseInput({ rawReportId: 2, observedAt: new Date("2026-01-05T00:00:00Z") });
-
-    // Simulate a concurrent transaction that already created the Finding
-    // between our findUnique check and our create call.
-    const winner = {
-      id: 99,
-      indicatorValue: input.indicatorValue,
-      port: input.port,
-      protocol: input.protocol,
-      reportType: input.reportType,
-      status: "OPEN",
-      firstSeen: new Date("2026-01-01T00:00:00Z"),
-      lastSeen: new Date("2026-01-01T00:00:00Z"),
-      occurrenceCount: 1,
-      recurrenceCount: 0,
-      closedAt: null,
-      closedByUserId: null,
-      closureReason: null,
-      closedThroughObservedAt: null,
-      updatedAt: new Date(1),
-    };
-
-    // The initial identity check (before our own create attempt) must see
-    // nothing yet — the "other" transaction's Finding becomes visible only
-    // once our create() loses the race, exactly like a real concurrent
-    // commit landing between our SELECT and our INSERT.
-    client.finding.findUnique.mockImplementationOnce(async () => null);
-    client.finding.create.mockImplementationOnce(async () => {
-      findings.set(winner.id, winner);
-      throw prismaError(PRISMA_UNIQUE_VIOLATION);
-    });
-
-    const result = await recordFindingObservation(input, { client });
-
-    expect(result.findingCreated).toBe(false);
-    expect(result.finding.id).toBe(99);
-    expect(findings.size).toBe(1);
-    expect(result.action).toBe("PERSISTED");
-  });
-
-  it("concurrent occurrence-create P2002: loads the existing occurrence, does not double-update projections", async () => {
-    const { client, findings, occurrences } = createFakeClient();
+describe("recordFindingObservation — whole-transaction retry", () => {
+  it("recomputes the lifecycle action from fresh state: a Finding reopened by another transaction before the retry is not RECURRED again", async () => {
+    const { client, getFindings, setAfterRollback } = createFakeClient();
     const created = await recordFindingObservation(
       baseInput({ rawReportId: 1, observedAt: new Date("2026-01-01T00:00:00Z") }),
       { client }
     );
+    const findingId = created.finding.id;
+    closeFindingInStore(getFindings(), findingId, new Date("2026-01-05T00:00:00Z"));
 
-    // A concurrent transaction wins the occurrence-create race for report 2
-    // between our existence check and our own create call.
-    const racingOccurrence = {
-      id: 999,
-      findingId: created.finding.id,
-      rawReportId: 2,
-      observedAt: new Date("2026-01-03T00:00:00Z"),
-      action: "PERSISTED",
-    };
-
-    // The initial existence check must miss it — the "other" transaction's
-    // occurrence becomes visible only once our own create() loses the race.
-    client.findingOccurrence.findUnique.mockImplementationOnce(async () => null);
-    client.findingOccurrence.create.mockImplementationOnce(async () => {
-      occurrences.set(racingOccurrence.id, racingOccurrence);
-      throw prismaError(PRISMA_UNIQUE_VIOLATION);
-    });
-
-    const before = findings.get(created.finding.id).occurrenceCount;
-    const result = await recordFindingObservation(
-      baseInput({ rawReportId: 2, observedAt: new Date("2026-01-05T00:00:00Z") }),
-      { client }
-    );
-
-    expect(result.idempotent).toBe(true);
-    expect(result.occurrence.id).toBe(999);
-    expect(findings.get(created.finding.id).occurrenceCount).toBe(before);
-  });
-
-  it("propagates an unexpected (non-P2002) Prisma error rather than swallowing it", async () => {
-    const { client } = createFakeClient();
-    client.finding.create.mockImplementationOnce(async () => {
-      throw new Error("connection terminated unexpectedly");
-    });
-
-    await expect(recordFindingObservation(baseInput(), { client })).rejects.toThrow(
-      "connection terminated unexpectedly"
-    );
-  });
-
-  it("resolves a lost projection-update compare-and-swap by retrying against the freshly committed row", async () => {
-    const { client, findings } = createFakeClient();
-    const created = await recordFindingObservation(
-      baseInput({ rawReportId: 1, observedAt: new Date("2026-01-01T00:00:00Z") }),
-      { client }
-    );
-
-    let calls = 0;
-    const originalUpdateMany = client.finding.updateMany.getMockImplementation();
-    client.finding.updateMany.mockImplementation(async (args) => {
-      calls += 1;
-      if (calls === 1) {
-        // Simulate another transaction committing first: bump the stored
-        // row's version out from under this call, forcing a CAS miss.
-        const row = findings.get(args.where.id);
-        row.updatedAt = new Date(row.updatedAt.getTime() + 1000);
-        row.occurrenceCount += 1;
-        return { count: 0 };
+    // First attempt classifies RECURRED (observedAt > closedThrough) and then
+    // loses the projection write to a concurrent transaction that reopened the
+    // same Finding first — the P2034 SERIALIZABLE conflict proven to occur on
+    // real PostgreSQL. The winner's committed state is applied after rollback.
+    let updateCalls = 0;
+    const realUpdate = client.finding.update.getMockImplementation();
+    client.finding.update.mockImplementation(async (args) => {
+      updateCalls += 1;
+      if (updateCalls === 1) {
+        setAfterRollback(({ findings }) => {
+          Object.assign(findings.get(findingId), {
+            status: "OPEN",
+            recurrenceCount: 1,
+            occurrenceCount: 2,
+            lastSeen: new Date("2026-02-01T00:00:00Z"),
+            closedAt: null,
+            closedByUserId: null,
+            closureReason: null,
+            closedThroughObservedAt: null,
+          });
+        });
+        throw prismaError(PRISMA_TRANSACTION_CONFLICT);
       }
-      return originalUpdateMany(args);
+      return realUpdate(args);
+    });
+
+    const result = await recordFindingObservation(
+      baseInput({ rawReportId: 2, observedAt: new Date("2026-02-01T00:00:00Z") }),
+      { client }
+    );
+
+    // Re-classified against the committed OPEN state — NOT a second RECURRED.
+    expect(result.action).toBe("PERSISTED");
+    expect(result.recurrence).toBe(false);
+    // Exactly one increment for the single real CLOSED -> OPEN transition.
+    expect(result.finding.recurrenceCount).toBe(1);
+    expect(result.finding.status).toBe("OPEN");
+    expect(result.occurrence.action).toBe("PERSISTED");
+    expect(client.$transaction).toHaveBeenCalledTimes(3); // 1 setup + 2 attempts
+  });
+
+  it("rolls back the first attempt's occurrence so the retry leaves exactly one", async () => {
+    const { client, getOccurrences, getFindings } = createFakeClient();
+    const created = await recordFindingObservation(
+      baseInput({ rawReportId: 1, observedAt: new Date("2026-01-01T00:00:00Z") }),
+      { client }
+    );
+
+    let updateCalls = 0;
+    const realUpdate = client.finding.update.getMockImplementation();
+    client.finding.update.mockImplementation(async (args) => {
+      updateCalls += 1;
+      if (updateCalls === 1) throw prismaError(PRISMA_TRANSACTION_CONFLICT);
+      return realUpdate(args);
     });
 
     const result = await recordFindingObservation(
@@ -481,14 +497,175 @@ describe("recordFindingObservation — concurrency", () => {
       { client }
     );
 
-    expect(result.idempotent).toBe(false);
-    expect(result.finding.occurrenceCount).toBe(3);
-    expect(calls).toBeGreaterThanOrEqual(2);
-    expect(created.finding.id).toBe(result.finding.id);
+    expect(getOccurrences().size).toBe(2);
+    expect(result.finding.occurrenceCount).toBe(2);
+    expect(getFindings().get(created.finding.id).occurrenceCount).toBe(2);
+  });
+
+  it("resolves a P2002 Finding-create race by re-running the transaction and reading the winner", async () => {
+    const { client, getFindings, setAfterRollback } = createFakeClient();
+    const input = baseInput({ rawReportId: 2, observedAt: new Date("2026-01-05T00:00:00Z") });
+
+    // First attempt sees no Finding and loses the create race; the winner's row
+    // becomes visible after the rollback, so the retry reads it.
+    let createCalls = 0;
+    const realCreate = client.finding.create.getMockImplementation();
+    client.finding.create.mockImplementation(async (args) => {
+      createCalls += 1;
+      if (createCalls === 1) {
+        const winner = {
+          id: 99,
+          ...args.data,
+          firstSeen: new Date("2026-01-01T00:00:00Z"),
+          lastSeen: new Date("2026-01-01T00:00:00Z"),
+          occurrenceCount: 1,
+          recurrenceCount: 0,
+          closedAt: null,
+          closedByUserId: null,
+          closureReason: null,
+          closedThroughObservedAt: null,
+          updatedAt: new Date("2026-01-01T00:00:00Z"),
+        };
+        // Applied after the rollback, so it survives it — like a concurrent
+        // transaction's commit becoming visible to our next attempt.
+        setAfterRollback(({ findings }) => findings.set(99, winner));
+        throw prismaError(PRISMA_UNIQUE_VIOLATION);
+      }
+      return realCreate(args);
+    });
+
+    const result = await recordFindingObservation(input, { client });
+
+    expect(result.findingCreated).toBe(false);
+    expect(result.finding.id).toBe(99);
+    expect(result.action).toBe("PERSISTED");
+    expect(getFindings().size).toBe(1);
+    expect(result.finding.occurrenceCount).toBe(2);
+  });
+
+  it("resolves a P2002 occurrence-create race idempotently, without double-counting", async () => {
+    const { client, getFindings, getOccurrences, setAfterRollback } = createFakeClient();
+    const created = await recordFindingObservation(
+      baseInput({ rawReportId: 1, observedAt: new Date("2026-01-01T00:00:00Z") }),
+      { client }
+    );
+
+    let occCreateCalls = 0;
+    const realOccCreate = client.findingOccurrence.create.getMockImplementation();
+    client.findingOccurrence.create.mockImplementation(async (args) => {
+      occCreateCalls += 1;
+      if (occCreateCalls === 1) {
+        // A concurrent transaction created this occurrence AND committed its
+        // projection increment; both are applied after our rollback so they
+        // survive it, as a real concurrent commit would.
+        setAfterRollback(({ findings, occurrences }) => {
+          occurrences.set(999, {
+            id: 999,
+            findingId: created.finding.id,
+            rawReportId: 2,
+            observedAt: new Date("2026-01-03T00:00:00Z"),
+            action: "PERSISTED",
+          });
+          Object.assign(findings.get(created.finding.id), {
+            occurrenceCount: 2,
+            lastSeen: new Date("2026-01-03T00:00:00Z"),
+          });
+        });
+        throw prismaError(PRISMA_UNIQUE_VIOLATION);
+      }
+      return realOccCreate(args);
+    });
+
+    const result = await recordFindingObservation(
+      baseInput({ rawReportId: 2, observedAt: new Date("2026-01-03T00:00:00Z") }),
+      { client }
+    );
+
+    expect(result.idempotent).toBe(true);
+    expect(result.occurrence.id).toBe(999);
+    expect(getOccurrences().size).toBe(2);
+    // Not incremented a second time for the same (finding, report) pair.
+    expect(getFindings().get(created.finding.id).occurrenceCount).toBe(2);
+  });
+
+  it("bounds the retry count and re-throws the final concurrency error", async () => {
+    const { client } = createFakeClient();
+    client.finding.create.mockImplementation(async () => {
+      throw prismaError(PRISMA_TRANSACTION_CONFLICT, "persistent write conflict");
+    });
+
+    await expect(recordFindingObservation(baseInput(), { client })).rejects.toMatchObject({
+      code: PRISMA_TRANSACTION_CONFLICT,
+    });
+    expect(client.$transaction).toHaveBeenCalledTimes(MAX_TRANSACTION_ATTEMPTS);
+    expect(MAX_TRANSACTION_ATTEMPTS).toBe(5);
+  });
+
+  it("does not retry an unexpected Prisma error", async () => {
+    const { client } = createFakeClient();
+    client.finding.create.mockImplementation(async () => {
+      throw new Error("connection terminated unexpectedly");
+    });
+
+    await expect(recordFindingObservation(baseInput(), { client })).rejects.toThrow(
+      "connection terminated unexpectedly"
+    );
+    expect(client.$transaction).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry an aborted-transaction style error with no Prisma code", async () => {
+    const { client } = createFakeClient();
+    client.finding.create.mockImplementation(async () => {
+      throw new Error(
+        "current transaction is aborted, commands ignored until end of transaction block"
+      );
+    });
+
+    await expect(recordFindingObservation(baseInput(), { client })).rejects.toThrow(/aborted/);
+    expect(client.$transaction).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry the CLOSED-without-threshold data-integrity error", async () => {
+    const { client, getFindings } = createFakeClient();
+    const created = await recordFindingObservation(
+      baseInput({ rawReportId: 1, observedAt: new Date("2026-01-01T00:00:00Z") }),
+      { client }
+    );
+    Object.assign(getFindings().get(created.finding.id), {
+      status: "CLOSED",
+      closedThroughObservedAt: null,
+    });
+
+    await expect(
+      recordFindingObservation(baseInput({ rawReportId: 2 }), { client })
+    ).rejects.toThrow(/data integrity violation/i);
+    expect(client.$transaction).toHaveBeenCalledTimes(2); // 1 setup + 1 failed, not retried
   });
 });
 
 describe("recordFindingObservation — input validation", () => {
+  it("rejects an invalid reportType before Prisma is called", async () => {
+    const { client } = createFakeClient();
+    await expect(
+      recordFindingObservation(baseInput({ reportType: "OPEN_MEMCACHED" }), { client })
+    ).rejects.toThrow(/reportType must be one of ACCESSIBLE_RDP/);
+    await expect(
+      recordFindingObservation(baseInput({ reportType: "accessible_rdp" }), { client })
+    ).rejects.toThrow(TypeError);
+    expect(client.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("rejects an invalid protocol before Prisma is called", async () => {
+    const { client } = createFakeClient();
+    await expect(
+      recordFindingObservation(baseInput({ protocol: "UDP" }), { client })
+    ).rejects.toThrow(/protocol must be one of TCP/);
+    await expect(
+      recordFindingObservation(baseInput({ protocol: "tcp" }), { client })
+    ).rejects.toThrow(TypeError);
+    expect(client.$transaction).not.toHaveBeenCalled();
+  });
+
   it("throws a controlled programmer error for a malformed input contract", async () => {
     const { client } = createFakeClient();
     await expect(recordFindingObservation(null, { client })).rejects.toThrow(TypeError);
@@ -505,5 +682,6 @@ describe("recordFindingObservation — input validation", () => {
     await expect(
       recordFindingObservation(baseInput({ indicatorValue: "" }), { client })
     ).rejects.toThrow(TypeError);
+    expect(client.$transaction).not.toHaveBeenCalled();
   });
 });
