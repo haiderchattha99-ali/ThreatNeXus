@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 
+const fs = require("fs");
 const path = require("path");
+const YAML = require("yaml");
 const {
   GroundTruthValidationError,
   loadGroundTruth,
@@ -191,5 +193,39 @@ scenarios:
 
   it("throws a TypeError for a non-string filePath (contract violation)", () => {
     expect(() => loadGroundTruth(null)).toThrow(TypeError);
+  });
+});
+
+describe("groundTruthLoader — line-ending independence", () => {
+  // phase1Gate.test.js's tampered-ground-truth proof used to build its tamper
+  // via a hardcoded LF-joined string replace against the raw file text — a
+  // no-op on a CRLF checkout (core.autocrlf=true materializes CRLF from the
+  // LF-committed blob), so the proof silently never tampered anything. The
+  // fix parses the committed YAML into an object, mutates the object, and
+  // re-serializes it, which never inspects raw line-ending bytes at all.
+  // These tests prove that approach behaves identically no matter which line
+  // ending the source text happens to use.
+  const realText = fs.readFileSync(REAL_GROUND_TRUTH_PATH, "utf8");
+  const lfText = realText.replace(/\r\n/g, "\n");
+  const crlfText = lfText.replace(/\n/g, "\r\n");
+
+  it("parses byte-identical content from an LF and a CRLF representation", () => {
+    expect(parseGroundTruth(lfText)).toEqual(parseGroundTruth(crlfText));
+  });
+
+  it("locates and tampers the same value regardless of source line ending", () => {
+    [lfText, crlfText].forEach((text) => {
+      const parsed = YAML.parse(text);
+      const persistenceScenario = parsed.scenarios.find((s) => s.id === "03_persistence");
+      const findingA = persistenceScenario.expected.findings.find((f) => f.identity === "FINDING_A");
+      expect(findingA.occurrenceCount).toBe(2);
+
+      findingA.occurrenceCount = 999;
+      const tampered = parseGroundTruth(YAML.stringify(parsed));
+      const tamperedFindingA = tampered.scenarios
+        .find((s) => s.id === "03_persistence")
+        .expected.findings.find((f) => f.identity === "FINDING_A");
+      expect(tamperedFindingA.occurrenceCount).toBe(999);
+    });
   });
 });
