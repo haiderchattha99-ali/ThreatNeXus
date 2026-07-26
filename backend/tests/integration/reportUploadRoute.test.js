@@ -479,3 +479,76 @@ describe("POST /api/reports/upload — response safety", () => {
     expect(res.headers["x-request-id"]).toBe(res.body.requestId);
   });
 });
+
+describe("POST /api/reports/upload — trusted source (P1-T6a)", () => {
+  it("a normal analyst upload is accepted under the server's SYNTHETIC_UPLOAD source", async () => {
+    const res = await uploadAs("ANALYST");
+    expect(res.status).toBe(201);
+    expect(res.body.success).toBe(true);
+  });
+
+  // If the controller ever read a client-supplied "source" field instead of
+  // assigning SYNTHETIC_UPLOAD itself, this exact request would be rejected
+  // (SHADOWSERVER is not a trusted source) — a 201 here is the proof the
+  // field was never consumed.
+  it("a client-supplied source field cannot override the server-controlled source", async () => {
+    const res = await request(app)
+      .post("/api/reports/upload")
+      .set("Authorization", `Bearer ${tokens.ANALYST}`)
+      .field("source", "SHADOWSERVER")
+      .attach("file", VALID_CSV, "report.csv");
+
+    expect(res.status).toBe(201);
+    expect(res.body.success).toBe(true);
+  });
+
+  // Same proof for reportType/schemaVersion: both are fixed server-side
+  // (ReportType.ACCESSIBLE_RDP / accessibleRdpRowValidator's CONTRACT_VERSION)
+  // and never read from the request body.
+  it("client-supplied reportType/schemaVersion fields cannot override the server's fixed contract", async () => {
+    const res = await request(app)
+      .post("/api/reports/upload")
+      .set("Authorization", `Bearer ${tokens.ANALYST}`)
+      .field("reportType", "SOMETHING_ELSE")
+      .field("schemaVersion", "bogus-version")
+      .attach("file", VALID_CSV, "report.csv");
+
+    expect(res.status).toBe(201);
+    expect(res.body.success).toBe(true);
+  });
+
+  it("still denies before multer for an unauthenticated request, source override attempt included", async () => {
+    const writeSpy = spyOnWrites();
+    try {
+      const res = await request(app)
+        .post("/api/reports/upload")
+        .field("source", "SHADOWSERVER")
+        .attach("file", VALID_CSV, "report.csv");
+
+      expect(res.status).toBe(401);
+      expect(writeSpy).not.toHaveBeenCalled();
+      expect(currentStore.rawReports.size).toBe(0);
+    } finally {
+      writeSpy.mockRestore();
+    }
+  });
+
+  it("temp-file cleanup still runs correctly for a request carrying override attempts", async () => {
+    const writeSpy = spyOnWrites();
+    try {
+      const res = await request(app)
+        .post("/api/reports/upload")
+        .set("Authorization", `Bearer ${tokens.ANALYST}`)
+        .field("source", "SHADOWSERVER")
+        .field("reportType", "SOMETHING_ELSE")
+        .attach("file", VALID_CSV, "report.csv");
+
+      expect(res.status).toBe(201);
+      expect(writeSpy).toHaveBeenCalledTimes(1);
+      const [writtenPath] = writeSpy.mock.calls[0];
+      expect(await waitFor(() => !fs.existsSync(writtenPath))).toBe(true);
+    } finally {
+      writeSpy.mockRestore();
+    }
+  });
+});

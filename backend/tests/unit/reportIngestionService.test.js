@@ -11,6 +11,8 @@ import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
 // reportIngestionService requires config/env (for REPORT_MAX_ROWS), which
 // validates its required variables at require time — same pattern as
 // authMiddleware.test.js: stage process.env, evict the cache, then require.
+const { REPORT_SOURCES } = require("../../src/services/ingestion/reportSourceRegistry");
+
 let originalEnv;
 let INGESTION_OUTCOMES;
 let RowEvidenceIntegrityError;
@@ -203,6 +205,7 @@ function buildCsv(rows) {
 
 function baseUpload(overrides = {}) {
   return {
+    source: REPORT_SOURCES.SYNTHETIC_UPLOAD,
     sourceFileName: "day-1.csv",
     contentType: "text/csv",
     ingestedByUserId: 7,
@@ -313,6 +316,123 @@ describe("ingestAccessibleRdpReport — zero-valid-row behavior", () => {
     expect(result.outcome).toBe(INGESTION_OUTCOMES.REJECTED);
     expect(result.reason).toBe("MISSING_REQUIRED_HEADERS");
     expect(rawReports.size).toBe(0);
+  });
+});
+
+describe("ingestAccessibleRdpReport — trusted-source validation (P1-T6a)", () => {
+  it("runs before structural parsing and any database access: an invalid tuple never touches the parser or the client", async () => {
+    const { client, rawReports, rawReportRows, findings, occurrences } = createFakeClient();
+    // Deliberately malformed CSV bytes (would fail structural parsing too) —
+    // if source validation ran after parsing, this would surface as a parser
+    // rejection code instead of the source-validation one.
+    const fileBytes = Buffer.from("not,even,a,valid,header\n", "utf8");
+
+    const result = await ingestAccessibleRdpReport(
+      { fileBytes, ...baseUpload({ source: "SHADOWSERVER" }) },
+      { client }
+    );
+
+    expect(result.outcome).toBe(INGESTION_OUTCOMES.REJECTED);
+    expect(result.reason).toBe("UNTRUSTED_SOURCE_REPORT_COMBINATION");
+    expect(client.rawReport.findUnique).not.toHaveBeenCalled();
+    expect(client.rawReport.create).not.toHaveBeenCalled();
+    expect(rawReports.size).toBe(0);
+    expect(rawReportRows.size).toBe(0);
+    expect(findings.size).toBe(0);
+    expect(occurrences.size).toBe(0);
+  });
+
+  it("creates no RawReport for an untrusted tuple, even with an otherwise fully valid CSV", async () => {
+    const { client, rawReports } = createFakeClient();
+    const fileBytes = buildCsv([
+      { timestamp: "2026-01-01T00:00:00Z", ip: "203.0.113.10", port: "3389", protocol: "tcp" },
+    ]);
+
+    const result = await ingestAccessibleRdpReport(
+      { fileBytes, ...baseUpload({ source: "UNKNOWN_SOURCE" }) },
+      { client }
+    );
+
+    expect(result.outcome).toBe(INGESTION_OUTCOMES.REJECTED);
+    expect(result.report).toBeNull();
+    expect(rawReports.size).toBe(0);
+  });
+
+  it("creates no RawReportRow for an untrusted tuple", async () => {
+    const { client, rawReportRows } = createFakeClient();
+    const fileBytes = buildCsv([
+      { timestamp: "2026-01-01T00:00:00Z", ip: "203.0.113.10", port: "3389", protocol: "tcp" },
+    ]);
+
+    await ingestAccessibleRdpReport({ fileBytes, ...baseUpload({ source: "UNKNOWN_SOURCE" }) }, { client });
+
+    expect(rawReportRows.size).toBe(0);
+  });
+
+  it("creates no Finding or FindingOccurrence for an untrusted tuple", async () => {
+    const { client, findings, occurrences } = createFakeClient();
+    const fileBytes = buildCsv([
+      { timestamp: "2026-01-01T00:00:00Z", ip: "203.0.113.10", port: "3389", protocol: "tcp" },
+    ]);
+
+    await ingestAccessibleRdpReport({ fileBytes, ...baseUpload({ source: "UNKNOWN_SOURCE" }) }, { client });
+
+    expect(findings.size).toBe(0);
+    expect(occurrences.size).toBe(0);
+  });
+
+  it("emits exactly one safe aggregate rejection audit event, never one per row", async () => {
+    const { client, auditLogs } = createFakeClient();
+    const fileBytes = buildCsv([
+      { timestamp: "2026-01-01T00:00:00Z", ip: "203.0.113.10", port: "3389", protocol: "tcp" },
+      { timestamp: "2026-01-01T00:05:00Z", ip: "203.0.113.11", port: "3389", protocol: "tcp" },
+    ]);
+
+    await ingestAccessibleRdpReport({ fileBytes, ...baseUpload({ source: "UNKNOWN_SOURCE" }) }, { client });
+
+    const rejections = auditLogs.filter((e) => e.action === "report.ingestion.rejected");
+    expect(rejections).toHaveLength(1);
+    expect(rejections[0].after.reasonCode).toBe("UNTRUSTED_SOURCE_REPORT_COMBINATION");
+    expect(rejections[0].after.requestedReportType).toBe("ACCESSIBLE_RDP");
+    expect(rejections[0].after.requestedSchemaVersion).toBe("accessible-rdp.synthetic.v1");
+    expect(rejections[0].after.source).toBe("UNKNOWN_SOURCE");
+    // No raw bytes, no CSV rows, anywhere in the audit payload.
+    const serialized = JSON.stringify(rejections[0]);
+    expect(serialized).not.toContain("203.0.113.10");
+  });
+
+  it("a valid tuple changes nothing about existing P1-T5 ingestion behavior", async () => {
+    const { client, rawReports, rawReportRows, findings, occurrences } = createFakeClient();
+    const fileBytes = buildCsv([
+      { timestamp: "2026-01-01T00:00:00Z", ip: "203.0.113.10", port: "3389", protocol: "tcp" },
+    ]);
+
+    const result = await ingestAccessibleRdpReport(
+      { fileBytes, ...baseUpload({ source: REPORT_SOURCES.SYNTHETIC_UPLOAD }) },
+      { client }
+    );
+
+    expect(result.outcome).toBe(INGESTION_OUTCOMES.PROCESSED);
+    expect(result.report.status).toBe("COMPLETED");
+    expect(rawReports.size).toBe(1);
+    expect(rawReportRows.size).toBe(1);
+    expect(findings.size).toBe(1);
+    expect(occurrences.size).toBe(1);
+  });
+
+  it("requires the caller to pass an explicit source — never an implicit default", async () => {
+    const { client } = createFakeClient();
+    const fileBytes = buildCsv([
+      { timestamp: "2026-01-01T00:00:00Z", ip: "203.0.113.10", port: "3389", protocol: "tcp" },
+    ]);
+    const { source, ...uploadWithoutSource } = baseUpload();
+
+    await expect(
+      ingestAccessibleRdpReport({ fileBytes, ...uploadWithoutSource }, { client })
+    ).rejects.toThrow(TypeError);
+    await expect(
+      ingestAccessibleRdpReport({ fileBytes, ...uploadWithoutSource, source: "" }, { client })
+    ).rejects.toThrow(TypeError);
   });
 });
 

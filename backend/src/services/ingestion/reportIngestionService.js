@@ -44,6 +44,7 @@ const { ReportType, RawReportStatus, RawReportRowStatus } = require("@prisma/cli
 
 const { parseAccessibleRdpCsv } = require("./accessibleRdpCsvParser");
 const { validateAccessibleRdpRow, CONTRACT_VERSION } = require("./accessibleRdpRowValidator");
+const { validateReportSource } = require("./reportSourceRegistry");
 const { normalizeAccessibleRdpFindingIdentity } = require("../normalization/findingNormalizer");
 const { recordFindingObservation } = require("../normalization/dedupService");
 const {
@@ -85,6 +86,12 @@ function assertValidInput(input) {
   }
   if (!Buffer.isBuffer(input.fileBytes)) {
     throw new TypeError("ingestAccessibleRdpReport: input.fileBytes must be a Buffer");
+  }
+  if (typeof input.source !== "string" || input.source.trim() === "") {
+    // No implicit default here on purpose: the caller (the controller) must
+    // decide and pass the server-controlled source explicitly, so a future
+    // call site can never forget to consider it.
+    throw new TypeError("ingestAccessibleRdpReport: input.source must be a non-empty string");
   }
   if (typeof input.sourceFileName !== "string" || input.sourceFileName.trim() === "") {
     throw new TypeError("ingestAccessibleRdpReport: input.sourceFileName must be a non-empty string");
@@ -296,8 +303,10 @@ function terminalResultForClassification(classification, rawReport) {
  * (returns the existing report, idempotent, no new evidence or lifecycle
  * mutation).
  *
- * @param {{fileBytes: Buffer, sourceFileName: string, contentType: string,
- *   ingestedByUserId?: number|null}} input
+ * @param {{fileBytes: Buffer, source: string, sourceFileName: string,
+ *   contentType: string, ingestedByUserId?: number|null}} input - `source`
+ *   must be a server-controlled identifier (see reportSourceRegistry.js /
+ *   reportIngestionController.js) — never a value taken from the request.
  * @param {{client?: object, auditContext?: object}} [options]
  * @returns {Promise<{outcome: string, report: object|null, reason?: string,
  *   message?: string, findingCounts?: Object<string, number>}>}
@@ -307,6 +316,37 @@ async function ingestAccessibleRdpReport(input, options = {}) {
   const client = resolveClient(options.client);
   const auditContext = options.auditContext || {};
   const maxDataRows = Number.isInteger(options.maxDataRows) ? options.maxDataRows : env.REPORT_MAX_ROWS;
+
+  // 0. Trusted-source validation (P1-T6a) — runs before structural parsing,
+  // row validation, and any RawReport/RawReportRow/Finding/FindingOccurrence
+  // access, so an untrusted tuple produces no ingestion evidence or
+  // lifecycle mutation whatsoever. reportType/schemaVersion are this
+  // pipeline's own fixed values (single report type, single contract
+  // version), never taken from the request.
+  const sourceValidation = validateReportSource({
+    source: input.source,
+    reportType: ReportType.ACCESSIBLE_RDP,
+    schemaVersion: CONTRACT_VERSION,
+  });
+  if (!sourceValidation.ok) {
+    await audit(client, auditContext, {
+      action: "report.ingestion.rejected",
+      outcome: AUDIT_OUTCOMES.FAILURE,
+      reason: `Report rejected: ${sourceValidation.code}`,
+      after: {
+        reasonCode: sourceValidation.code,
+        requestedReportType: ReportType.ACCESSIBLE_RDP,
+        requestedSchemaVersion: CONTRACT_VERSION,
+        source: input.source,
+      },
+    });
+    return {
+      outcome: INGESTION_OUTCOMES.REJECTED,
+      report: null,
+      reason: sourceValidation.code,
+      message: sourceValidation.message,
+    };
+  }
 
   // 1. Structural parse (pure, in-memory). No RawReport row for a
   // structural rejection — see the module-level observationDate note.

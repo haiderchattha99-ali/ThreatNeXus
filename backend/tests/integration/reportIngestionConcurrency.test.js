@@ -36,6 +36,7 @@ const {
   INGESTION_OUTCOMES,
   ingestAccessibleRdpReport,
 } = require("../../src/services/ingestion/reportIngestionService");
+const { REPORT_SOURCES } = require("../../src/services/ingestion/reportSourceRegistry");
 
 const MARKER = "p1t5-ingestion";
 // TEST-NET-2 (RFC 5737) documentation addresses, one block per scenario so
@@ -65,6 +66,7 @@ function buildCsv(rows) {
 
 function upload(overrides = {}) {
   return {
+    source: REPORT_SOURCES.SYNTHETIC_UPLOAD,
     sourceFileName: `${MARKER}.csv`,
     contentType: "text/csv",
     ingestedByUserId: null,
@@ -373,5 +375,33 @@ describeDb("reportIngestionService — real PostgreSQL end-to-end", () => {
     expect(row.findingOccurrence.finding.indicatorValue).toBe(IP_BLOCK.referential);
     expect(row.findingOccurrence.rawReport.id).toBe(result.report.id);
     expect(row.findingOccurrence.action).toBe("CREATED");
+  }, 30000);
+
+  it("9. an untrusted source/report/schema tuple (P1-T6a) writes no evidence or lifecycle rows at all", async () => {
+    const fileBytes = buildCsv([
+      { timestamp: "2026-05-09T00:00:00Z", ip: "198.51.100.99", port: "3389", protocol: "tcp" },
+    ]);
+
+    const result = await ingestAccessibleRdpReport(
+      { fileBytes, ...upload({ source: "SHADOWSERVER" }) },
+      { client: prisma }
+    );
+
+    expect(result.outcome).toBe(INGESTION_OUTCOMES.REJECTED);
+    expect(result.reason).toBe("UNTRUSTED_SOURCE_REPORT_COMBINATION");
+    expect(result.report).toBeNull();
+
+    const reports = await prisma.rawReport.findMany({ where: { sourceFileName: { startsWith: MARKER } } });
+    expect(reports).toHaveLength(0);
+    const finding = await prisma.finding.findFirst({ where: { indicatorValue: "198.51.100.99" } });
+    expect(finding).toBeNull();
+    const rows = await prisma.rawReportRow.findMany({
+      where: { rawReport: { sourceFileName: { startsWith: MARKER } } },
+    });
+    expect(rows).toHaveLength(0);
+    const occurrences = await prisma.findingOccurrence.findMany({
+      where: { rawReport: { sourceFileName: { startsWith: MARKER } } },
+    });
+    expect(occurrences).toHaveLength(0);
   }, 30000);
 });

@@ -6,6 +6,7 @@ const {
   INGESTION_OUTCOMES,
   ingestAccessibleRdpReport,
 } = require("../services/ingestion/reportIngestionService");
+const { REPORT_SOURCES } = require("../services/ingestion/reportSourceRegistry");
 const { AUDIT_OUTCOMES, buildAuditContext, safeLogAuditEvent } = require("../services/auditService");
 
 const REPORT_ENTITY_TYPE = "RawReport";
@@ -62,6 +63,11 @@ async function uploadAccessibleRdpReport(req, res) {
   const result = await ingestAccessibleRdpReport(
     {
       fileBytes,
+      // Server-controlled, always — never req.body/req.query/a header/the
+      // filename. This is the only report source this route accepts today;
+      // nothing here reads a client-supplied source/reportType/schemaVersion
+      // field, so one can never override this value.
+      source: REPORT_SOURCES.SYNTHETIC_UPLOAD,
       sourceFileName: req.file.originalname,
       contentType: req.file.mimetype,
       ingestedByUserId: req.user ? req.user.id : null,
