@@ -176,6 +176,55 @@ npm run build
   remediation verification are all out of scope for the entire project, not
   just Phase 0.
 
+## Phase 1 gate — synthetic evaluation (P1-GATE)
+
+`eval/run_phase1_gate.js` is an executable check that ingests the synthetic
+fixtures in `data/synthetic/accessible-rdp/*.csv` through the real ingestion
+service and compares the resulting database state against the manually
+authored `data/synthetic/ground_truth.yaml`. It is **not part of the running
+application** and never touches the development database.
+
+**These are synthetic development/evaluation fixtures only** — RFC 5737
+documentation IP ranges, deterministic hand-chosen timestamps, no real
+organization or Shadowserver data. See `data/synthetic/README.md` for the
+full disclaimer. `accessible-rdp.synthetic.v1` is not an official
+Shadowserver schema.
+
+### Set up a dedicated, disposable evaluation database
+
+Never point this at your dev database. Using the same local Docker Postgres
+service as the rest of this README:
+
+```
+docker exec threatnexus-postgres psql -U threatnexus -c "CREATE DATABASE threatnexus_eval;" postgres
+
+cd backend
+DATABASE_URL="postgresql://threatnexus:<your-postgres-password>@localhost:5432/threatnexus_eval" \
+  npx prisma migrate deploy
+```
+
+`migrate deploy` only applies the migrations already committed to
+`backend/prisma/migrations/` — it never generates one.
+
+### Run the gate
+
+```
+cd backend
+EVAL_DATABASE_URL="postgresql://threatnexus:<your-postgres-password>@localhost:5432/threatnexus_eval" \
+  npm run eval:phase1
+```
+
+`EVAL_DATABASE_URL` is **required** — the gate refuses to run without it, and
+refuses to run if it's equal to `DATABASE_URL` (a safeguard against
+accidentally targeting the development database). It never reads
+`DATABASE_URL` for its own connection. Exit code `0` means every scenario
+matched `ground_truth.yaml` exactly; non-zero means at least one mismatch (see
+the printed expected-vs-actual diff) or an unsafe/invalid configuration.
+
+The gate is rerunnable: it cleans up its own, exactly-scoped evaluation-owned
+records (derived from this run's own `RawReport`/`FindingOccurrence` evidence
+chain, never a broad table reset) before each run.
+
 ## Docker cleanup
 
 ```
