@@ -6,8 +6,152 @@ _Operational status / handoff note. Authoritative plan lives in
 ## Current
 
 - **Branch:** `feat/phase-1-ingestion`
-- **Latest commit:** `3e2cef2` — `fix(phase-1): repair P1-T4 concurrency — serializable tx + whole-transaction retry` (P1-T4 itself: `4c4107d`)
+- **Latest commit:** `3423152` — `feat(phase-1): add P1-T5 end-to-end report ingestion orchestration`
 - **Phase:** 1 (Ingest → Finding). Phase 0 + pre-Phase-1 hardening are merged to `main` (PR #1, PR #2 / `87178cd`). No PR opened yet for this branch.
+
+## Completed — P1-T5 (end-to-end ingestion orchestration)
+
+`POST /api/reports/upload` — the full CSV-upload-to-Finding-lifecycle pipeline.
+
+- **Route/middleware ordering** (`backend/src/routes/reportRoutes.js`):
+  `authenticate -> requireCapability(INGEST_REPORTS) -> cleanupUpload ->
+  reportUpload.single("file") -> uploadAccessibleRdpReport`. A denied caller
+  never reaches multer, so a denied request cannot create a temp file at all
+  (proven in tests via an `fs.createWriteStream` spy, not a directory
+  listing). `cleanupUpload` is armed before multer runs but reads `req.file`
+  lazily at response-finish/close time, so it still unlinks whatever multer
+  wrote regardless of the outcome (success, validation rejection, duplicate,
+  or an uncaught 500).
+- **Upload middleware** (`backend/src/upload/reportUpload.js`): dedicated
+  multer instance reusing the shared disk storage (safe generated filenames,
+  traversal-proof), a `.csv`-extension-only `fileFilter` that skips (not
+  errors) non-CSV files before any write, and `limits.fileSize` from
+  `env.UPLOAD_MAX_BYTES`. A `normalizeMulterError` middleware maps
+  `LIMIT_FILE_SIZE` to 413 and any other Multer error to 400 ahead of the
+  shared `errorHandler`.
+- **Structural CSV parser** (`backend/src/services/ingestion/accessibleRdpCsvParser.js`):
+  a separate stage from row validation (P1-T2) — proves the file is
+  well-formed CSV with the required header set before any row is validated.
+  Rejection codes: `INVALID_UTF8, EMPTY_FILE, HEADER_ONLY,
+  MISSING_REQUIRED_HEADERS, DUPLICATE_HEADER, NULL_BYTE_IN_HEADER,
+  MALFORMED_CSV, ROW_LIMIT_EXCEEDED` (row cap from the new
+  `env.REPORT_MAX_ROWS`, default 5000). Short rows only get keys for columns
+  that actually exist in the record — an earlier version assigned an
+  explicit `undefined` for missing trailing columns, which `Object.keys`
+  sees but Postgres JSONB round-tripping silently drops, causing spurious
+  row-evidence-integrity conflicts on retry.
+- **Orchestrator** (`backend/src/services/ingestion/reportIngestionService.js`,
+  `ingestAccessibleRdpReport`): parse -> validate every row (P1-T2, pure,
+  in-memory) -> compute `observationDate` as the **earliest valid row
+  timestamp** -> `resolveRawReportIdentity`/`createRawReportRecordOrResolveExisting`
+  (P1-T3) -> transition to `PROCESSING` -> persist invalid rows -> group
+  valid rows by exact Finding identity -> per group: pre-flight row-evidence
+  check, then `recordFindingObservation` (P1-T4), then link/persist every row
+  in the group -> transition to a terminal status -> aggregate audits.
+- **observationDate — approved, documented design gap.** `RawReport.observationDate`
+  is `TIMESTAMP(3) NOT NULL` with no default, but a structurally-rejected
+  upload or an all-invalid-rows upload has no valid timestamp to put there.
+  Escalated to the user before writing any code; **approved resolution: no
+  `RawReport` row is created for either case** — the upload is rejected with
+  a safe response (`REJECTED` / `UNPROCESSABLE_NO_VALID_ROWS`, `report: null`,
+  never a falsely-referenced report id) and nothing is persisted. Real,
+  accepted tradeoff: raw bytes of a rejected/all-invalid upload are not kept
+  as evidence, and re-uploading the same bad bytes is independently rejected
+  each time (no sha256 row to classify against, since none was created). A
+  future task should make the column nullable if evidence preservation for
+  these cases becomes a requirement.
+- **Within-report duplicates**: rows are grouped by exact Finding identity
+  `(indicatorValue, port, protocol, reportType)`; the **canonical row is the
+  one with the maximum `observedAt`** in the group (tie-broken by the lowest
+  row number), independent of CSV row order. Exactly one
+  `recordFindingObservation` call per group, using the canonical row's
+  timestamp; every row in the group — canonical and duplicate alike — links
+  to the same `FindingOccurrence`; non-canonical rows are flagged
+  `duplicateInReport: true`.
+- **Row evidence**: `RawReportRow` is immutable. `persistRowIdempotently`
+  creates-if-absent; if a row number already has evidence, the freshly parsed
+  payload must match it exactly (order-independent JSON equality, since
+  JSONB does not preserve key order) or it throws
+  `RowEvidenceIntegrityError` — never overwrites, never silently keeps stale
+  evidence. A read-only `assertRowEvidenceCompatible` pre-flight check runs
+  over every row in a group **before** `recordFindingObservation` is called,
+  so a Finding/FindingOccurrence is never created for a group already known
+  to conflict on retry.
+- **Retry/idempotency**: `RETRYABLE_FAILED`/`RETRYABLE_RECEIVED` reuse the
+  existing `RawReport` row (never a second row for the same
+  `sourceFileSha256`); `DUPLICATE_COMPLETED`/`DUPLICATE_IN_PROGRESS` short-circuit
+  with no processing. Any failure during row/group processing — including a
+  P1-T4 whole-transaction retry exhaustion (`P2002`/`P2034` escaping
+  `recordFindingObservation`) or a `RowEvidenceIntegrityError` — is caught
+  once around the whole processing block and marks the **report** `FAILED`;
+  it is never misclassified as a per-row `INVALID` result, and nothing
+  already persisted is deleted or rolled back, so a later retry can resume
+  idempotently.
+- **Report status semantics**: `RECEIVED` -> `PROCESSING` -> `COMPLETED` (no
+  invalid rows) or `PARTIALLY_VALID` (some invalid rows) on success, `FAILED`
+  on an uncaught processing error. `REJECTED` never gets a persisted row (see
+  observationDate gap above).
+- **Audits** (aggregate, not per-row): `report.ingestion.rejected` (structural
+  or zero-valid-row rejection), `report.ingestion.started`,
+  `report.ingestion.completed` / `report.ingestion.partially_valid`,
+  `report.ingestion.failed`, and one `finding.reopened` per actual `RECURRED`
+  result (an analyst-visible lifecycle change, not routine per-occurrence
+  noise). All wrapped in a non-throwing `audit()` helper so a broken logger
+  can never turn a decided outcome into an unhandled rejection.
+- **Response/audit safety**: response bodies use fixed allow-listed fields
+  only (`reportSummary`/`findingSummary`) — never raw bytes, file paths,
+  stack traces, or `error.message` text; `buildSafeErrorSummary` uses one of
+  two fixed messages plus a regex-validated Prisma error code, never the raw
+  error. Verified by dedicated response-safety tests (no Windows path, no
+  `uploads` path segment, no `rawContent`, no `stack` key, exact field-set
+  check).
+- **HTTP contract**: `PROCESSED` -> 201, `DUPLICATE_COMPLETED` -> 200,
+  `DUPLICATE_IN_PROGRESS` -> 409, `REJECTED` -> 400,
+  `UNPROCESSABLE_NO_VALID_ROWS` -> 422, `FAILED` -> 500.
+
+### Tests
+
+- 21 unit tests for the CSV parser, 20 for the orchestrator (in-memory fake
+  Prisma client covering rawReport/rawReportRow/finding/findingOccurrence/
+  auditLog + `$transaction` pass-through), 3 for `normalizeMulterError`, 15
+  route/security/cleanup tests (`reportUploadRoute.test.js`) — **59 new
+  tests**, full suite **671 passed / 13 skipped** with no database (was
+  612/5; the extra 8 skipped are the new real-DB P1-T5 suite below).
+- **8 real-PostgreSQL integration tests**
+  (`backend/tests/integration/reportIngestionConcurrency.test.js`): fully
+  valid fixture, mixed-validity fixture, in-report duplicates (canonical =
+  max `observedAt`), identical-file idempotent replay, interrupted-attempt
+  retry (reuses the seeded `RawReport` row), concurrent overlapping reports
+  on one Finding, a forced system failure (report `FAILED`, no orphaned
+  Finding/rows), and full FK/evidence-chain resolution. Self-skips without
+  `TEST_DATABASE_URL`. Ran together with the existing 5 P1-T4 tests: **13/13**.
+- **Route-test flakiness fixed** (`reportUploadRoute.test.js`): the file-handling
+  tests originally compared a full `uploads/` directory listing before/after
+  each request. That directory is shared with other test files
+  (`cleanupUpload.test.js`, threat-upload route tests) that Vitest runs
+  concurrently in separate workers, so the comparison intermittently failed
+  on files this route never touched — reproduced directly (a stray
+  `cleanupUpload.test.js` fixture appeared mid-assertion). Replaced with an
+  `fs.createWriteStream` spy: multer's disk storage engine calls
+  `createWriteStream` exactly once per accepted file
+  (`node_modules/multer/storage/disk.js`), so each test now asserts against
+  *its own request's* write (or its absence, for filter-rejected requests),
+  independent of anything else touching the shared directory. Full backend
+  suite run **11 times** during this stabilization; the only failures seen
+  were this exact flaky assertion — no evidence of the previously-suspected
+  intermittent 500.
+- **Real-DB test-isolation bug fixed** (`reportIngestionConcurrency.test.js`):
+  its cleanup deleted `Finding` rows by `indicatorValue: { startsWith:
+  "198.51.100." }` — a prefix that also matches
+  `dedupServiceConcurrency.test.js`'s own TEST-NET-2 range
+  (`198.51.100.11`-`.15`, which also starts with `"198.51.100."`). Running
+  both real-DB suites together raced: whichever file's cleanup ran while the
+  other's data was still live hit `FindingOccurrence_findingId_fkey`.
+  Reproduced directly. Fixed by deriving the exact Finding-id set to delete
+  from this file's *own* `RawReport` evidence (via its `FindingOccurrence`
+  rows) instead of guessing by IP prefix — self-contained regardless of what
+  IP range any other file picks. Re-ran the combined real-DB suite 5 times
+  after the fix with no recurrence.
 
 ## Completed — P1-T4 (finding normalization, dedup, persistence, recurrence)
 
@@ -293,6 +437,26 @@ one with `recurrenceCount expected 2 to be 1` — confirming the tests detect
 both original defects rather than merely passing · `git diff --check` clean
 (only expected LF→CRLF autocrlf notices) · diff and status reviewed.
 
+P1-T5: `npx prisma validate` clean (`DATABASE_URL` supplied inline, no
+`backend/.env`) · **no migration generated** (`backend/prisma` untouched) ·
+targeted P1-T5 tests (parser + orchestrator + middleware + route) run 5x
+back-to-back with no flakiness · full backend suite **671 passed, 13
+skipped**, run once clean (no repeat needed — first run showed no
+flakiness) · real-PostgreSQL P1-T4 + P1-T5 suites together **13/13**, run 5x
+back-to-back with no flakiness (against a disposable `threatnexus_test`
+database via the existing `docker-compose.yml` `postgres` service, migrations
+already in sync, no `backend/.env`) · `git diff --check` clean · diff and
+status reviewed · implementation-risk checklist reviewed directly against the
+orchestrator/controller source: REJECTED/zero-valid-row responses carry
+`report: null` (never a falsely-referenced report id); retries never
+overwrite `RawReportRow` evidence (`persistRowIdempotently` throws on
+mismatch); no raw bytes/hashes/paths/stack traces in any response or audit
+payload (allow-listed summaries only); P2034/P2002 exhaustion from
+`recordFindingObservation` is caught once around the whole processing block
+and marks the report `FAILED`, never a per-row `INVALID`; duplicate valid
+rows in one report link to exactly one `FindingOccurrence` and use the
+deterministic max-`observedAt` canonical row.
+
 ## Blocker / local-env note
 
 `env.test.js` asserts `loadEnv()` throws on missing vars, which requires **no
@@ -346,19 +510,30 @@ not echoed by the tests. Still **no `backend/.env`**.
   scenarios; sustained contention on a single Finding could still exhaust the
   budget and surface `P2034`. P1-T5 must treat that as a per-row ingestion
   failure rather than a crash.
-- **`FindingOccurrence.observedAt` source**: currently the row's own
-  timestamp, while `RawReport.observationDate` exists separately. P1-T5 should
-  state which is authoritative and keep the two consistent.
+- **`FindingOccurrence.observedAt` source — resolved in P1-T5**: the row's
+  own (canonical, for within-report duplicates) timestamp is authoritative
+  for `FindingOccurrence`/`Finding` lifecycle. `RawReport.observationDate` is
+  separate, report-level summary metadata only (earliest valid row
+  timestamp in the report) — never read back for lifecycle decisions. The
+  two are computed from the same source data and cannot drift, but they
+  answer different questions (one occurrence's time vs. one report's
+  earliest valid time).
+- **`RawReport.observationDate` NOT NULL schema gap (P1-T5, approved,
+  deferred)**: no valid timestamp exists for a structurally-rejected or
+  all-invalid-rows upload. Escalated to the user before implementation;
+  approved resolution is to create no `RawReport` row for those two cases
+  (see the P1-T5 section above for the full tradeoff). A future task should
+  make the column nullable if raw-byte evidence preservation for
+  rejected/all-invalid uploads becomes a requirement.
 
-## Exact next task — P1-T5
+## Exact next task — P1-T6
 
-Parser/route wiring is still out of scope per the P1-T2/P1-T3/P1-T4 task
-packets. The next task is the CSV parser/report ingestion orchestration that:
-streams a report through `multer` + `csv-parser`, calls
-`validateAccessibleRdpRow` per row, `createRawReportRecordOrResolveExisting`
-for the file-identity step, `normalizeAccessibleRdpFindingIdentity` +
-`recordFindingObservation` per valid row for dedup/persistence/recurrence,
-and persists `RawReportRow` evidence (valid, invalid, and — pointing at the
-resulting `FindingOccurrence` — duplicate-in-report rows). This is also where
-the `AuditLog` events for the RawReport-create path and for
-`finding.reopened` belong (both deferred above and in the P1-T4 section).
+P1-T5 (CSV parser + end-to-end ingestion orchestration: route, middleware,
+parser, orchestrator, row evidence, Finding lifecycle wiring, audits, real-DB
+tests) is complete — see the P1-T5 section above. The next task is whatever
+P1-T6 is defined as in `../ThreatNeXus-Planning/planning/BUILD_PLAN.md`
+(not yet read as part of this task — this file intentionally does not guess
+its scope). Likely candidates based on what P1-T5 deliberately left out:
+finding closure/read APIs, a second Shadowserver-style report type, or IOC
+enrichment — but confirm against the planning doc before starting, per this
+repo's phase-gating rule.
