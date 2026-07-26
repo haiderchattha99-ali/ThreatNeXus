@@ -35,6 +35,13 @@ model User {
   password  String
   role      Role     @default(VIEWER)
   createdAt DateTime @default(now())
+
+  // Phase 1 — virtual back-relations only (no columns on User). The foreign
+  // keys live on RawReport.ingestedByUserId and Finding.closedByUserId, both
+  // nullable with onDelete: SetNull so deleting a user never destroys evidence
+  // or a finding — the actor reference is nulled instead.
+  ingestedReports RawReport[] @relation("RawReportIngestedBy")
+  closedFindings  Finding[]   @relation("FindingClosedBy")
 }
 
 model Threat {
@@ -110,4 +117,175 @@ model Organization {
   activeThreats Int      @default(0)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
+}
+
+// ===========================================================================
+// Phase 1 — Ingestion & finding lifecycle (P1-T1 schema foundation).
+//
+// Additive only. These models introduce the RawReport -> RawReportRow evidence
+// chain and the deduplicated Finding -> FindingOccurrence lifecycle. They do
+// not touch, link to, or replace the legacy Threat model, nor Case /
+// Notification / Organization. No routes, controllers, parsers or services are
+// implemented here — this is the schema/migration foundation only.
+// ===========================================================================
+
+// One report type for the whole MVP. A ReportSchema/registry model is
+// deliberately NOT introduced yet — it is premature for a single type.
+enum ReportType {
+  ACCESSIBLE_RDP
+}
+
+// Enum, not free text: the transport protocol is part of the Finding identity
+// key, so "tcp"/"TCP"/"Tcp" must never fracture deduplication. Phase 1
+// synthetic v1 is tcp-only; further values are an additive change later.
+enum TransportProtocol {
+  TCP
+}
+
+// RawReport processing lifecycle. REJECTED = structurally not the expected
+// report (e.g. required columns absent); FAILED = unexpected processing error;
+// PARTIALLY_VALID = the normal path when some rows are invalid.
+enum RawReportStatus {
+  RECEIVED
+  PROCESSING
+  COMPLETED
+  PARTIALLY_VALID
+  FAILED
+  REJECTED
+}
+
+// Per-row validation outcome. Invalid rows are preserved as evidence, never
+// dropped — this distinguishes them from valid ones without a free-text field.
+enum RawReportRowStatus {
+  VALID
+  INVALID
+}
+
+// Finding lifecycle. Findings are closed manually only; absence never closes a
+// finding automatically. A later observation reopens a CLOSED finding only when
+// the service layer confirms it post-dates closedThroughObservedAt.
+enum FindingStatus {
+  OPEN
+  CLOSED
+}
+
+// Immutable per-(finding, report) lifecycle action.
+// HISTORICAL = an out-of-order earlier observation that must not reopen a
+// closed finding but is still recorded as evidence.
+enum FindingOccurrenceAction {
+  CREATED
+  PERSISTED
+  RECURRED
+  HISTORICAL
+}
+
+// Immutable evidence: the original uploaded report file, preserved verbatim.
+// Identity is the server-computed SHA-256 of the exact file bytes (globally
+// unique), which is what lets a re-upload of identical bytes be recognised as
+// the same report (idempotent retry / concurrent-duplicate protection) rather
+// than creating a second evidence record.
+model RawReport {
+  id                 Int             @id @default(autoincrement())
+  reportType         ReportType
+  schemaVersion      String
+  sourceFileName     String
+  sourceFileSha256   String          @unique
+  fileSizeBytes      Int
+  contentType        String
+  rawContent         Bytes
+  observationDate    DateTime
+  ingestedAt         DateTime        @default(now())
+  ingestedByUserId   Int?
+  ingestedBy         User?           @relation("RawReportIngestedBy", fields: [ingestedByUserId], references: [id], onDelete: SetNull)
+  tlp                TlpLabel        @default(AMBER)
+  status             RawReportStatus @default(RECEIVED)
+  totalRows          Int             @default(0)
+  validRows          Int             @default(0)
+  invalidRows        Int             @default(0)
+  errorSummary       Json?
+  processingAttempts Int             @default(0)
+  completedAt        DateTime?
+
+  rows        RawReportRow[]
+  occurrences FindingOccurrence[]
+
+  @@index([reportType, ingestedAt])
+  @@index([status])
+}
+
+// Immutable evidence: every parsed row, including invalid and within-report
+// duplicate rows. rawPayload is the row exactly as parsed; normalizedPayload is
+// populated once normalization runs. A row references at most one
+// FindingOccurrence (many rows may point at the same occurrence).
+model RawReportRow {
+  id                  Int                @id @default(autoincrement())
+  rawReportId         Int
+  rawReport           RawReport          @relation(fields: [rawReportId], references: [id], onDelete: Restrict)
+  rowNumber           Int
+  rawPayload          Json
+  normalizedPayload   Json?
+  status              RawReportRowStatus
+  validationErrors    Json?
+  duplicateInReport   Boolean            @default(false)
+  findingOccurrenceId Int?
+  findingOccurrence   FindingOccurrence? @relation(fields: [findingOccurrenceId], references: [id], onDelete: SetNull)
+  createdAt           DateTime           @default(now())
+
+  // Unique row number within a report. The composite also serves lookups by
+  // rawReportId (leftmost prefix), so no separate rawReportId index is added.
+  @@unique([rawReportId, rowNumber])
+  @@index([findingOccurrenceId])
+}
+
+// The deduplicated spine. Identity is (indicatorValue, port, protocol,
+// reportType), enforced by a composite unique constraint — this IS the locked
+// dedup key. firstSeen/lastSeen/occurrenceCount/recurrenceCount are mutable
+// deterministic projections re-derivable from FindingOccurrence, not evidence.
+model Finding {
+  id                      Int               @id @default(autoincrement())
+  indicatorValue          String
+  port                    Int
+  protocol                TransportProtocol
+  reportType              ReportType
+  status                  FindingStatus     @default(OPEN)
+  firstSeen               DateTime
+  lastSeen                DateTime
+  occurrenceCount         Int               @default(0)
+  recurrenceCount         Int               @default(0)
+  closedAt                DateTime?
+  closedByUserId          Int?
+  closedBy                User?             @relation("FindingClosedBy", fields: [closedByUserId], references: [id], onDelete: SetNull)
+  closureReason           String?
+  closedThroughObservedAt DateTime?
+  createdAt               DateTime          @default(now())
+  updatedAt               DateTime          @updatedAt
+
+  occurrences FindingOccurrence[]
+
+  // The locked identity key. Its index also covers indicatorValue-prefixed
+  // lookups, so no separate indicatorValue index is added.
+  @@unique([indicatorValue, port, protocol, reportType], name: "finding_identity")
+  @@index([status])
+  @@index([lastSeen])
+}
+
+// Immutable lifecycle evidence: exactly one record per (finding, report),
+// recording what the ingestion of that report did to the finding and the
+// report's observation time. Never updated or deleted.
+model FindingOccurrence {
+  id          Int                     @id @default(autoincrement())
+  findingId   Int
+  finding     Finding                 @relation(fields: [findingId], references: [id], onDelete: Restrict)
+  rawReportId Int
+  rawReport   RawReport               @relation(fields: [rawReportId], references: [id], onDelete: Restrict)
+  observedAt  DateTime
+  action      FindingOccurrenceAction
+  createdAt   DateTime                @default(now())
+
+  rows RawReportRow[]
+
+  // One lifecycle occurrence per finding per report. The composite covers
+  // findingId-prefixed lookups; rawReportId needs its own index.
+  @@unique([findingId, rawReportId])
+  @@index([rawReportId])
 }

@@ -103,6 +103,17 @@ function buildConfig() {
     { strict: true }
   );
 
+  // Phase 1 (report ingestion) — bounds how many data rows a single
+  // accessible-rdp.synthetic.v1 CSV upload may contain, so a very large file
+  // (still under UPLOAD_MAX_BYTES but pathologically wide/short-rowed) cannot
+  // force unbounded per-row processing.
+  const reportMaxRows = parseOptionalInt(
+    "REPORT_MAX_ROWS",
+    process.env.REPORT_MAX_ROWS,
+    5000,
+    { strict: true }
+  );
+
   // Phase 2 values: optional in Phase 0, never required, invalid input falls
   // back to the default rather than blocking startup.
   const abuseIpdbTimeoutMs = parseOptionalInt(
@@ -127,6 +138,7 @@ function buildConfig() {
     CORS_ORIGIN: corsOrigin,
     LOG_LEVEL: process.env.LOG_LEVEL || "info",
     UPLOAD_MAX_BYTES: uploadMaxBytes,
+    REPORT_MAX_ROWS: reportMaxRows,
 
     // Seeding is not configured here. backend/src/scripts/seedUsers.js reads
     // SEED_USER_PASSWORD straight from process.env so the value stays a

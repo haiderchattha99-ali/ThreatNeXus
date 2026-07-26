@@ -1,0 +1,168 @@
+{
+  "contractVersion": "accessible-rdp.synthetic.v1",
+  "description": "One row per invalid case. `label`, `expectedField` and `expectedCode` are test metadata only — the validator ignores unrecognized keys.",
+  "rows": [
+    {
+      "label": "missing timestamp",
+      "expectedField": "timestamp",
+      "expectedCode": "REQUIRED_FIELD",
+      "ip": "203.0.113.1",
+      "port": "3389",
+      "protocol": "tcp"
+    },
+    {
+      "label": "missing ip",
+      "expectedField": "ip",
+      "expectedCode": "REQUIRED_FIELD",
+      "timestamp": "2026-05-01T00:00:00Z",
+      "port": "3389",
+      "protocol": "tcp"
+    },
+    {
+      "label": "missing port",
+      "expectedField": "port",
+      "expectedCode": "REQUIRED_FIELD",
+      "timestamp": "2026-05-01T00:00:00Z",
+      "ip": "203.0.113.1",
+      "protocol": "tcp"
+    },
+    {
+      "label": "missing protocol",
+      "expectedField": "protocol",
+      "expectedCode": "REQUIRED_FIELD",
+      "timestamp": "2026-05-01T00:00:00Z",
+      "ip": "203.0.113.1",
+      "port": "3389"
+    },
+    {
+      "label": "malformed IPv4",
+      "expectedField": "ip",
+      "expectedCode": "INVALID_IPV4",
+      "timestamp": "2026-05-01T00:00:00Z",
+      "ip": "not-an-ip",
+      "port": "3389",
+      "protocol": "tcp"
+    },
+    {
+      "label": "IPv4 octet greater than 255",
+      "expectedField": "ip",
+      "expectedCode": "INVALID_IPV4",
+      "timestamp": "2026-05-01T00:00:00Z",
+      "ip": "203.0.113.256",
+      "port": "3389",
+      "protocol": "tcp"
+    },
+    {
+      "label": "IPv6",
+      "expectedField": "ip",
+      "expectedCode": "INVALID_IPV4",
+      "timestamp": "2026-05-01T00:00:00Z",
+      "ip": "2001:db8::1",
+      "port": "3389",
+      "protocol": "tcp"
+    },
+    {
+      "label": "invalid port 0",
+      "expectedField": "port",
+      "expectedCode": "INVALID_PORT",
+      "timestamp": "2026-05-01T00:00:00Z",
+      "ip": "203.0.113.1",
+      "port": "0",
+      "protocol": "tcp"
+    },
+    {
+      "label": "invalid port 65536",
+      "expectedField": "port",
+      "expectedCode": "INVALID_PORT",
+      "timestamp": "2026-05-01T00:00:00Z",
+      "ip": "203.0.113.1",
+      "port": "65536",
+      "protocol": "tcp"
+    },
+    {
+      "label": "decimal port",
+      "expectedField": "port",
+      "expectedCode": "INVALID_PORT",
+      "timestamp": "2026-05-01T00:00:00Z",
+      "ip": "203.0.113.1",
+      "port": "3389.5",
+      "protocol": "tcp"
+    },
+    {
+      "label": "invalid protocol",
+      "expectedField": "protocol",
+      "expectedCode": "INVALID_PROTOCOL",
+      "timestamp": "2026-05-01T00:00:00Z",
+      "ip": "203.0.113.1",
+      "port": "3389",
+      "protocol": "udp"
+    },
+    {
+      "label": "timestamp without timezone",
+      "expectedField": "timestamp",
+      "expectedCode": "TIMESTAMP_NOT_UTC",
+      "timestamp": "2026-05-01T00:00:00",
+      "ip": "203.0.113.1",
+      "port": "3389",
+      "protocol": "tcp"
+    },
+    {
+      "label": "non-UTC timestamp",
+      "expectedField": "timestamp",
+      "expectedCode": "TIMESTAMP_NOT_UTC",
+      "timestamp": "2026-05-01T00:00:00+05:00",
+      "ip": "203.0.113.1",
+      "port": "3389",
+      "protocol": "tcp"
+    },
+    {
+      "label": "malformed timestamp",
+      "expectedField": "timestamp",
+      "expectedCode": "INVALID_TIMESTAMP",
+      "timestamp": "05/01/2026 00:00:00",
+      "ip": "203.0.113.1",
+      "port": "3389",
+      "protocol": "tcp"
+    },
+    {
+      "label": "invalid ASN",
+      "expectedField": "asn",
+      "expectedCode": "INVALID_ASN",
+      "timestamp": "2026-05-01T00:00:00Z",
+      "ip": "203.0.113.1",
+      "port": "3389",
+      "protocol": "tcp",
+      "asn": "not-an-asn"
+    },
+    {
+      "label": "invalid country code",
+      "expectedField": "country_code",
+      "expectedCode": "INVALID_COUNTRY_CODE",
+      "timestamp": "2026-05-01T00:00:00Z",
+      "ip": "203.0.113.1",
+      "port": "3389",
+      "protocol": "tcp",
+      "country_code": "USA"
+    },
+    {
+      "label": "null byte",
+      "expectedField": "hostname",
+      "expectedCode": "NULL_BYTE",
+      "timestamp": "2026-05-01T00:00:00Z",
+      "ip": "203.0.113.1",
+      "port": "3389",
+      "protocol": "tcp",
+      "hostname": "evil\u0000host"
+    },
+    {
+      "label": "oversized optional field",
+      "expectedField": "as_name",
+      "expectedCode": "FIELD_TOO_LONG",
+      "timestamp": "2026-05-01T00:00:00Z",
+      "ip": "203.0.113.1",
+      "port": "3389",
+      "protocol": "tcp",
+      "as_name": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    }
+  ]
+}

@@ -1,0 +1,42 @@
+{
+  "contractVersion": "accessible-rdp.synthetic.v1",
+  "description": "Fully valid synthetic Accessible-RDP report — every row must validate.",
+  "rows": [
+    {
+      "timestamp": "2026-01-01T00:00:00Z",
+      "ip": "203.0.113.10",
+      "port": "3389",
+      "protocol": "tcp",
+      "hostname": "rdp-host-1.example.test",
+      "asn": "64500",
+      "as_name": "Example Test ASN",
+      "country_code": "US"
+    },
+    {
+      "timestamp": "2026-01-01T00:05:12Z",
+      "ip": "203.0.113.11",
+      "port": "3389",
+      "protocol": "TCP",
+      "hostname": "rdp-host-2.example.test",
+      "asn": "AS64501",
+      "as_name": "Second Example ASN",
+      "country_code": "gb"
+    },
+    {
+      "timestamp": "2026-01-01T00:10:45+00:00",
+      "ip": "198.51.100.20",
+      "port": "3390",
+      "protocol": "Tcp"
+    },
+    {
+      "timestamp": "2026-01-01T00:15:00Z",
+      "ip": "198.51.100.21",
+      "port": "3391",
+      "protocol": "tcp",
+      "hostname": "",
+      "asn": "",
+      "as_name": "",
+      "country_code": ""
+    }
+  ]
+}
