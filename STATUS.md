@@ -5,10 +5,84 @@ _Operational status / handoff note. Authoritative plan lives in
 
 ## Current
 
-- **Branch:** `feat/phase-1-ingestion`
-- **Latest commit:** `00b96ac` — `feat(phase-1): add P1-GATE — executable Phase 1 gate with synthetic dataset`
-- **Phase:** 1 (Ingest → Finding). Phase 0 + pre-Phase-1 hardening are merged to `main` (PR #1, PR #2 / `87178cd`). No PR opened yet for this branch.
-- **Phase 1 is now gate-complete** — see "Completed — P1-GATE" below.
+- **Branch:** `feat/phase-1-ingestion` — **merged into `main`** (see "Phase 1 release audit" below).
+- **Latest Phase 1 commit:** `e2feeb4` — `docs(phase-1): record P1-GATE completion in STATUS.md and README`
+- **Phase:** Phase 1 (Ingest → Finding) is **complete, gate-complete, audited and merged**. Phase 0 + pre-Phase-1 hardening were merged earlier (PR #1, PR #2 / `87178cd`).
+- **Next phase:** Phase 2 — ownership mapping, IOC/vulnerability enrichment, deterministic risk scoring. Branch `feat/phase-2-enrichment-risk` created; no Phase 2 implementation has started.
+
+## Phase 1 release audit
+
+**Verdict: APPROVED WITH NON-BLOCKING RISKS.** No pre-merge fixes were
+required. No critical findings. Raw-evidence integrity, report identity and
+retry behaviour, trusted-source validation, the Finding lifecycle rules,
+PostgreSQL concurrency handling, upload security ordering, and audit
+behaviour were all reviewed and found correct.
+
+### Verification at the audited commit
+
+- **Phase 1 gate:** 9/9 scenarios PASS (`npm run eval:phase1`).
+- **Backend suite:** 740 passed / 16 skipped.
+- **Real PostgreSQL:** 16/16 (P1-T4 + P1-T5 + P1-GATE suites together).
+- Tampered-ground-truth proof fails correctly, and the committed
+  `ground_truth.yaml` is verified byte-identical afterwards.
+
+### Non-blocking risks recorded by the audit
+
+1. **`cleanupUpload`'s `close` listener can unlink a temp file while the
+   handler is still reading it.** `res.on("close")` fires on client
+   disconnect, so cleanup can race a handler's `fs.readFile`. This is the
+   real root cause of the `routeAuthorization.test.js` ENOENT previously
+   described here as a shared-directory flake — a genuine race, not a test
+   artifact. `cleanupUpload.js` is Phase 0 code (not in the Phase 1 diff), so
+   Phase 1 inherits rather than introduces it. **Fails safe:** the error
+   reaches `errorHandler`, no `RawReport` is created, no partial evidence is
+   written.
+2. **File-derived text reaches `AuditLog.reason`, unbounded.** On the
+   `DUPLICATE_HEADER` rejection path the parser message embeds header names
+   taken verbatim from the uploaded file, and `auditService` applies
+   `redact()` only to `before`/`after` — never to `reason` — with no length
+   cap on an unbounded `TEXT` column. API responses are unaffected (fixed
+   message plus a bounded reason *code*). Every other rejection message is
+   server-constructed.
+3. **`EVAL_DATABASE_URL` safety is a raw string-equality check.** Trivially
+   different spellings of the same target (`postgres://` vs `postgresql://`,
+   `localhost` vs `127.0.0.1`, an appended `?schema=public`) bypass the
+   "must not equal `DATABASE_URL`" guard. Blast radius is bounded to
+   `phase1-gate`-prefixed reports and Findings at the four ground-truth
+   documentation IPs.
+4. **A crashed ingestion leaves a report permanently unretryable.**
+   `PROCESSING` classifies as `DUPLICATE_IN_PROGRESS` with no timeout, so a
+   process that dies mid-ingestion strands the report until manual database
+   intervention. Correctly documented as a deliberate deferral and never
+   claimed as implemented.
+5. **`RawReport.rawContent` byte-preservation has no automated test.** The
+   audit verified it empirically (all persisted reports round-trip
+   byte-exactly, `sha256(rawContent) === sourceFileSha256` for every row),
+   but a regression would pass both the suite and the gate.
+6. **The comparator silently skips omitted expectations.** A future scenario
+   authored without a `rows:`/`findings:` block asserts nothing about them
+   and still reports PASS; the loader enforces only the four count deltas and
+   `outcome`.
+
+Recommended order if addressed: (5), (1), (2), (3). None gate Phase 2.
+
+### Standing limitations reconfirmed by the audit
+
+- **`RawReport.observationDate` NOT NULL** still prevents creating an
+  evidence row for report-level rejection / zero-valid-row uploads. Approved,
+  documented, consistently enforced (both paths return `report: null`), and
+  acceptable for Phase 1.
+- **The production manual Finding-close endpoint remains unimplemented.** The
+  only closure path in the repository is the evaluation-only fixture under
+  `eval/lib/evalClosureFixture.js`, which is not a route and is not imported
+  by any `src/` code.
+
+### External dependency
+
+- **Shadowserver test-access request is pending under ticket `#7ibziiin`.**
+  Live/scheduled Shadowserver ingestion remains out of scope regardless; all
+  Phase 1 data is synthetic (`data/synthetic/`, `accessible-rdp.synthetic.v1`
+  — not an official Shadowserver schema).
 
 ## Completed — P1-GATE (executable Phase 1 gate)
 
@@ -876,11 +950,22 @@ mixed-validity handling, structural rejection, and trusted-source rejection
 all behave exactly as documented. `npm run eval:phase1` is the durable,
 rerunnable regression check for this phase going forward.
 
-Recommended next task: **Phase 2 — ownership mapping, IOC/vulnerability
-enrichment, and deterministic risk scoring** (`BUILD_PLAN.md` §"Phase 2"),
-starting with the `AssetMapping`/ownership-resolution piece and the
-`AbuseIPDBProvider`/`MockProvider` IOC-enrichment abstraction — confirm exact
-task breakdown against the planning doc before starting, per this repo's
-phase-gating rule. (Optional, lower-priority, non-blocking: fix the
-pre-existing `routeAuthorization.test.js` upload-race flake noted above,
-using the same fix already applied to `reportUploadRoute.test.js`.)
+Phase 1 has since been audited (**APPROVED WITH NON-BLOCKING RISKS**) and
+merged into `main`. Work continues on `feat/phase-2-enrichment-risk`, which
+is currently empty of Phase 2 implementation.
+
+**Exact next task: a Phase 2 scope/architecture review** — read
+`BUILD_PLAN.md` §"Phase 2" and `DECISIONS.md`, and produce the task
+breakdown before writing any code, per this repo's phase-gating rule. Phase 2
+covers ownership mapping (`AssetMapping` + resolution confidence), IOC
+reputation enrichment (`AbuseIPDBProvider` behind a provider abstraction,
+with `MockProvider` for every automated test), vulnerability enrichment
+(KEV/EPSS/NVD snapshots — a separate path from IOC reputation), and
+deterministic, explainable risk scoring. Recommended first implementation
+task once scoped: **ownership mapping**, since it is the next link in the
+proposal's spine and needs no external API key.
+
+Non-blocking carry-overs from the Phase 1 audit (none gate Phase 2): add a
+`RawReport.rawContent` byte-preservation test; fix the `cleanupUpload`
+`close`-race; bound/redact file-derived text in `AuditLog.reason`; harden the
+`EVAL_DATABASE_URL` equality check.
