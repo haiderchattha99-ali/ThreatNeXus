@@ -6,8 +6,116 @@ _Operational status / handoff note. Authoritative plan lives in
 ## Current
 
 - **Branch:** `feat/phase-1-ingestion`
-- **Latest commit:** `3423152` — `feat(phase-1): add P1-T5 end-to-end report ingestion orchestration`
+- **Latest commit:** `4544264` — `feat(phase-1): add P1-T6a trusted report-source validation`
 - **Phase:** 1 (Ingest → Finding). Phase 0 + pre-Phase-1 hardening are merged to `main` (PR #1, PR #2 / `87178cd`). No PR opened yet for this branch.
+
+## Completed — P1-T6a (trusted report-source validation)
+
+**Internal task definition**: `BUILD_PLAN.md` has no literal "P1-T6" section —
+`P1-T6a` is this repo's own name for the one remaining unimplemented row in
+Phase 1's task table: *"Source validation — is this `source` + `reportType` a
+known/trusted combination? Distinct from schema validation."* `schema.prisma`
+had already flagged this as deferred at P1-T1 ("a ReportSchema/registry model
+is deliberately NOT introduced yet — it is premature for a single type").
+
+- **Registry** (`backend/src/services/ingestion/reportSourceRegistry.js`,
+  new): a small, code-level, additive-only trusted-contract registry — no
+  `ReportSchema` Prisma model, no migration, no database-configured registry.
+  Exports a frozen `REPORT_SOURCES` identifier collection (`SYNTHETIC_UPLOAD`
+  only), a frozen `TRUSTED_REPORT_CONTRACTS` array of frozen tuples, and
+  `validateReportSource({source, reportType, schemaVersion})` — a pure
+  function (no Prisma, no filesystem access) doing exact, case-sensitive,
+  no-coercion matching of the complete 3-field tuple; a match on one or two
+  fields is not sufficient. Returns `{ok:true}` or `{ok:false, code:
+  "UNTRUSTED_SOURCE_REPORT_COMBINATION", message}` — mirroring the existing
+  `{ok, code, message}` shape `accessibleRdpCsvParser.js` already uses for
+  expected (non-exceptional) rejections. `reportType`/`schemaVersion` in the
+  one trusted tuple are sourced from the generated `ReportType` Prisma enum
+  and `accessibleRdpRowValidator.js`'s `CONTRACT_VERSION` constant, not
+  re-typed as string literals, so the registry cannot silently drift from
+  either.
+- **Trusted tuple (the only one, MVP)**: `source: SYNTHETIC_UPLOAD`,
+  `reportType: ACCESSIBLE_RDP`, `schemaVersion: accessible-rdp.synthetic.v1`.
+- **Server-controlled source — enforced, not just documented**:
+  `reportIngestionController.js` assigns `source: REPORT_SOURCES.SYNTHETIC_UPLOAD`
+  itself and passes it explicitly into `ingestAccessibleRdpReport`; nothing in
+  the controller reads `req.body`/a multipart text field/the filename/a
+  header as a source claim. `ingestAccessibleRdpReport`'s `assertValidInput`
+  now requires `input.source` to be an explicit non-empty string with **no
+  implicit default** — a caller that forgets to pass it gets a `TypeError`,
+  not a silently-assumed value, so a future call site can never accidentally
+  skip considering it.
+- **Pipeline placement**: validation is step 0 of `ingestAccessibleRdpReport`
+  — before CSV structural parsing, before row validation, before any
+  `RawReport`/`RawReportRow`/`Finding`/`FindingOccurrence` access. An
+  untrusted tuple returns `INGESTION_OUTCOMES.REJECTED` immediately; the
+  existing structural-parse-rejection code path (and its 400 HTTP mapping)
+  is reused as-is — no new outcome or status code was needed.
+- **The binding P1-T5 observationDate decision is unchanged**: an untrusted
+  tuple, like a structural rejection or an all-invalid-rows upload, creates
+  **no `RawReport` row** (`report: null` in the response) — not a new
+  decision, the existing one already covers this case since there is still
+  no valid row timestamp to store. No schema change in this task.
+- **Rejection/audit behavior**: one aggregate `report.ingestion.rejected`
+  `AuditLog` event (never per-row), `after` populated with only
+  `reasonCode`, `requestedReportType`, `requestedSchemaVersion`, and the
+  rejected `source` value — never raw bytes, CSV rows, the full registry
+  contents, a stack trace, or a filesystem path. The safe public message
+  (`"This report source, type, or schema version is not trusted for
+  ingestion."`) is fixed and never echoes the caller's input.
+- **Client-override protection**: verified behaviorally, not just by code
+  inspection — sending multipart `source=SHADOWSERVER`,
+  `reportType=SOMETHING_ELSE`, or `schemaVersion=bogus-version` alongside a
+  valid file still returns 201 (the values are never read), since if the
+  controller had consumed any of them the request would instead be rejected
+  (`SHADOWSERVER` etc. are not in the trusted registry). Route middleware
+  never parses these as trusted metadata; the route ordering
+  (`authenticate -> requireCapability -> cleanupUpload -> multer ->
+  controller`) and temp-file cleanup are both unchanged and re-verified with
+  override attempts present.
+- **Valid-tuple behavior is unchanged**: every existing P1-T5 unit/route/
+  real-DB test continues to pass with the server-assigned `SYNTHETIC_UPLOAD`
+  source flowing through unmodified; one explicit regression test asserts a
+  valid tuple still produces `PROCESSED`/`COMPLETED` with a `RawReport`,
+  `RawReportRow`, `Finding`, and `FindingOccurrence` each created exactly
+  once, matching pre-P1-T6a behavior.
+
+### Tests
+
+- **18 new unit tests** (`reportSourceRegistry.test.js`): approved tuple
+  accepted; unknown source rejected; case-sensitivity on all three fields
+  independently; no trimming of whitespace-padded values; wrong reportType
+  alone rejected; wrong schemaVersion alone rejected; two different
+  partial-match shapes rejected; each field missing individually rejected;
+  null/undefined fields rejected without throwing; a non-object argument
+  throws `TypeError` (contract violation, not a data condition); stable
+  reason code and a safe message that echoes neither the caller's input nor
+  the registry's actual contents; `REPORT_SOURCES`/`TRUSTED_REPORT_CONTRACTS`/
+  `REASON_CODES` all frozen and resistant to normal mutation attempts (the
+  mutation-attempt tests swallow the possible `TypeError` a frozen-object
+  assignment throws under this test file's own ES-module strict mode, then
+  assert the underlying value never changed either way).
+- **7 new orchestrator tests** (`reportIngestionService.test.js`): source
+  validation runs before the parser/any DB access is touched (asserted via
+  `client.rawReport.findUnique`/`create` never being called); an untrusted
+  tuple creates no `RawReport`, no `RawReportRow`, no `Finding`/
+  `FindingOccurrence`; exactly one safe aggregate rejection audit (never
+  per-row); a valid tuple leaves all existing P1-T5 behavior unchanged;
+  omitting `source` (or passing an empty string) throws `TypeError`.
+- **5 new route tests** (`reportUploadRoute.test.js`): a normal analyst
+  upload succeeds under the server-assigned source; a client-supplied
+  `source` field cannot override it; client-supplied `reportType`/
+  `schemaVersion` fields cannot override the fixed contract either; the
+  existing authenticate/capability-before-multer ordering and temp-file
+  cleanup both still hold when override attempts are present on the request.
+- **1 new real-PostgreSQL test** added to `reportIngestionConcurrency.test.js`
+  (test 9): an untrusted tuple against the real database writes zero
+  `RawReport`, `RawReportRow`, `Finding`, or `FindingOccurrence` rows. Suite
+  self-skips without `TEST_DATABASE_URL` exactly as before (now 14 skipped,
+  was 13).
+- Full backend suite: **701 passed / 14 skipped** (was 671/13; +30 new: 18 +
+  7 + 5). Real PostgreSQL P1-T4 + P1-T5 + P1-T6a together: **14/14**, stable
+  across 3 repeated runs against the disposable `threatnexus_test` database.
 
 ## Completed — P1-T5 (end-to-end ingestion orchestration)
 
@@ -457,6 +565,16 @@ and marks the report `FAILED`, never a per-row `INVALID`; duplicate valid
 rows in one report link to exactly one `FindingOccurrence` and use the
 deterministic max-`observedAt` canonical row.
 
+P1-T6a: `npx prisma validate` clean (`DATABASE_URL` supplied inline, no
+`backend/.env`) · **no migration generated** (`backend/prisma` untouched,
+confirmed via `git status`) · targeted tests (registry + orchestrator + route
++ real-DB) run individually and together, stable · full backend suite
+**701 passed, 14 skipped**, run once clean (no repeat needed) · real
+PostgreSQL P1-T4 + P1-T5 + P1-T6a together **14/14**, run 3x back-to-back
+with no flakiness · `git diff --check` clean · diff (5 files modified, 2
+files added, 271 insertions) and `git status` reviewed — matches exactly the
+approved scope, nothing unrelated touched.
+
 ## Blocker / local-env note
 
 `env.test.js` asserts `loadEnv()` throws on missing vars, which requires **no
@@ -525,15 +643,30 @@ not echoed by the tests. Still **no `backend/.env`**.
   (see the P1-T5 section above for the full tradeoff). A future task should
   make the column nullable if raw-byte evidence preservation for
   rejected/all-invalid uploads becomes a requirement.
+- **Phase 1 gate blocker (P1-GATE, not yet started)**: `data/synthetic/
+  ground_truth.yaml` and an executable `eval/`-style comparison harness do
+  not exist in this repository. `BUILD_PLAN.md`'s Phase 1 gate depends on
+  both. This is an external teammate deliverable on the critical path
+  (`NEXT_STEPS.md`), not a backend-code gap — see "Exact next task" below.
 
-## Exact next task — P1-T6
+## Exact next task — P1-GATE
 
-P1-T5 (CSV parser + end-to-end ingestion orchestration: route, middleware,
-parser, orchestrator, row evidence, Finding lifecycle wiring, audits, real-DB
-tests) is complete — see the P1-T5 section above. The next task is whatever
-P1-T6 is defined as in `../ThreatNeXus-Planning/planning/BUILD_PLAN.md`
-(not yet read as part of this task — this file intentionally does not guess
-its scope). Likely candidates based on what P1-T5 deliberately left out:
-finding closure/read APIs, a second Shadowserver-style report type, or IOC
-enrichment — but confirm against the planning doc before starting, per this
-repo's phase-gating rule.
+P1-T6a (trusted report-source validation) is complete — see the section
+above. That closes every row in `BUILD_PLAN.md`'s Phase 1 task table (CSV
+upload, schema validation, source validation, normalization,
+dedup/persistence/recurrence).
+
+**Phase 1 is not yet considered fully gated.** `BUILD_PLAN.md`'s Phase 1 gate
+is: *"ingest days 1→N of the synthetic dataset; dedup, persistence, and
+recurrence counts match `data/synthetic/ground_truth.yaml` exactly, compared
+by `eval/`, not by eye."* Neither `data/synthetic/ground_truth.yaml` nor any
+`eval/` harness exists in this repository yet — the dataset is a separate,
+critical-path teammate deliverable (`NEXT_STEPS.md`), and the `eval/` scripts
+are nominally Phase 7A scope pulled forward for this one gate check. No
+amount of further backend code closes this by itself.
+
+**Exact next task: P1-GATE** — once `data/synthetic/ground_truth.yaml` (or
+equivalent) exists, build the minimal executable check needed to compare
+this pipeline's dedup/persistence/recurrence output against it and pass
+Phase 1's gate. Until that dataset lands, this is blocked on an external
+deliverable, not on backend implementation.
