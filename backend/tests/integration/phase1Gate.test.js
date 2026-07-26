@@ -31,6 +31,8 @@ process.env.DATABASE_URL = process.env.DATABASE_URL || "postgresql://unused:unus
 process.env.JWT_SECRET = process.env.JWT_SECRET || "a-reasonably-strong-32-char-plus-secret-value";
 process.env.CORS_ORIGIN = process.env.CORS_ORIGIN || "http://localhost:5173";
 
+const YAML = require("yaml");
+
 const { createPrismaClient } = require("../../src/config/prismaFactory");
 const { runPhase1Gate } = require("../../../eval/run_phase1_gate");
 
@@ -76,13 +78,20 @@ describeDb("Phase 1 Gate — real PostgreSQL", () => {
 
     // Tamper exactly one expected value — FINDING_A's occurrenceCount after
     // scenario 03_persistence is genuinely 2 (see ground_truth.yaml's own
-    // comment); bump it to an impossible 999. Written only to a temp file —
-    // the committed ground_truth.yaml is never touched.
-    const tamperedText = realText.replace(
-      "          occurrenceCount: 2\n          recurrenceCount: 0\n          closedThroughObservedAt: null\n        - identity: \"FINDING_C\"",
-      "          occurrenceCount: 999\n          recurrenceCount: 0\n          closedThroughObservedAt: null\n        - identity: \"FINDING_C\""
-    );
-    expect(tamperedText).not.toBe(realText); // the replace actually matched something
+    // comment); bump it to an impossible 999. Done by parsing the committed
+    // YAML into an in-memory object, mutating that object, and
+    // re-serializing it — never by textual replace against the file's raw
+    // bytes, which would depend on its line-ending style (LF as committed vs
+    // CRLF as materialized by a checkout with core.autocrlf=true). Written
+    // only to a temp file — the committed ground_truth.yaml is never touched.
+    const parsed = YAML.parse(realText);
+    const persistenceScenario = parsed.scenarios.find((s) => s.id === "03_persistence");
+    const findingA = persistenceScenario.expected.findings.find((f) => f.identity === "FINDING_A");
+    expect(findingA.occurrenceCount).toBe(2); // the genuine, documented value before tampering
+    findingA.occurrenceCount = 999;
+
+    const tamperedText = YAML.stringify(parsed);
+    expect(tamperedText).not.toBe(realText); // the tamper actually changed something
 
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "tn-phase1-gate-tamper-"));
     const tamperedPath = path.join(tmpDir, "tampered-ground-truth.yaml");
