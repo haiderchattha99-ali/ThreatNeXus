@@ -3,11 +3,13 @@ const cors = require("cors");
 
 const env = require("./config/env");
 const requestContext = require("./middleware/requestContext");
+const normalizeMulterError = require("./middleware/normalizeMulterError");
 const errorHandler = require("./middleware/errorHandler");
 
 const authRoutes = require("./routes/authRoutes");
 const profileRoutes = require("./routes/profileRoutes");
 const threatRoutes = require("./routes/threatRoutes");
+const reportRoutes = require("./routes/reportRoutes");
 const dashboardRoutes = require("./routes/dashboardRoutes");
 const caseRoutes = require("./routes/caseRoutes");
 const notificationRoutes = require("./routes/notificationRoutes");
@@ -37,6 +39,7 @@ app.use(express.json({ limit: env.UPLOAD_MAX_BYTES }));
 app.use("/api/auth", authRoutes);
 app.use("/api/profile", profileRoutes);
 app.use("/api/threats", threatRoutes);
+app.use("/api/reports", reportRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/cases", caseRoutes);
 app.use("/api/notifications", notificationRoutes);
@@ -59,6 +62,7 @@ app.use((req, res) => {
   });
 });
 
+app.use(normalizeMulterError);
 app.use(errorHandler);
 
 module.exports = app;

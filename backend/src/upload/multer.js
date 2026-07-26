@@ -5,6 +5,7 @@ const path = require("path");
 const crypto = require("crypto");
 const multer = require("multer");
 
+const env = require("../config/env");
 const { UPLOAD_TEMP_DIR } = require("../lib/fileCleanup");
 
 // multer only creates the directory for the `dest` shorthand, not for a
@@ -34,6 +35,16 @@ const storage = multer.diskStorage({
   },
 });
 
-const upload = multer({ storage });
+// UPLOAD_MAX_BYTES already exists in config/env.js and is applied to JSON
+// bodies (see app.js), but was never wired to multer — a file upload had no
+// enforced size cap at all. Wiring it here is additive protection for every
+// route that uses this shared instance; it does not loosen anything.
+const upload = multer({ storage, limits: { fileSize: env.UPLOAD_MAX_BYTES } });
+
+// Exposed (not part of the default export shape) so a route-specific multer
+// instance — e.g. reportUpload.js, which also needs a fileFilter — can reuse
+// the exact same safe-filename storage rather than duplicating the path-
+// traversal-safety logic above in a second file.
+upload.storage = storage;
 
 module.exports = upload;
