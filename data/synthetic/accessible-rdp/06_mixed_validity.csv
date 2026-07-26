@@ -1,0 +1,4 @@
+timestamp,ip,port,protocol,hostname,asn,as_name,country_code
+2026-01-04T00:00:00Z,203.0.113.14,3389,tcp,,,,
+2026-01-04T00:05:00Z,not-an-ip,3389,tcp,,,,
+2026-01-04T00:10:00Z,203.0.113.15,99999,tcp,,,,

@@ -1,0 +1,377 @@
+# Phase 1 gate ground truth — manually authored expected results.
+#
+# Every value below was derived BY HAND from the approved, documented
+# lifecycle rules (STATUS.md: P1-T4 dedup/persistence/recurrence, P1-T5
+# ingestion orchestration, P1-T6a trusted-source validation) and the exact
+# contents of the sibling accessible-rdp/*.csv fixtures — never by running
+# the program and copying its output back in. If a gate run disagrees with
+# this file, that is either a genuine defect to report, or a hand-derivation
+# mistake to fix here with the reasoning shown — never a value to silently
+# adjust to make the gate pass.
+#
+# Timestamps are explicit RFC 3339 UTC strings, quoted, so YAML never
+# coerces them into an ambiguous native date type. eval/lib/groundTruthLoader.js
+# keeps them as plain strings; only the comparator parses them, and only for
+# an explicit equality check against a Date read back from Postgres.
+
+version: 1
+schemaVersion: "phase1-gate-ground-truth.v1"
+
+datasetDisclaimer: >
+  Synthetic development/evaluation fixtures only. accessible-rdp.synthetic.v1
+  is not an official Shadowserver schema. Expected values were manually
+  derived from approved lifecycle rules. Never operational threat
+  intelligence.
+
+# Named Finding identities referenced by scenarios below, so a scenario can
+# say "FINDING_A" instead of repeating the full 4-field identity tuple.
+findingIdentities:
+  FINDING_A:
+    indicatorValue: "203.0.113.11"
+    port: 3389
+    protocol: "TCP"
+    reportType: "ACCESSIBLE_RDP"
+  FINDING_B:
+    indicatorValue: "203.0.113.12"
+    port: 3389
+    protocol: "TCP"
+    reportType: "ACCESSIBLE_RDP"
+  FINDING_C:
+    indicatorValue: "203.0.113.13"
+    port: 3389
+    protocol: "TCP"
+    reportType: "ACCESSIBLE_RDP"
+  FINDING_D:
+    indicatorValue: "203.0.113.14"
+    port: 3389
+    protocol: "TCP"
+    reportType: "ACCESSIBLE_RDP"
+
+scenarios:
+  # 1. Baseline: two distinct Finding identities, one duplicated within the
+  # report. FINDING_A appears in rows 1 (00:00) and 2 (00:10) — the canonical
+  # row is the MAXIMUM observedAt in the group (row 2), so row 1 is the
+  # duplicate and FINDING_A's firstSeen/lastSeen both land on 00:10, not
+  # 00:00. Only one FindingOccurrence is created for FINDING_A despite two
+  # rows.
+  - id: "01_baseline"
+    order: 1
+    kind: "ingest"
+    fixtureFile: "accessible-rdp/01_baseline.csv"
+    source: "SYNTHETIC_UPLOAD"
+    expected:
+      outcome: "PROCESSED"
+      reportStatus: "COMPLETED"
+      totalRows: 3
+      validRows: 3
+      invalidRows: 0
+      rawReportCountDelta: 1
+      rawReportRowCountDelta: 3
+      findingCountDelta: 2
+      findingOccurrenceCountDelta: 2
+      occurrenceActionCounts: { CREATED: 2, PERSISTED: 0, HISTORICAL: 0, RECURRED: 0 }
+      rows:
+        - rowNumber: 1
+          status: "VALID"
+          duplicateInReport: true
+          findingIdentity: "FINDING_A"
+          errorCodes: []
+        - rowNumber: 2
+          status: "VALID"
+          duplicateInReport: false
+          findingIdentity: "FINDING_A"
+          errorCodes: []
+        - rowNumber: 3
+          status: "VALID"
+          duplicateInReport: false
+          findingIdentity: "FINDING_B"
+          errorCodes: []
+      findings:
+        - identity: "FINDING_A"
+          status: "OPEN"
+          firstSeen: "2026-01-01T00:10:00.000Z"
+          lastSeen: "2026-01-01T00:10:00.000Z"
+          occurrenceCount: 1
+          recurrenceCount: 0
+          closedThroughObservedAt: null
+        - identity: "FINDING_B"
+          status: "OPEN"
+          firstSeen: "2026-01-01T00:05:00.000Z"
+          lastSeen: "2026-01-01T00:05:00.000Z"
+          occurrenceCount: 1
+          recurrenceCount: 0
+          closedThroughObservedAt: null
+
+  # 2. Identical re-upload: exact same bytes as scenario 1. Must reuse the
+  # same RawReport row, create no new evidence, and leave every projection
+  # and existing FindingOccurrence row byte-for-byte unchanged.
+  - id: "02_identical_reupload"
+    order: 2
+    kind: "ingest"
+    fixtureFile: "accessible-rdp/01_baseline.csv"
+    source: "SYNTHETIC_UPLOAD"
+    expected:
+      outcome: "DUPLICATE_COMPLETED"
+      rawReportCountDelta: 0
+      rawReportRowCountDelta: 0
+      findingCountDelta: 0
+      findingOccurrenceCountDelta: 0
+      occurrenceActionCounts: { CREATED: 0, PERSISTED: 0, HISTORICAL: 0, RECURRED: 0 }
+      reportIdMatchesScenario: "01_baseline"
+      occurrencesUnchangedSinceScenario: "01_baseline"
+
+  # 3. Persistence: a later, in-order observation for FINDING_A (existing
+  # OPEN, lastSeen 2026-01-01T00:10:00Z) moves lastSeen forward and bumps
+  # occurrenceCount — PERSISTED, not HISTORICAL, because the new timestamp is
+  # >= the current lastSeen. Also introduces one brand-new Finding (FINDING_C).
+  - id: "03_persistence"
+    order: 3
+    kind: "ingest"
+    fixtureFile: "accessible-rdp/02_persistence.csv"
+    source: "SYNTHETIC_UPLOAD"
+    expected:
+      outcome: "PROCESSED"
+      reportStatus: "COMPLETED"
+      totalRows: 2
+      validRows: 2
+      invalidRows: 0
+      rawReportCountDelta: 1
+      rawReportRowCountDelta: 2
+      findingCountDelta: 1
+      findingOccurrenceCountDelta: 2
+      occurrenceActionCounts: { CREATED: 1, PERSISTED: 1, HISTORICAL: 0, RECURRED: 0 }
+      rows:
+        - rowNumber: 1
+          status: "VALID"
+          duplicateInReport: false
+          findingIdentity: "FINDING_A"
+          errorCodes: []
+        - rowNumber: 2
+          status: "VALID"
+          duplicateInReport: false
+          findingIdentity: "FINDING_C"
+          errorCodes: []
+      findings:
+        - identity: "FINDING_A"
+          status: "OPEN"
+          firstSeen: "2026-01-01T00:10:00.000Z"
+          lastSeen: "2026-01-02T00:00:00.000Z"
+          occurrenceCount: 2
+          recurrenceCount: 0
+          closedThroughObservedAt: null
+        - identity: "FINDING_C"
+          status: "OPEN"
+          firstSeen: "2026-01-02T00:05:00.000Z"
+          lastSeen: "2026-01-02T00:05:00.000Z"
+          occurrenceCount: 1
+          recurrenceCount: 0
+          closedThroughObservedAt: null
+
+  # 4. Historical: an out-of-order observation for FINDING_A at 2026-01-01
+  # 18:00Z — strictly earlier than the current lastSeen (2026-01-02 00:00Z),
+  # so this is HISTORICAL. lastSeen must NOT regress to 18:00Z; it stays at
+  # 2026-01-02 00:00Z. firstSeen is unaffected too (18:00Z is after the
+  # existing firstSeen of 00:10Z on 01-01). occurrenceCount still increments
+  # (every occurrence counts) and recurrenceCount/status are untouched — no
+  # false recurrence.
+  - id: "04_historical"
+    order: 4
+    kind: "ingest"
+    fixtureFile: "accessible-rdp/03_historical.csv"
+    source: "SYNTHETIC_UPLOAD"
+    expected:
+      outcome: "PROCESSED"
+      reportStatus: "COMPLETED"
+      totalRows: 1
+      validRows: 1
+      invalidRows: 0
+      rawReportCountDelta: 1
+      rawReportRowCountDelta: 1
+      findingCountDelta: 0
+      findingOccurrenceCountDelta: 1
+      occurrenceActionCounts: { CREATED: 0, PERSISTED: 0, HISTORICAL: 1, RECURRED: 0 }
+      rows:
+        - rowNumber: 1
+          status: "VALID"
+          duplicateInReport: false
+          findingIdentity: "FINDING_A"
+          errorCodes: []
+      findings:
+        - identity: "FINDING_A"
+          status: "OPEN"
+          firstSeen: "2026-01-01T00:10:00.000Z"
+          lastSeen: "2026-01-02T00:00:00.000Z"
+          occurrenceCount: 3
+          recurrenceCount: 0
+          closedThroughObservedAt: null
+
+  # 5. Controlled CLOSED-boundary historical: BEFORE ingestion, the eval-only
+  # fixture step (see eval/lib/evalClosureFixture.js — not a production close
+  # endpoint) closes FINDING_A with closedThroughObservedAt set to its
+  # current lastSeen (2026-01-02T00:00:00Z). The fixture then ingests an
+  # observation at EXACTLY that same timestamp. classifyObservation's CLOSED
+  # rule is "observedAt > closedThroughObservedAt -> RECURRED, else
+  # HISTORICAL" — equal is NOT greater, so this is HISTORICAL, the Finding
+  # stays CLOSED, and recurrenceCount does not change. occurrenceCount still
+  # increments (documented: "occurrenceCount += 1" applies even to a CLOSED
+  # Finding's HISTORICAL occurrence) and firstSeen/lastSeen still recompute
+  # via MIN/MAX (unchanged here since the new timestamp equals lastSeen and
+  # is after firstSeen).
+  - id: "05_closed_boundary"
+    order: 5
+    kind: "ingest"
+    preSteps:
+      - type: "evalClosureFixture"
+        findingIdentity: "FINDING_A"
+        closedThroughObservedAt: "2026-01-02T00:00:00.000Z"
+        closureReason: "EVALUATION_FIXTURE_CLOSURE — not a production close action"
+    fixtureFile: "accessible-rdp/04_closed_boundary.csv"
+    source: "SYNTHETIC_UPLOAD"
+    expected:
+      outcome: "PROCESSED"
+      reportStatus: "COMPLETED"
+      totalRows: 1
+      validRows: 1
+      invalidRows: 0
+      rawReportCountDelta: 1
+      rawReportRowCountDelta: 1
+      findingCountDelta: 0
+      findingOccurrenceCountDelta: 1
+      occurrenceActionCounts: { CREATED: 0, PERSISTED: 0, HISTORICAL: 1, RECURRED: 0 }
+      rows:
+        - rowNumber: 1
+          status: "VALID"
+          duplicateInReport: false
+          findingIdentity: "FINDING_A"
+          errorCodes: []
+      findings:
+        - identity: "FINDING_A"
+          status: "CLOSED"
+          firstSeen: "2026-01-01T00:10:00.000Z"
+          lastSeen: "2026-01-02T00:00:00.000Z"
+          occurrenceCount: 4
+          recurrenceCount: 0
+          closedThroughObservedAt: "2026-01-02T00:00:00.000Z"
+
+  # 6. Recurrence: an observation strictly AFTER closedThroughObservedAt
+  # (2026-01-03T00:00:00Z > 2026-01-02T00:00:00Z) reopens FINDING_A —
+  # RECURRED. recurrenceCount increments exactly once; the four active
+  # closure fields are cleared to null (the documented, approved P1-T4
+  # closure-clearing decision — see STATUS.md).
+  - id: "06_recurrence"
+    order: 6
+    kind: "ingest"
+    fixtureFile: "accessible-rdp/05_recurrence.csv"
+    source: "SYNTHETIC_UPLOAD"
+    expected:
+      outcome: "PROCESSED"
+      reportStatus: "COMPLETED"
+      totalRows: 1
+      validRows: 1
+      invalidRows: 0
+      rawReportCountDelta: 1
+      rawReportRowCountDelta: 1
+      findingCountDelta: 0
+      findingOccurrenceCountDelta: 1
+      occurrenceActionCounts: { CREATED: 0, PERSISTED: 0, HISTORICAL: 0, RECURRED: 1 }
+      rows:
+        - rowNumber: 1
+          status: "VALID"
+          duplicateInReport: false
+          findingIdentity: "FINDING_A"
+          errorCodes: []
+      findings:
+        - identity: "FINDING_A"
+          status: "OPEN"
+          firstSeen: "2026-01-01T00:10:00.000Z"
+          lastSeen: "2026-01-03T00:00:00.000Z"
+          occurrenceCount: 5
+          recurrenceCount: 1
+          closedThroughObservedAt: null
+
+  # 7. Mixed validity: one valid row (creates FINDING_D) plus two invalid
+  # rows (bad IPv4, out-of-range port). Every parsed row is preserved as
+  # evidence regardless of validity; invalid rows never link to a
+  # FindingOccurrence. Report status is PARTIALLY_VALID, not FAILED/REJECTED
+  # — some rows validating is still a successful ingestion.
+  - id: "07_mixed_validity"
+    order: 7
+    kind: "ingest"
+    fixtureFile: "accessible-rdp/06_mixed_validity.csv"
+    source: "SYNTHETIC_UPLOAD"
+    expected:
+      outcome: "PROCESSED"
+      reportStatus: "PARTIALLY_VALID"
+      totalRows: 3
+      validRows: 1
+      invalidRows: 2
+      rawReportCountDelta: 1
+      rawReportRowCountDelta: 3
+      findingCountDelta: 1
+      findingOccurrenceCountDelta: 1
+      occurrenceActionCounts: { CREATED: 1, PERSISTED: 0, HISTORICAL: 0, RECURRED: 0 }
+      rows:
+        - rowNumber: 1
+          status: "VALID"
+          duplicateInReport: false
+          findingIdentity: "FINDING_D"
+          errorCodes: []
+        - rowNumber: 2
+          status: "INVALID"
+          duplicateInReport: false
+          findingIdentity: null
+          errorCodes: ["INVALID_IPV4"]
+        - rowNumber: 3
+          status: "INVALID"
+          duplicateInReport: false
+          findingIdentity: null
+          errorCodes: ["INVALID_PORT"]
+      findings:
+        - identity: "FINDING_D"
+          status: "OPEN"
+          firstSeen: "2026-01-04T00:00:00.000Z"
+          lastSeen: "2026-01-04T00:00:00.000Z"
+          occurrenceCount: 1
+          recurrenceCount: 0
+          closedThroughObservedAt: null
+
+  # 8. Structural rejection: the CSV header is missing the required
+  # "protocol" column. Rejected before any row validation or lifecycle
+  # mutation; under the current RawReport.observationDate NOT NULL
+  # constraint (no valid row timestamp exists to store), no RawReport row is
+  # created at all — the approved, documented P1-T5 tradeoff.
+  - id: "08_structural_rejection"
+    order: 8
+    kind: "ingest"
+    fixtureFile: "accessible-rdp/07_structural_rejection.csv"
+    source: "SYNTHETIC_UPLOAD"
+    expected:
+      outcome: "REJECTED"
+      reasonCode: "MISSING_REQUIRED_HEADERS"
+      rawReportCountDelta: 0
+      rawReportRowCountDelta: 0
+      findingCountDelta: 0
+      findingOccurrenceCountDelta: 0
+      auditActionCounts:
+        "report.ingestion.rejected": 1
+
+  # 9. Untrusted source rejection: the exact same well-formed bytes as
+  # scenario 1, but with a source value that is not in the trusted registry.
+  # Source validation runs before structural parsing, so this must be
+  # rejected purely because of `source` — no RawReport, row, Finding, or
+  # FindingOccurrence is created, and the reason code is the registry's
+  # stable UNTRUSTED_SOURCE_REPORT_COMBINATION.
+  - id: "09_untrusted_source"
+    order: 9
+    kind: "ingest"
+    fixtureFile: "accessible-rdp/01_baseline.csv"
+    source: "SHADOWSERVER"
+    expected:
+      outcome: "REJECTED"
+      reasonCode: "UNTRUSTED_SOURCE_REPORT_COMBINATION"
+      rawReportCountDelta: 0
+      rawReportRowCountDelta: 0
+      findingCountDelta: 0
+      findingOccurrenceCountDelta: 0
+      auditActionCounts:
+        "report.ingestion.rejected": 1
