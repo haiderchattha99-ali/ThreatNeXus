@@ -27,6 +27,12 @@ const CAPABILITIES = Object.freeze({
   MANAGE_USERS: "manage:users",
   MANAGE_SYSTEM: "manage:system",
   DELETE_RECORDS: "delete:records",
+
+  // Phase 2 (P2-T1) — ownership mapping. Additive, non-hierarchical: neither
+  // grant is implied by an existing capability, matching this file's
+  // explicit-grants-per-role convention.
+  MANAGE_OWNERSHIP_MAPPINGS: "manage:ownership-mappings",
+  OVERRIDE_FINDING_OWNERSHIP: "override:finding-ownership",
 });
 
 const CAPABILITY_VALUES = Object.freeze(Object.values(CAPABILITIES));
@@ -53,6 +59,10 @@ const ROLE_CAPABILITIES = Object.freeze({
     CAPABILITIES.INGEST_REPORTS,
     CAPABILITIES.TRIAGE_FINDINGS,
     CAPABILITIES.MANAGE_CASES,
+    // P2-T1 — an analyst may correct ownership on a Finding they triage, but
+    // may not touch the AssetMapping registry itself (that stays ADMIN-only
+    // below, via CAPABILITY_VALUES).
+    CAPABILITIES.OVERRIDE_FINDING_OWNERSHIP,
   ]),
   ADMIN: Object.freeze([...CAPABILITY_VALUES]),
 });

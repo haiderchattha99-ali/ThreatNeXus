@@ -131,6 +131,11 @@ async function cleanupEvalState(prisma, identityIndex) {
 
   await prisma.findingOccurrence.deleteMany({ where: { rawReportId: { in: reportIds } } });
   await prisma.rawReportRow.deleteMany({ where: { rawReportId: { in: reportIds } } });
+  // P2-T1: ingestAccessibleRdpReport now also resolves ownership for every
+  // Finding it touches, and FindingOwnership.findingId is onDelete: Restrict
+  // — a Finding can no longer be deleted while it has ownership history.
+  // Additive, same scoped-id-set discipline as every other deleteMany here.
+  await prisma.findingOwnership.deleteMany({ where: { findingId: { in: findingIds } } });
   await prisma.finding.deleteMany({ where: { id: { in: findingIds } } });
   await prisma.rawReport.deleteMany({ where: { id: { in: reportIds } } });
 }

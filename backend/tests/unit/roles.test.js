@@ -112,7 +112,13 @@ describe("capability constants", () => {
         "delete:records",
       ])
     );
-    expect(CAPABILITY_VALUES).toHaveLength(10);
+    expect(CAPABILITY_VALUES).toHaveLength(10 + 2); // + P2-T1 ownership capabilities
+  });
+
+  it("defines the P2-T1 ownership capability set", () => {
+    expect(CAPABILITY_VALUES).toEqual(
+      expect.arrayContaining(["manage:ownership-mappings", "override:finding-ownership"])
+    );
   });
 
   it("defines a grant list for every role", () => {
@@ -220,6 +226,29 @@ describe("ANALYST capabilities", () => {
   it("does not inherit REVIEWER approval capabilities", () => {
     expect(hasCapability("ANALYST", C.REVIEW_NOTIFICATIONS)).toBe(false);
     expect(hasCapability("ANALYST", C.REVIEW_AI_SUGGESTIONS)).toBe(false);
+  });
+
+  // P2-T1: an analyst may correct ownership on a Finding but not manage the
+  // AssetMapping registry itself.
+  it("can override finding ownership but not manage the mapping registry", () => {
+    expect(hasCapability("ANALYST", C.OVERRIDE_FINDING_OWNERSHIP)).toBe(true);
+    expect(hasCapability("ANALYST", C.MANAGE_OWNERSHIP_MAPPINGS)).toBe(false);
+  });
+});
+
+describe("P2-T1 ownership capability grants", () => {
+  it("manage:ownership-mappings is ADMIN only", () => {
+    expect(hasCapability("ADMIN", C.MANAGE_OWNERSHIP_MAPPINGS)).toBe(true);
+    expect(hasCapability("ANALYST", C.MANAGE_OWNERSHIP_MAPPINGS)).toBe(false);
+    expect(hasCapability("REVIEWER", C.MANAGE_OWNERSHIP_MAPPINGS)).toBe(false);
+    expect(hasCapability("VIEWER", C.MANAGE_OWNERSHIP_MAPPINGS)).toBe(false);
+  });
+
+  it("override:finding-ownership is ADMIN and ANALYST only", () => {
+    expect(hasCapability("ADMIN", C.OVERRIDE_FINDING_OWNERSHIP)).toBe(true);
+    expect(hasCapability("ANALYST", C.OVERRIDE_FINDING_OWNERSHIP)).toBe(true);
+    expect(hasCapability("REVIEWER", C.OVERRIDE_FINDING_OWNERSHIP)).toBe(false);
+    expect(hasCapability("VIEWER", C.OVERRIDE_FINDING_OWNERSHIP)).toBe(false);
   });
 });
 

@@ -53,6 +53,7 @@ const {
   createRawReportRecordOrResolveExisting,
   CLASSIFICATION,
 } = require("./reportIdentityService");
+const { resolveOneFinding } = require("../ownership/findingOwnershipService");
 const { AUDIT_OUTCOMES, safeLogAuditEvent } = require("../auditService");
 const env = require("../../config/env");
 
@@ -278,6 +279,26 @@ async function audit(client, auditContext, event) {
     await safeLogAuditEvent({ ...auditContext, ...event }, { client });
   } catch (error) {
     console.error("Report ingestion audit failed", { name: error && error.name });
+  }
+}
+
+// P2-T1 — local ownership resolution, triggered once per Finding group after
+// that group's dedupService transaction has already committed (never inside
+// it: findingOwnershipService.resolveOneFinding opens its own separate
+// SERIALIZABLE transaction). An ownership failure must never block, fail, or
+// roll back ingestion — resolveOneFinding already writes its own
+// "ownership.resolution.failed" audit event before rethrowing, so this catch
+// exists purely to stop that rethrow from reaching this pipeline's own
+// try/catch (which would otherwise misclassify a pure ownership failure as a
+// report-level processing failure and mark the whole report FAILED). On
+// failure the Finding is simply left at whatever ownership state it already
+// had — visibly UNRESOLVED if this was its first observation, since no
+// FindingOwnership row is written when resolveOneFinding never completes.
+async function resolveOwnershipSafely(client, auditContext, findingId, asn) {
+  try {
+    await resolveOneFinding(findingId, { client, asn, auditContext });
+  } catch (error) {
+    console.error("Ownership resolution failed during ingestion", { name: error && error.name });
   }
 }
 
@@ -513,6 +534,20 @@ async function ingestAccessibleRdpReport(input, options = {}) {
         reopenedFindings.push(lifecycleResult.finding);
       }
 
+      // P2-T1 — local ownership resolution for this Finding, sequential and
+      // deterministic within the report, outside dedupService's own
+      // transaction (which has already committed by this point). The
+      // canonical row's own observed ASN is the only ASN input available —
+      // see findingOwnershipService.js's module header for why it is never
+      // persisted for later re-resolution.
+      // eslint-disable-next-line no-await-in-loop
+      await resolveOwnershipSafely(
+        client,
+        auditContext,
+        lifecycleResult.finding.id,
+        canonicalRow.validated.normalized ? canonicalRow.validated.normalized.asn : null
+      );
+
       // eslint-disable-next-line no-restricted-syntax
       for (const rowInGroup of group.rows) {
         // eslint-disable-next-line no-await-in-loop
@@ -615,6 +650,7 @@ module.exports = {
   INGESTION_OUTCOMES,
   NO_VALID_ROWS_REASON,
   RowEvidenceIntegrityError,
+  resolveOwnershipSafely,
   deepEqualJson,
   ingestAccessibleRdpReport,
 };

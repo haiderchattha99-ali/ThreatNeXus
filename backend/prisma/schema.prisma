@@ -42,6 +42,13 @@ model User {
   // or a finding — the actor reference is nulled instead.
   ingestedReports RawReport[] @relation("RawReportIngestedBy")
   closedFindings  Finding[]   @relation("FindingClosedBy")
+
+  // Phase 2 (P2-T1) — same SetNull-actor-reference convention: deleting a
+  // user must never destroy an AssetMapping or a FindingOwnership history
+  // row, only null the actor attribution.
+  assetMappingsCreated AssetMapping[]     @relation("AssetMappingCreatedBy")
+  assetMappingsUpdated AssetMapping[]     @relation("AssetMappingUpdatedBy")
+  ownershipOverrides   FindingOwnership[] @relation("OwnershipOverrideActor")
 }
 
 model Threat {
@@ -106,17 +113,24 @@ model Notification {
 }
 
 model Organization {
-  id            Int      @id @default(autoincrement())
+  id            Int                @id @default(autoincrement())
   name          String
   industry      String
   location      String
   contactPerson String
-  email         String   @unique
+  email         String             @unique
   phone         String?
-  securityScore Int      @default(100)
-  activeThreats Int      @default(0)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  securityScore Int                @default(100)
+  activeThreats Int                @default(0)
+  // P2-T1 — additive. Defaults to UNKNOWN so every pre-existing row stays
+  // valid without a data migration; a criticality signal for future risk
+  // scoring, never itself a risk score.
+  sector        OrganizationSector @default(UNKNOWN)
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  assetMappings     AssetMapping[]
+  findingOwnerships FindingOwnership[]
 }
 
 // ===========================================================================
@@ -262,6 +276,11 @@ model Finding {
 
   occurrences FindingOccurrence[]
 
+  // Phase 2 (P2-T1) — append-only ownership-resolution history. Restrict:
+  // ownership history is evidence and must never be orphaned by deleting the
+  // Finding it describes (Findings are never hard-deleted in this system).
+  ownershipHistory FindingOwnership[]
+
   // The locked identity key. Its index also covers indicatorValue-prefixed
   // lookups, so no separate indicatorValue index is added.
   @@unique([indicatorValue, port, protocol, reportType], name: "finding_identity")
@@ -288,4 +307,200 @@ model FindingOccurrence {
   // findingId-prefixed lookups; rawReportId needs its own index.
   @@unique([findingId, rawReportId])
   @@index([rawReportId])
+}
+
+// ===========================================================================
+// Phase 2 (P2-T1) — Ownership mapping foundation.
+//
+// Additive only. Extends Organization with `sector` (default UNKNOWN, no
+// existing row invalidated) and introduces AssetMapping (the registry of
+// IP/CIDR/ASN -> Organization claims) and FindingOwnership (append-only
+// resolution history for each Finding). No column on any Phase 0/1 model is
+// altered or removed; no Threat/Case/Notification model is touched.
+//
+// Out of scope here (later Phase 2 tasks): IOC/vulnerability enrichment, risk
+// scoring. This packet is ownership mapping and resolution only.
+// ===========================================================================
+
+// Sector/criticality classification of an Organization. A controlled enum
+// rather than a separate Sector entity/table — the approved Phase 2 decision
+// (DECISIONS.md) is that sector is a bounded, code-owned classification, not
+// an open registry an analyst can grow arbitrarily. UNKNOWN is the safe
+// default for every organization that predates this column.
+enum OrganizationSector {
+  CRITICAL_NATIONAL_INFRASTRUCTURE
+  GOVERNMENT
+  HEALTHCARE
+  FINANCE
+  ENERGY
+  TELECOM
+  EDUCATION
+  GENERAL
+  UNKNOWN
+}
+
+// What kind of indicator an AssetMapping row claims ownership over. Exactly
+// one of exactIp / (cidr + prefixLength + ipStart/ipEnd) / asn is populated,
+// matching this value — enforced at the service boundary, not by the
+// database (Prisma/Postgres cannot express a portable partial-field CHECK
+// here without raw SQL, which is out of scope for this task).
+enum AssetMappingType {
+  EXACT_IP
+  CIDR
+  ASN
+}
+
+// Provenance of an AssetMapping row. ANALYST_OVERRIDE is used where an
+// override materializes as a mapping-shaped record in listings; the
+// authoritative override state itself lives on FindingOwnership, not here.
+enum AssetMappingSource {
+  MANUAL
+  IMPORTED_RIR
+  ANALYST_OVERRIDE
+}
+
+// Honesty label on how sure an ownership resolution is. ASN attribution is
+// always LOW (it identifies an ISP/upstream, not the constituent) — never
+// upgraded regardless of how the ASN mapping itself was sourced.
+enum OwnershipConfidence {
+  CONFIRMED
+  HIGH
+  MEDIUM
+  LOW
+}
+
+// Outcome of one ownership resolution attempt for a Finding.
+enum OwnershipResolutionStatus {
+  RESOLVED
+  AMBIGUOUS
+  UNRESOLVED
+  OVERRIDDEN
+}
+
+// The registry of ownership claims: IP-exact, CIDR-range or ASN rows, each
+// pointing at one Organization. Never hard-deleted — disable via `enabled`
+// instead, so history that already resolved against a mapping stays
+// explicable (`matchedMappingId` on FindingOwnership keeps meaning even after
+// the mapping is later disabled).
+model AssetMapping {
+  id             Int              @id @default(autoincrement())
+  organizationId Int
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  mappingType    AssetMappingType
+
+  // Populated only for mappingType EXACT_IP — canonical dotted-quad display
+  // value. Service-layer-enforced, not a DB CHECK (see AssetMappingType).
+  exactIp String?
+
+  // Populated only for mappingType CIDR — canonical "a.b.c.d/n" display
+  // value plus its decomposed prefix length.
+  cidr         String?
+  prefixLength Int?
+
+  // Populated for EXACT_IP (ipStart == ipEnd) and CIDR (the full range).
+  // Unsigned-IPv4-as-BigInt so range containment is a plain numeric
+  // comparison — never a signed 32-bit trap, never parsed per lookup.
+  // Serialized back to dotted-quad/CIDR strings at the API boundary; never
+  // returned as a raw BigInt (see ipv4Cidr.js / ownership API responses).
+  ipStart BigInt?
+  ipEnd   BigInt?
+
+  // Populated only for mappingType ASN.
+  asn Int?
+
+  confidence OwnershipConfidence
+  source     AssetMappingSource
+
+  // Bounded at the service layer (see assetMappingService.js) — analyst free
+  // text, never evidence, never echoed into a log/audit unbounded.
+  provenanceNote String?
+
+  mappingConfirmed Boolean @default(false)
+  enabled          Boolean @default(true)
+
+  // Optional validity window. A mapping with both null is valid indefinitely
+  // once enabled. validUntil must not precede validFrom (service-enforced).
+  validFrom  DateTime?
+  validUntil DateTime?
+
+  createdByUserId Int?
+  createdBy       User? @relation("AssetMappingCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  updatedByUserId Int?
+  updatedBy       User? @relation("AssetMappingUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  ownershipMatches FindingOwnership[] @relation("MatchedMapping")
+
+  @@index([organizationId])
+  @@index([mappingType, enabled])
+  @@index([asn])
+  @@index([ipStart, ipEnd])
+}
+
+// Append-only ownership-resolution history for a Finding. Every resolution
+// attempt — automatic (ingestion/mapping-change re-resolution) or an analyst
+// override apply/clear — inserts a new row; existing rows are NEVER updated
+// or deleted (only `supersededAt`/`currentForFindingId` change on the row
+// being superseded, in the same transaction that inserts its replacement).
+//
+// Current-row invariant: at most one row per Finding is "current". A current
+// row has currentForFindingId == findingId; every superseded row has it set
+// back to null. Because Prisma/Postgres treat multiple NULLs in a unique
+// column as distinct, a plain `@unique` column expresses "at most one current
+// row per Finding" with no raw SQL and no partial index — see
+// findingOwnershipService.js for the transactional supersede-then-insert.
+model FindingOwnership {
+  id        Int     @id @default(autoincrement())
+  findingId Int
+  finding   Finding @relation(fields: [findingId], references: [id], onDelete: Restrict)
+
+  // Null only for UNRESOLVED (and, transiently, an AMBIGUOUS result with more
+  // than one candidate organization).
+  organizationId Int?
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  status OwnershipResolutionStatus
+
+  // Null for UNRESOLVED/AMBIGUOUS (there is no single confidence to report).
+  confidence OwnershipConfidence?
+
+  matchedMappingId    Int?
+  matchedMapping      AssetMapping? @relation("MatchedMapping", fields: [matchedMappingId], references: [id], onDelete: Restrict)
+  matchedPrefixLength Int?
+
+  // How many distinct-organization candidates were found at the winning
+  // tier. 0 for UNRESOLVED, 1 for RESOLVED/OVERRIDDEN, >1 for AMBIGUOUS.
+  candidateCount Int @default(0)
+
+  // True only when this result came from an ASN mapping — the "this is only
+  // an ISP, not the constituent" honesty flag from BUILD_PLAN.md.
+  isIspAttribution Boolean @default(false)
+
+  // Stable machine-readable reason (OWNERSHIP_UNSUPPORTED_INDICATOR,
+  // OWNERSHIP_NO_MATCH, OWNERSHIP_AMBIGUOUS_EXACT_IP, etc.) — see
+  // ownershipResolver.js REASON_CODES. Never free text.
+  reasonCode String
+
+  resolvedAt DateTime @default(now())
+  // The point in time resolution was evaluated against mapping validity
+  // windows — normally resolvedAt, but kept distinct so a future replay can
+  // resolve "as of" an arbitrary time without conflating the two concepts.
+  asOf       DateTime
+
+  supersededAt        DateTime?
+  currentForFindingId Int?      @unique
+
+  // Analyst-override provenance. Populated only when status == OVERRIDDEN
+  // (apply) or when this row records an override being cleared.
+  overrideActorUserId   Int?
+  overrideActor         User?   @relation("OwnershipOverrideActor", fields: [overrideActorUserId], references: [id], onDelete: SetNull)
+  overrideJustification String?
+
+  createdAt DateTime @default(now())
+
+  @@index([findingId])
+  @@index([status])
+  @@index([organizationId])
 }

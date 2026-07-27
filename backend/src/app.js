@@ -14,6 +14,8 @@ const dashboardRoutes = require("./routes/dashboardRoutes");
 const caseRoutes = require("./routes/caseRoutes");
 const notificationRoutes = require("./routes/notificationRoutes");
 const organizationRoutes = require("./routes/organizationRoutes");
+const ownershipRoutes = require("./routes/ownershipRoutes");
+const findingOwnershipRoutes = require("./routes/findingOwnershipRoutes");
 const app = express();
 
 const allowedOrigins = env.CORS_ORIGIN.split(",")
@@ -44,6 +46,8 @@ app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/cases", caseRoutes);
 app.use("/api/notifications", notificationRoutes);
 app.use("/api/organizations", organizationRoutes);
+app.use("/api/ownership", ownershipRoutes);
+app.use("/api/findings", findingOwnershipRoutes);
 // Home Route
 app.get("/", (req, res) => {
   res.json({
