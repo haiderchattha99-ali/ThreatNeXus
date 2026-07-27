@@ -526,26 +526,36 @@ async function calculateCoverage(options = {}) {
     ispAttribution: 0,
     ambiguous: 0,
     unresolved: 0,
+    unknown: 0,
   };
   let totalResolutions = 0;
 
+  // Classification priority (most-specific/most-urgent first): a status of
+  // OVERRIDDEN/AMBIGUOUS/UNRESOLVED always wins over isIspAttribution, since
+  // the ASN tier can itself produce AMBIGUOUS (two orgs sharing one ASN —
+  // see ownershipResolver.js's decideAtTier) and that row must still be
+  // counted as ambiguous, never miscounted as a settled ISP attribution.
+  // Only a RESOLVED row's isIspAttribution/reasonCode decide its sub-bucket.
+  // Any state this ladder doesn't recognise falls into `unknown` rather than
+  // silently vanishing from the totals.
   grouped.forEach((row) => {
     const n = row._count._all;
     totalResolutions += n;
-    if (row.isIspAttribution) {
-      counts.ispAttribution += n;
-      return;
-    }
+
     if (row.status === OWNERSHIP_RESOLUTION_STATUS.OVERRIDDEN) {
       counts.resolvedOverride += n;
-    } else if (row.status === OWNERSHIP_RESOLUTION_STATUS.RESOLVED && row.reasonCode === REASON_CODES.EXACT_IP_MATCH) {
-      counts.resolvedExactIp += n;
-    } else if (row.status === OWNERSHIP_RESOLUTION_STATUS.RESOLVED && row.reasonCode === REASON_CODES.CIDR_MATCH) {
-      counts.resolvedCidr += n;
     } else if (row.status === OWNERSHIP_RESOLUTION_STATUS.AMBIGUOUS) {
       counts.ambiguous += n;
     } else if (row.status === OWNERSHIP_RESOLUTION_STATUS.UNRESOLVED) {
       counts.unresolved += n;
+    } else if (row.status === OWNERSHIP_RESOLUTION_STATUS.RESOLVED && row.isIspAttribution) {
+      counts.ispAttribution += n;
+    } else if (row.status === OWNERSHIP_RESOLUTION_STATUS.RESOLVED && row.reasonCode === REASON_CODES.EXACT_IP_MATCH) {
+      counts.resolvedExactIp += n;
+    } else if (row.status === OWNERSHIP_RESOLUTION_STATUS.RESOLVED && row.reasonCode === REASON_CODES.CIDR_MATCH) {
+      counts.resolvedCidr += n;
+    } else {
+      counts.unknown += n;
     }
   });
 
@@ -559,6 +569,7 @@ async function calculateCoverage(options = {}) {
     ispAttribution: counts.ispAttribution,
     ambiguous: counts.ambiguous,
     unresolved: counts.unresolved,
+    unknown: counts.unknown,
     mappingRegistry: {
       enabledMappings: enabledMappingCount,
       confirmedEnabledMappings: confirmedEnabledMappingCount,

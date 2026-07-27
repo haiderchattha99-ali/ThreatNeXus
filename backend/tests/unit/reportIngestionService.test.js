@@ -813,6 +813,100 @@ describe("ingestAccessibleRdpReport — input validation", () => {
   });
 });
 
+describe("ingestAccessibleRdpReport — ownership-resolution failure isolation (P2-H1)", () => {
+  // findingOwnershipService.resolveOneFinding opens its own transaction AFTER
+  // recordFindingObservation's own transaction has already committed (see
+  // reportIngestionService.js's module-level note above
+  // resolveOwnershipSafely). These tests inject a failure at that later,
+  // already-committed point and prove it is fully isolated: ingestion still
+  // succeeds, every already-written row survives untouched, no partial
+  // FindingOwnership row is created, and the failure is auditable without
+  // leaking the raw underlying error text.
+  const RAW_DB_ERROR_TEXT = "FATAL: connection to ownership replica 10.99.0.1 terminated unexpectedly";
+
+  function withFailingOwnershipStore(client) {
+    client.findingOwnership = {
+      findUnique: vi.fn(async () => {
+        throw new Error(RAW_DB_ERROR_TEXT);
+      }),
+      findMany: vi.fn(async () => []),
+      create: vi.fn(),
+      update: vi.fn(),
+      groupBy: vi.fn(async () => []),
+    };
+    return client;
+  }
+
+  it("a fully valid report still completes and links its row when ownership resolution fails after the lifecycle transaction commits", async () => {
+    const { client, rawReports, rawReportRows, findings, occurrences, auditLogs } = createFakeClient();
+    withFailingOwnershipStore(client);
+    const fileBytes = buildCsv([
+      { timestamp: "2026-01-01T00:00:00Z", ip: "203.0.113.80", port: "3389", protocol: "tcp" },
+    ]);
+
+    const result = await ingestAccessibleRdpReport({ fileBytes, ...baseUpload() }, { client });
+
+    expect(result.outcome).toBe(INGESTION_OUTCOMES.PROCESSED);
+    expect(result.report.status).toBe("COMPLETED");
+
+    expect(rawReports.size).toBe(1);
+    expect(findings.size).toBe(1);
+    expect(occurrences.size).toBe(1);
+
+    const [row] = [...rawReportRows.values()];
+    expect(row.status).toBe("VALID");
+    expect(row.findingOccurrenceId).not.toBeNull();
+
+    // No FindingOwnership history was partially written.
+    expect(client.findingOwnership.create).not.toHaveBeenCalled();
+
+    // The failure is auditable via the designed safe path...
+    const ownershipFailures = auditLogs.filter((e) => e.action === "ownership.resolution.failed");
+    expect(ownershipFailures).toHaveLength(1);
+    expect(ownershipFailures[0].outcome).toBe("FAILURE");
+
+    // ...but never carries the raw underlying database error text.
+    const serialized = JSON.stringify(auditLogs);
+    expect(serialized).not.toContain(RAW_DB_ERROR_TEXT);
+
+    // The report-level outcome is unaffected: ingestion still reports its own
+    // success terminal event, not a report-level failure.
+    expect(auditLogs.filter((e) => e.action === "report.ingestion.completed")).toHaveLength(1);
+    expect(auditLogs.filter((e) => e.action === "report.ingestion.failed")).toHaveLength(0);
+  });
+
+  it("a partially valid report still reaches PARTIALLY_VALID (not FAILED) when ownership resolution fails on the valid row's group", async () => {
+    const { client, rawReports, rawReportRows, findings, auditLogs } = createFakeClient();
+    withFailingOwnershipStore(client);
+    const fileBytes = buildCsv([
+      { timestamp: "2026-01-01T00:00:00Z", ip: "203.0.113.81", port: "3389", protocol: "tcp" },
+      { timestamp: "2026-01-01T00:05:00Z", ip: "not-an-ip", port: "3389", protocol: "tcp" },
+    ]);
+
+    const result = await ingestAccessibleRdpReport({ fileBytes, ...baseUpload() }, { client });
+
+    expect(result.outcome).toBe(INGESTION_OUTCOMES.PROCESSED);
+    expect(result.report.status).toBe("PARTIALLY_VALID");
+    expect(result.report.validRows).toBe(1);
+    expect(result.report.invalidRows).toBe(1);
+
+    expect(rawReports.get(1).status).toBe("PARTIALLY_VALID");
+    expect(findings.size).toBe(1);
+
+    // The ownership failure never reclassifies the valid row as INVALID.
+    const validRow = [...rawReportRows.values()].find((r) => r.status === "VALID");
+    expect(validRow).toBeDefined();
+    expect(validRow.findingOccurrenceId).not.toBeNull();
+    const invalidRow = [...rawReportRows.values()].find((r) => r.status === "INVALID");
+    expect(invalidRow).toBeDefined();
+
+    expect(client.findingOwnership.create).not.toHaveBeenCalled();
+    expect(auditLogs.filter((e) => e.action === "ownership.resolution.failed")).toHaveLength(1);
+    const serialized = JSON.stringify(auditLogs);
+    expect(serialized).not.toContain(RAW_DB_ERROR_TEXT);
+  });
+});
+
 describe("RowEvidenceIntegrityError", () => {
   it("is a distinguishable Error subclass carrying no raw evidence in its message", () => {
     const error = new RowEvidenceIntegrityError(1, 5);

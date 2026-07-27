@@ -204,22 +204,32 @@ describe("resolveOwnership — CIDR tier / longest-prefix", () => {
     expect(result.candidateCount).toBe(1);
   });
 
+  // Every row's indicator is chosen to actually fall inside its CIDR, so
+  // every row resolves and every row asserts — a row that returned early
+  // without asserting anything (as the old table's /23 and /15 rows did)
+  // would pass while proving nothing. Boundary cases required by P2-H1:
+  // /32 and /24 -> HIGH, /23 and /16 -> MEDIUM, /15 and /0 -> LOW.
   it.each([
-    ["203.0.113.0/24", 24, OWNERSHIP_CONFIDENCE.HIGH],
-    ["203.0.113.0/32", 32, OWNERSHIP_CONFIDENCE.HIGH],
-    ["203.0.0.0/16", 16, OWNERSHIP_CONFIDENCE.MEDIUM],
-    ["203.0.0.0/23", 23, OWNERSHIP_CONFIDENCE.MEDIUM],
-    ["128.0.0.0/1", 1, OWNERSHIP_CONFIDENCE.LOW],
-    ["0.0.0.0/0", 0, OWNERSHIP_CONFIDENCE.LOW],
-    ["128.0.0.0/15", 15, OWNERSHIP_CONFIDENCE.LOW],
-  ])("exact confidence table: %s -> %s", (cidr, prefixLength, expectedConfidence) => {
-    const result = resolveOwnership(
-      { indicatorValue: "203.0.113.10", asOf: ASOF },
-      { mappings: [cidrMapping(cidr, 1)] }
-    );
-    if (result.status !== OWNERSHIP_RESOLUTION_STATUS.RESOLVED) return; // narrow ranges may not contain the test IP
-    expect(result.confidence).toBe(expectedConfidence);
-  });
+    ["203.0.113.10", "203.0.113.10/32", 32, OWNERSHIP_CONFIDENCE.HIGH],
+    ["203.0.113.10", "203.0.113.0/24", 24, OWNERSHIP_CONFIDENCE.HIGH],
+    ["203.0.113.10", "203.0.112.0/23", 23, OWNERSHIP_CONFIDENCE.MEDIUM],
+    ["203.0.113.10", "203.0.0.0/16", 16, OWNERSHIP_CONFIDENCE.MEDIUM],
+    ["203.0.113.10", "203.0.0.0/15", 15, OWNERSHIP_CONFIDENCE.LOW],
+    ["203.0.113.10", "0.0.0.0/0", 0, OWNERSHIP_CONFIDENCE.LOW],
+  ])(
+    "exact confidence table: %s in %s -> prefix %i, %s",
+    (indicatorValue, cidr, prefixLength, expectedConfidence) => {
+      const result = resolveOwnership(
+        { indicatorValue, asOf: ASOF },
+        { mappings: [cidrMapping(cidr, 42)] }
+      );
+      expect(result.status).toBe(OWNERSHIP_RESOLUTION_STATUS.RESOLVED);
+      expect(result.organizationId).toBe(42);
+      expect(result.confidence).toBe(expectedConfidence);
+      expect(result.matchedPrefixLength).toBe(prefixLength);
+      expect(result.isIspAttribution).toBe(false);
+    }
+  );
 });
 
 describe("resolveOwnership — ASN tier", () => {

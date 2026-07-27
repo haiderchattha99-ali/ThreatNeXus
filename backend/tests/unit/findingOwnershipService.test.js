@@ -492,4 +492,45 @@ describe("calculateCoverage", () => {
     expect(coverage.mappingRegistry.confirmedMappingShare).toBeNull();
     expect(coverage.totalFindings).toBe(0);
   });
+
+  it("classifies a conflicting-ASN AMBIGUOUS resolution as ambiguous, never as settled ISP attribution (P2-H1 regression)", async () => {
+    const client = createFakeClient();
+
+    seedFinding(client, 1, "203.0.119.10");
+    seedOrganization(client, 1);
+    seedOrganization(client, 2);
+
+    // Two distinct organizations mapped to the SAME ASN: resolveOwnership's
+    // ASN tier (ownershipResolver.js decideAtTier) produces AMBIGUOUS with
+    // isIspAttribution still true — the exact state calculateCoverage must
+    // not miscount as a settled ISP/ASN attribution.
+    const asnMappingA = {
+      id: nextMappingId++,
+      organizationId: 1,
+      mappingType: "ASN",
+      ipStart: null,
+      ipEnd: null,
+      prefixLength: null,
+      asn: 64999,
+      enabled: true,
+      mappingConfirmed: false,
+      validFrom: null,
+      validUntil: null,
+    };
+    const asnMappingB = { ...asnMappingA, id: nextMappingId++, organizationId: 2 };
+    client._stores.assetMappings.set(asnMappingA.id, asnMappingA);
+    client._stores.assetMappings.set(asnMappingB.id, asnMappingB);
+
+    const outcome = await resolveOneFinding(1, { client, asn: 64999, asOf: ASOF });
+    expect(outcome.current.status).toBe("AMBIGUOUS");
+    expect(outcome.current.isIspAttribution).toBe(true);
+    expect(outcome.current.candidateCount).toBe(2);
+
+    const coverage = await calculateCoverage({ client });
+
+    expect(coverage.ambiguous).toBe(1);
+    expect(coverage.ispAttribution).toBe(0);
+    expect(coverage.unknown).toBe(0);
+    expect(coverage.findingsWithResolution).toBe(1);
+  });
 });

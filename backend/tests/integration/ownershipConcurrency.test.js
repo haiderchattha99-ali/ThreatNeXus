@@ -192,22 +192,49 @@ describeDb("P2-T1 ownership — real PostgreSQL", () => {
     });
   }, 60000);
 
-  it("5. Organization FK Restrict: cannot be deleted while referenced by an AssetMapping or a FindingOwnership", async () => {
-    const org = await makeOrganization("fk-org");
+  it("5a. Organization FK Restrict via AssetMapping: cannot be deleted while an AssetMapping references it", async () => {
+    const org = await makeOrganization("fk-org-mapping");
     const ip = `${IP_PREFIX}14`;
-    const finding = await makeFinding(ip);
     await createAssetMapping(
       { organizationId: org.id, mappingType: "EXACT_IP", exactIp: ip, confidence: "HIGH", source: "MANUAL" },
       { client: prisma }
     );
+    // No Finding/FindingOwnership involved at all — isolates AssetMapping's
+    // own organizationId Restrict relation from FindingOwnership's.
 
     await expect(prisma.organization.delete({ where: { id: org.id } })).rejects.toMatchObject({
       code: "P2003",
     });
+  }, 60000);
 
-    // Even after the mapping is disabled (never deleted), a resolved
-    // FindingOwnership row's organizationId FK still protects the org.
-    await resolveOneFinding(finding.id, { client: prisma, asOf: new Date("2026-06-01T00:00:00Z") });
+  it("5b. Organization FK Restrict via FindingOwnership: still blocks deletion once no AssetMapping references the org", async () => {
+    const org = await makeOrganization("fk-org-ownership");
+    const unusedMappingIp = `${IP_PREFIX}19`;
+    const ip = `${IP_PREFIX}20`;
+    const finding = await makeFinding(ip);
+
+    // A mapping is created for this org and then hard-deleted directly
+    // (never resolved against, so no FindingOwnership.matchedMappingId ever
+    // references it — see test 4's proof that a referenced mapping cannot be
+    // deleted). Once gone, AssetMapping no longer provides any blocking
+    // condition for this org at all.
+    const unusedMapping = await createAssetMapping(
+      { organizationId: org.id, mappingType: "EXACT_IP", exactIp: unusedMappingIp, confidence: "HIGH", source: "MANUAL" },
+      { client: prisma }
+    );
+    await prisma.assetMapping.delete({ where: { id: unusedMapping.id } });
+    const remainingMappings = await prisma.assetMapping.count({ where: { organizationId: org.id } });
+    expect(remainingMappings).toBe(0);
+
+    // The only remaining reference to this org is a FindingOwnership row
+    // written by an analyst override (matchedMappingId null — no AssetMapping
+    // involved at all), so this isolates FindingOwnership.organizationId's
+    // own Restrict relation.
+    await applyOverride(finding.id, org.id, "isolating the FindingOwnership FK", {
+      client: prisma,
+      asOf: new Date("2026-06-01T00:00:00Z"),
+    });
+
     await expect(prisma.organization.delete({ where: { id: org.id } })).rejects.toMatchObject({
       code: "P2003",
     });
