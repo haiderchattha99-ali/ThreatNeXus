@@ -5,10 +5,133 @@ _Operational status / handoff note. Authoritative plan lives in
 
 ## Current
 
-- **Branch:** `feat/phase-1-ingestion` — **merged into `main`** (see "Phase 1 release audit" below).
-- **Latest Phase 1 commit:** `e2feeb4` — `docs(phase-1): record P1-GATE completion in STATUS.md and README`
-- **Phase:** Phase 1 (Ingest → Finding) is **complete, gate-complete, audited and merged**. Phase 0 + pre-Phase-1 hardening were merged earlier (PR #1, PR #2 / `87178cd`).
-- **Next phase:** Phase 2 — ownership mapping, IOC/vulnerability enrichment, deterministic risk scoring. Branch `feat/phase-2-enrichment-risk` created; no Phase 2 implementation has started.
+- **Branch:** `feat/phase-2-enrichment-risk` — pushed, not yet merged (no PR opened per the P2-T1 task
+  scope; Phase 1 remains merged into `main`, see "Phase 1 release audit" below).
+- **Phase:** Phase 1 (Ingest → Finding) is **complete, gate-complete, audited and merged**. Phase 2's
+  first task, **P2-T1 (ownership mapping)**, is **complete** — see "Completed — P2-T1" below.
+- **Next task: P2-T2 — IOC reputation enrichment** (`AbuseIPDBProvider` behind a provider abstraction,
+  with `MockProvider` for every automated test; enrichment failure must never block ingestion).
+
+## Completed — P2-T1 (ownership mapping, deterministic resolution, analyst override)
+
+Additive schema + full resolution pipeline for `AssetMapping` (the IP/CIDR/ASN → Organization
+registry) and `FindingOwnership` (append-only per-Finding resolution history), wired into ingestion
+and exposed through capability-guarded management APIs. Full decision record: `DECISIONS.md` D-006.
+
+**Migration:** `20260727073537_add_phase2_ownership_mapping` — one additive migration (`CREATE
+TYPE`/`ALTER TABLE ADD COLUMN`/`CREATE TABLE`/`CREATE INDEX`/`ADD FOREIGN KEY` only; no raw SQL, no
+partial index, no destructive change). Adds `Organization.sector` (default `UNKNOWN`), `AssetMapping`,
+`FindingOwnership`, and five new enums (`OrganizationSector`, `AssetMappingType`,
+`AssetMappingSource`, `OwnershipConfidence`, `OwnershipResolutionStatus`).
+
+**IPv4/CIDR arithmetic** (`backend/src/services/ownership/ipv4Cidr.js`, pure, no Prisma): strict
+four-octet parsing (rejects leading zeros, signs, whitespace, hex, IPv6, CIDR-suffixed and hostname
+forms), BigInt throughout so no signed-32-bit trap exists for addresses ≥ `128.0.0.0`, `cidrToRange`/
+`rangeContains`/`canonicalizeCidr` for range math, `intToIpv4` as the one function every API response
+path must go through so a raw BigInt can never reach a client. 33 unit tests.
+
+**Ownership resolver** (`ownershipResolver.js`, pure, no Prisma): `resolveOwnership({indicatorValue,
+asn, asOf}, {mappings, currentOverride})`. Fixed precedence — override → exact IP → longest-prefix
+CIDR → ASN → unresolved (see D-006 for the exact ambiguity/confidence rules). 29 unit tests covering
+precedence, longest-prefix tie-breaking, duplicate-mapping-is-not-ambiguity, the exact confidence
+table, activity-window boundaries (validFrom inclusive / validUntil exclusive), and array-order
+independence.
+
+**AssetMapping registry** (`assetMappingService.js`): create/update/disable/list, with every
+type-coherence rule (`EXACT_IP` requires exactly one strict IPv4; `CIDR` requires one canonical
+CIDR + derived range; `ASN` requires one positive integer; irrelevant fields always null;
+`validUntil` cannot precede `validFrom`) enforced at the service boundary — Prisma/Postgres cannot
+express the underlying "exactly one of three field groups" rule as a portable CHECK without raw SQL.
+Never hard-deletes; `disableAssetMapping` only flips `enabled`. 28 unit tests.
+
+**FindingOwnership resolution + override service** (`findingOwnershipService.js`): `resolveOneFinding`,
+`reResolveFindingsForMapping`, `applyOverride`, `clearOverride`, `getFindingOwnership`,
+`calculateCoverage`. The current-row invariant uses `currentForFindingId Int? @unique` — Postgres
+treats multiple NULLs in a unique column as distinct, so no raw SQL or partial index was needed (see
+D-006). Supersede-then-insert runs inside one SERIALIZABLE transaction with bounded whole-transaction
+retry on P2002/P2034, mirroring the P1-T4 dedup-service concurrency repair exactly, for the same
+reason (a caught constraint violation leaves the surrounding transaction aborted on Postgres).
+Re-resolving to an identical effective outcome writes nothing. `applyOverride`/`clearOverride` always
+write a new row (an explicit analyst action with its own justification is never deduplicated against
+the current outcome) and `clearOverride` reverts to whatever the automatic resolver currently produces
+— never unconditionally back to `UNRESOLVED`. Coverage reports every category separately (resolved by
+exact IP, by CIDR, by override, ISP/ASN attribution, ambiguous, unresolved, confirmed-mapping share)
+— never one collapsed "percentage mapped" figure, per `BUILD_PLAN.md`. 20 unit tests.
+
+**Ingestion integration** (`reportIngestionService.js`): after each Finding group's
+`recordFindingObservation` call commits (dedupService's own transaction has already closed by then),
+`resolveOwnershipSafely` runs sequentially, passing the canonical row's own observed ASN. Any failure
+is caught and never reaches the ingestion pipeline's own try/catch — `resolveOneFinding` already
+writes its own `ownership.resolution.failed` audit event before rethrowing; this second catch exists
+purely so that rethrow can never misclassify a pure ownership failure as a report-level `FAILED`
+outcome. Idempotent report replay creates no duplicate ownership history (proven against real
+PostgreSQL — see below).
+
+**APIs** (capability-guarded, router-level, mounted at `/api/ownership` and `/api/findings`):
+`GET/POST /api/ownership/mappings`, `PATCH /api/ownership/mappings/:id`,
+`POST /api/ownership/mappings/:id/disable`, `GET /api/ownership/coverage`,
+`GET /api/findings/:id/ownership`, `PUT/DELETE /api/findings/:id/ownership/override`. No hard DELETE
+route exists. Mapping lists are paginated (`page`/`pageSize`, capped at 100). Every response goes
+through a serializer that never emits a raw `ipStart`/`ipEnd` BigInt.
+
+**Capabilities** (`lib/roles.js`, additive, non-hierarchical): `manage:ownership-mappings` (ADMIN
+only — mapping registry mutations) and `override:finding-ownership` (ADMIN + ANALYST — Finding
+override apply/clear). Reads (mapping list, coverage, finding ownership) reuse `read:findings`, held
+by all four roles, matching the existing Phase 0/1 convention that reads are broad and writes are
+capability-scoped.
+
+**Audits:** `ownership.mapping.created/updated/disabled` (written by the controller, mirroring
+`organizationController`'s pattern — `assetMappingService` itself has no audit side effects);
+`ownership.override.applied/cleared` and `ownership.resolution.changed/failed` (written by
+`findingOwnershipService` itself, since both the ingestion path and the manual API path need the same
+audit behaviour on both success and failure). All payloads are ids/codes/counts/bounded previews only
+— never a BigInt, never the full mapping registry, never raw evidence.
+
+**Accepted limitation:** ASN is not persisted on `Finding` or `FindingOwnership` (Phase 1's `asn` was
+already deliberately non-authoritative). ASN-tier resolution is only exercised at ingestion time, when
+the row's ASN is still in memory; `reResolveFindingsForMapping` skips ASN-type mapping changes
+explicitly (`skipped: true, reason: "ASN_NOT_PERSISTED_ON_FINDING"`) rather than silently doing
+nothing. See D-006.
+
+**Real-database regression found and fixed (pre-existing Phase 1 test infrastructure, not production
+code):** `reportIngestionConcurrency.test.js` and `eval/run_phase1_gate.js` both clean up their real-DB
+test state by deleting `Finding` rows directly. Once ingestion started writing `FindingOwnership` rows
+(`onDelete: Restrict` on `findingId`), those two cleanups began failing with a foreign-key violation,
+which — because the failure happened mid-cleanup, after `FindingOccurrence`/`RawReportRow` deletion but
+before `Finding` deletion — silently left orphaned `Finding` rows across repeated local runs (caught by
+noticing `occurrenceCount` on a fixed synthetic IP had drifted to match the exact number of times the
+suite had been re-run). Fixed by adding one additive `findingOwnership.deleteMany` line to each
+cleanup, in the same scoped-id-set style already used for every other model there. Confirmed the fix:
+stale rows manually cleared, both suites re-run together 3× with no recurrence.
+
+### Tests
+
+- **145 new unit tests**: 33 (`ipv4Cidr.test.js`) + 29 (`ownershipResolver.test.js`) + 28
+  (`assetMappingService.test.js`) + 20 (`findingOwnershipService.test.js`) + 2 new + 3 amended
+  (`roles.test.js`, P2-T1 capability grants) + existing-file coverage. All against pure functions or
+  an in-memory fake Prisma client — see each file's scope note for what they do and do not prove.
+- **37 route/RBAC tests** (`ownershipRouteAuthorization.test.js`): the full read/write matrix across
+  ADMIN/ANALYST/REVIEWER/VIEWER for every ownership endpoint; unauthenticated → 401; denied → 403
+  before any mutation with an `authorization.denied` audit and no capability name leaked in the
+  response; invalid mapping payloads rejected with 400 and no row created; no hard DELETE route;
+  pagination bounded even when a huge `pageSize` is requested; no BigInt ever reaches a JSON response.
+- **10 real-PostgreSQL tests** (`ownershipConcurrency.test.js`, self-skips without
+  `TEST_DATABASE_URL`): append-only supersede (superseded row's substantive fields untouched);
+  identical re-resolution writes nothing; three concurrent `resolveOneFinding` calls leave exactly one
+  current row; `AssetMapping`/`Organization` FK `Restrict` enforcement; override apply/clear real
+  history; re-resolution after a real mapping-validity change; CIDR longest-prefix match via actual
+  Postgres `bigint` columns (not the in-memory fake); full ingestion integration; idempotent report
+  replay writes no duplicate history. Run 3× back-to-back with no flakiness, both alone and combined
+  with the existing P1-T4/P1-T5 real-DB suites.
+- **Full backend suite:** **893 passed / 26 skipped** with no database (stable across 2 runs); **917
+  passed / 2 skipped** (only `phase1Gate.test.js`, which needs `EVAL_DATABASE_URL` specifically) with
+  `TEST_DATABASE_URL` set, run 4× — 3 clean, 1 run hit the single already-documented pre-existing
+  `dedupServiceConcurrency` out-of-order flake under heavy combined real-DB load (STATUS.md's own
+  "no-backoff bounded retry" limitation from the P1-T4 concurrency repair — reproduced standalone as
+  1/1 passing, confirming it is that known class of flake, not a P2-T1 regression, and `dedupService.js`
+  is untouched by this task).
+- **Phase 1 evaluator:** `npm run eval:phase1` — **9/9 PASS**, unchanged, confirming P2-T1 introduced
+  no Phase 1 lifecycle regression.
 
 ## Phase 1 release audit
 
@@ -951,19 +1074,22 @@ all behave exactly as documented. `npm run eval:phase1` is the durable,
 rerunnable regression check for this phase going forward.
 
 Phase 1 has since been audited (**APPROVED WITH NON-BLOCKING RISKS**) and
-merged into `main`. Work continues on `feat/phase-2-enrichment-risk`, which
-is currently empty of Phase 2 implementation.
+merged into `main`. Work continues on `feat/phase-2-enrichment-risk`.
 
-**Exact next task: a Phase 2 scope/architecture review** — read
-`BUILD_PLAN.md` §"Phase 2" and `DECISIONS.md`, and produce the task
-breakdown before writing any code, per this repo's phase-gating rule. Phase 2
-covers ownership mapping (`AssetMapping` + resolution confidence), IOC
-reputation enrichment (`AbuseIPDBProvider` behind a provider abstraction,
-with `MockProvider` for every automated test), vulnerability enrichment
-(KEV/EPSS/NVD snapshots — a separate path from IOC reputation), and
-deterministic, explainable risk scoring. Recommended first implementation
-task once scoped: **ownership mapping**, since it is the next link in the
-proposal's spine and needs no external API key.
+**Phase 2's first task, P2-T1 (ownership mapping), is now complete** — see
+"Completed — P2-T1" above and `DECISIONS.md` D-006 for the full record.
+
+**Exact next task: P2-T2 — IOC reputation enrichment.** Real `AbuseIPDBProvider`
+behind an `IocEnrichmentProvider` abstraction, with a `MockProvider` used by
+every automated test (never live quota). Required behaviour per
+`BUILD_PLAN.md` §"2A": cache results keyed by indicator with a configurable
+TTL; handle timeouts, HTTP 429/quota exhaustion, invalid keys, and provider
+outages; redact API keys from all logs and error responses; API keys from
+environment variables only; **enrichment failure must never block
+ingestion** — the `IocEnrichment` row records `FAILED`/`RATE_LIMITED` instead.
+This is a separate path from the existing KEV/EPSS/NVD vulnerability
+enrichment design (unchanged, not started) and from ownership mapping
+(P2-T1, now done) — neither substitutes for either of the others.
 
 Non-blocking carry-overs from the Phase 1 audit (none gate Phase 2): add a
 `RawReport.rawContent` byte-preservation test; fix the `cleanupUpload`
