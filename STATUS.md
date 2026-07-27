@@ -10,9 +10,11 @@ _Operational status / handoff note. Authoritative plan lives in
 - **Phase:** Phase 1 (Ingest → Finding) is **complete, gate-complete, audited and merged**. Phase 2's
   first task, **P2-T1 (ownership mapping)**, is **complete** — see "Completed — P2-T1" below.
   **P2-H1 (ownership correctness + test hardening)** is also **complete** — see "Completed — P2-H1"
-  below.
-- **Next task: P2-T2a — IOC reputation enrichment** (`AbuseIPDBProvider` behind a provider abstraction,
-  with `MockProvider` for every automated test; enrichment failure must never block ingestion).
+  below. **P2-T2a (IOC enrichment provider contract + MockProvider)** is also **complete** — see
+  "Completed — P2-T2a" below.
+- **Next task: P2-T2b — `IocEnrichment` schema, migration, and the durable queue/cache model.** No
+  `AbuseIPDBProvider`, persistence, caching, or ingestion wiring exists yet — see "Completed — P2-T2a"
+  for exactly what this packet did and did not build.
 
 ## Completed — P2-T1 (ownership mapping, deterministic resolution, analyst override)
 
@@ -198,6 +200,75 @@ injected error text never appears anywhere in the audit log.
 - Phase 1 evaluator: `npm run eval:phase1` — **9/9 PASS**, unchanged.
 - `npx prisma validate` — clean. Migration count unchanged at 10 (no migration generated).
 - `git diff --check` — clean (only benign CRLF-normalization notices, no real whitespace/conflict issues).
+
+## Completed — P2-T2a (IOC enrichment provider contract + MockProvider)
+
+Establishes a stable, provider-neutral boundary for IOC reputation enrichment (`backend/src/services/
+enrichment/`) and a deterministic offline `MockProvider`. **No persistence, no HTTP calls, no cache,
+no ingestion wiring, no migration** — this packet is the interface AbuseIPDB will implement against in
+a future packet (P2-T2b builds the durable `IocEnrichment` schema/queue/cache first). Decision record:
+`DECISIONS.md` D-002 (unchanged — this packet implements what D-002 already approved, no new decision).
+
+**Files:**
+- `iocEnrichmentTypes.js` — pure status/error taxonomy plus `createEnrichmentResult`, the single choke
+  point every provider result passes through. Validates every invariant (score/report-count bounds,
+  closed error code/message map, status/data/errorInfo consistency, bounded text fields, retryAfterSeconds
+  bounds, httpStatus bounds, a `maxAgeInDays`-only queryParams allow-list) and returns a deep-frozen,
+  defensively-copied result. Throws `TypeError` on any contract violation.
+- `iocEnrichmentProvider.js` — documents the `{name, supports(), lookup()}` contract every provider
+  must implement, `isSupportedIocIndicator` (reuses `ownership/ipv4Cidr.js`'s strict IPv4 parser —
+  no second, weaker implementation), and `assertImplementsIocEnrichmentProvider` (a minimal runtime
+  shape check the registry uses before trusting a provider).
+- `mockIocEnrichmentProvider.js` — deterministic, offline, zero network access. Fixture-configured per
+  indicator; `asOf` (always explicit, caller-supplied) is the only source of `queriedAt` — no wall-clock
+  read anywhere. An unknown, otherwise-valid IPv4 defaults to `NOT_FOUND` (configurable).
+- `providerRegistry.js` — small immutable code-level registry mirroring `reportSourceRegistry.js`'s
+  pattern (no DB-backed registry, no plugin framework, no DI container). Registers only `mock`; the
+  underlying factory map is never exported, so a consumer has no reference to mutate. Registering
+  `AbuseIPDBProvider` later is one additive entry, not a rewrite.
+
+**Status taxonomy:** `PENDING · SUCCESS · NOT_FOUND · RATE_LIMITED · INVALID_KEY · TIMEOUT · FAILED ·
+UNSUPPORTED_INDICATOR · SKIPPED_DISABLED`. **Error codes (closed, frozen map):**
+`PROVIDER_RATE_LIMITED · PROVIDER_INVALID_KEY · PROVIDER_TIMEOUT · PROVIDER_UNAVAILABLE ·
+PROVIDER_UNREACHABLE · PROVIDER_MALFORMED_RESPONSE · PROVIDER_REJECTED · UNSUPPORTED_INDICATOR ·
+ENRICHMENT_DISABLED`. `errorInfo.message` is always derived from this map by `code` alone — a
+caller-supplied message (e.g. a caught error's raw `.message`) is never read, even if present on the
+input object. This is a structural guarantee, not a convention: `createEnrichmentResult` ignores it.
+
+**MockProvider scenarios:** `SUCCESS_LOW/MEDIUM/HIGH/ZERO_CONFIDENCE`, `NOT_FOUND`, `RATE_LIMITED`
+(bounded `retryAfterSeconds`), `INVALID_KEY`, `TIMEOUT`, `FAILED_UNAVAILABLE`, `FAILED_UNREACHABLE`,
+`FAILED_MALFORMED_RESPONSE` (three distinct `FAILED`-status error codes) — plus the structural
+(non-fixture) behaviors `UNSUPPORTED_INDICATOR` (any non-IPv4/malformed/leading-zero/whitespace
+indicator) and `SKIPPED_DISABLED` (provider constructed with `enabled: false`).
+
+**Security boundary (dedicated tests in `iocEnrichmentSecurity.test.js`):** a distinctive fake secret
+placed in `queryParams`, in an unrecognised fixture field, or inside an unrelated `Error` object never
+reaches a normalized result, its JSON serialization, or the console — proven for every path, not just
+asserted. `queryParams` is allow-listed (`maxAgeInDays` only) into the result; every other key is
+silently dropped, never echoed back.
+
+**Accepted limitation carried forward from D-002/`BUILD_PLAN.md` 2A, deliberately not built here:**
+caching/TTL, HTTP calls, persistence (`IocEnrichment` row), and ingestion-pipeline wiring all require
+the schema P2-T2b introduces — building any of them against no schema would mean redoing the storage
+shape twice. `queryStatus` (the `IocEnrichment` entity's persisted field per `BUILD_PLAN.md`) is a
+distinct concept from this packet's `status` (the provider result's own field); P2-T2b maps one to the
+other, this packet does not conflate them.
+
+### Tests
+
+- **85 new unit tests**, all against pure functions / the in-memory `MockProvider` — no database, no
+  environment API key, no network. `iocEnrichmentTypes.test.js` (result-shape validation, boundaries,
+  closed error-code mapping, queryParams allow-list, immutability), `iocEnrichmentProvider.test.js`
+  (contract helpers, indicator support), `mockIocEnrichmentProvider.test.js` (every scenario,
+  determinism, call-count isolation, no-fetch/no-clock/no-console, fixture-mutation isolation),
+  `providerRegistry.test.js` (resolution, case sensitivity, prototype-pollution guard, immutability),
+  `iocEnrichmentSecurity.test.js` (the security boundary above).
+- **Targeted + ownership regression:** all pass.
+- **Full backend suite:** **1005 passed / 2 skipped** with `TEST_DATABASE_URL` set (the 2 skips are
+  `phase1Gate.test.js`, needing `EVAL_DATABASE_URL` specifically) — was 920/2, +85 from this packet.
+- **Phase 1 evaluator:** `npm run eval:phase1` — **9/9 PASS**, unchanged.
+- `npx prisma validate` clean; migration count unchanged at 10; `schema.prisma` untouched; `git diff
+  --check` clean.
 
 ## Phase 1 release audit
 
@@ -1152,17 +1223,28 @@ ownership-failure isolation is now proven by an explicit test. Automatic
 re-resolution after a mapping change (C-1/C-2) remains deferred to a future
 Opus-supervised packet and does not gate Phase 2.
 
-**Exact next task: P2-T2a — IOC reputation enrichment.** Real `AbuseIPDBProvider`
-behind an `IocEnrichmentProvider` abstraction, with a `MockProvider` used by
-every automated test (never live quota). Required behaviour per
-`BUILD_PLAN.md` §"2A": cache results keyed by indicator with a configurable
-TTL; handle timeouts, HTTP 429/quota exhaustion, invalid keys, and provider
-outages; redact API keys from all logs and error responses; API keys from
-environment variables only; **enrichment failure must never block
-ingestion** — the `IocEnrichment` row records `FAILED`/`RATE_LIMITED` instead.
-This is a separate path from the existing KEV/EPSS/NVD vulnerability
-enrichment design (unchanged, not started) and from ownership mapping
-(P2-T1, now done) — neither substitutes for either of the others.
+**P2-T2a (IOC enrichment provider contract + MockProvider) is now complete** —
+see "Completed — P2-T2a" above. The `IocEnrichmentProvider` contract,
+`createEnrichmentResult` normalized-result validator, `MockProvider`, and the
+provider registry all exist and are fully tested; no `AbuseIPDBProvider`, no
+persistence, no caching, and no ingestion wiring exist yet — those are
+P2-T2b/T2c's job.
+
+**Exact next task: P2-T2b — `IocEnrichment` schema, migration, and the
+durable queue/cache model.** Stored per lookup (`BUILD_PLAN.md` §"2A"):
+`provider · indicator · queryStatus · abuseConfidenceScore · totalReports ·
+countryCode · isp/domain · usageType · queriedAt · expiresAt · rawResponse
+(or a safely stored normalized subset) · errorInfo`. Cache results keyed by
+indicator with a configurable TTL, never re-query inside TTL. Once the schema
+exists, a following packet wires the real `AbuseIPDBProvider` (handling
+timeouts, HTTP 429/quota exhaustion, invalid keys, and provider outages —
+already modeled by this packet's status/error taxonomy) and enrichment into
+ingestion — **enrichment failure must never block ingestion**, the
+`IocEnrichment` row records `FAILED`/`RATE_LIMITED` instead. API keys from
+environment variables only, redacted from all logs and error responses. This
+is a separate path from the existing KEV/EPSS/NVD vulnerability enrichment
+design (unchanged, not started) and from ownership mapping (P2-T1/P2-H1,
+done) — neither substitutes for either of the others.
 
 Non-blocking carry-overs from the Phase 1 audit (none gate Phase 2): add a
 `RawReport.rawContent` byte-preservation test; fix the `cleanupUpload`
