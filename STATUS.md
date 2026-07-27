@@ -9,7 +9,9 @@ _Operational status / handoff note. Authoritative plan lives in
   scope; Phase 1 remains merged into `main`, see "Phase 1 release audit" below).
 - **Phase:** Phase 1 (Ingest → Finding) is **complete, gate-complete, audited and merged**. Phase 2's
   first task, **P2-T1 (ownership mapping)**, is **complete** — see "Completed — P2-T1" below.
-- **Next task: P2-T2 — IOC reputation enrichment** (`AbuseIPDBProvider` behind a provider abstraction,
+  **P2-H1 (ownership correctness + test hardening)** is also **complete** — see "Completed — P2-H1"
+  below.
+- **Next task: P2-T2a — IOC reputation enrichment** (`AbuseIPDBProvider` behind a provider abstraction,
   with `MockProvider` for every automated test; enrichment failure must never block ingestion).
 
 ## Completed — P2-T1 (ownership mapping, deterministic resolution, analyst override)
@@ -132,6 +134,70 @@ stale rows manually cleared, both suites re-run together 3× with no recurrence.
   is untouched by this task).
 - **Phase 1 evaluator:** `npm run eval:phase1` — **9/9 PASS**, unchanged, confirming P2-T1 introduced
   no Phase 1 lifecycle regression.
+
+## Completed — P2-H1 (ownership correctness + test hardening)
+
+Small corrective packet, prompted by the P2-T1 audit's non-blocking risks, before starting P2-T2a.
+No schema/migration change, no frontend change, no re-resolution/precedence redesign.
+
+**Coverage classification bug fixed** (`findingOwnershipService.js`'s `calculateCoverage`): the
+category ladder checked `row.isIspAttribution` before `row.status`, so a `FindingOwnership` row that
+was both `AMBIGUOUS` *and* `isIspAttribution: true` — the real state produced when two organizations
+map to the same ASN (`ownershipResolver.js`'s `decideAtTier` ASN tier) — was counted as a settled ISP
+attribution instead of ambiguous. Fixed by reordering the ladder to check status first
+(`OVERRIDDEN` → `AMBIGUOUS` → `UNRESOLVED` → then, only for `RESOLVED`, `isIspAttribution` → exact-IP
+→ CIDR), and added an explicit `unknown` bucket (additive field, always `0` today) so any future
+unrecognised state fails closed into a visible count rather than silently vanishing from the totals.
+New regression test in `findingOwnershipService.test.js` seeds two organizations on one ASN and
+asserts `coverage.ambiguous === 1`, `coverage.ispAttribution === 0`, `coverage.unknown === 0`.
+
+**PostgreSQL FK `Restrict` test repaired** (`ownershipConcurrency.test.js` test 5): the old test's
+comment claimed the mapping was "disabled" before the second delete attempt but never disabled or
+removed it, so both delete attempts failed for the same reason (`AssetMapping.organizationId`
+Restrict) and the test never actually exercised `FindingOwnership.organizationId`'s own Restrict
+relation. Split into two independent tests: **5a** creates only an `AssetMapping` (no Finding/
+ownership at all) and proves `AssetMapping.organizationId Restrict` alone blocks Organization
+deletion; **5b** hard-deletes an unresolved, never-referenced `AssetMapping` (proving `AssetMapping`
+no longer blocks anything for that org), then writes a `FindingOwnership` row via `applyOverride`
+(`matchedMappingId` null — no `AssetMapping` involved) and proves `FindingOwnership.organizationId
+Restrict` alone still blocks deletion. Each test fails if its respective FK is removed.
+
+**CIDR confidence-table tests repaired** (`ownershipResolver.test.js`): several `it.each` rows used a
+fixed indicator (`203.0.113.10`) against a CIDR that didn't actually contain it (e.g. `203.0.0.0/23`,
+`128.0.0.0/15`), so `resolveOwnership` returned `UNRESOLVED`, the test's early-return guard fired, and
+the row asserted nothing while still reporting PASS. Replaced with six indicator/CIDR pairs, each
+chosen so the indicator genuinely falls inside the CIDR, covering the required boundaries (`/32`,
+`/24` → HIGH; `/23`, `/16` → MEDIUM; `/15`, `/0` → LOW); every row now asserts `status`,
+`organizationId`, `confidence`, `matchedPrefixLength`, and `isIspAttribution === false`.
+
+**Ingestion ownership-failure isolation proven** (`reportIngestionService.test.js`, two new unit
+tests): inject a failure into the `findingOwnership` model *after* the Finding-lifecycle transaction
+has already committed (mirroring `resolveOwnershipSafely`'s real call site). Both a fully-valid and a
+partially-valid report still reach `PROCESSED`/`COMPLETED`/`PARTIALLY_VALID` as appropriate, every
+already-written `RawReportRow`/`Finding`/`FindingOccurrence` survives untouched and the valid row is
+never reclassified as `INVALID`, `findingOwnership.create` is never called (no partially-written
+history), the designed `ownership.resolution.failed` audit event fires exactly once, and the raw
+injected error text never appears anywhere in the audit log.
+
+### Deferred (non-blocking, tracked for a future Opus-supervised packet — not part of this gate)
+
+- Automatic re-resolution after an `AssetMapping` create/update/disable (C-1/C-2 from the P2-T1 audit).
+- Query pushdown for selecting affected Findings on a mapping change (currently full-table scan +
+  in-memory filter in `reResolveFindingsForMapping`).
+- `Organization.sector` API exposure.
+- Retry backoff for the bounded whole-transaction retry (still no-backoff, same as P1-T4's dedup
+  service).
+- Removal of `AssetMappingSource.ANALYST_OVERRIDE`.
+
+### Verification
+
+- Targeted: `findingOwnershipService.test.js`, `ownershipResolver.test.js`, `reportIngestionService.test.js` — all pass.
+- Real PostgreSQL: `ownershipConcurrency.test.js` — **11/11 PASS** (was 10; test 5 split into 5a/5b).
+- Full backend suite (with `TEST_DATABASE_URL` set): **920 passed / 2 skipped** (the 2 skips are
+  `phase1Gate.test.js`, which needs `EVAL_DATABASE_URL` specifically).
+- Phase 1 evaluator: `npm run eval:phase1` — **9/9 PASS**, unchanged.
+- `npx prisma validate` — clean. Migration count unchanged at 10 (no migration generated).
+- `git diff --check` — clean (only benign CRLF-normalization notices, no real whitespace/conflict issues).
 
 ## Phase 1 release audit
 
@@ -1079,7 +1145,14 @@ merged into `main`. Work continues on `feat/phase-2-enrichment-risk`.
 **Phase 2's first task, P2-T1 (ownership mapping), is now complete** — see
 "Completed — P2-T1" above and `DECISIONS.md` D-006 for the full record.
 
-**Exact next task: P2-T2 — IOC reputation enrichment.** Real `AbuseIPDBProvider`
+**P2-H1 (ownership correctness + test hardening) is now complete** — see
+"Completed — P2-H1" above. Coverage classification, the PostgreSQL FK Restrict
+proof, and the CIDR confidence-table tests are fixed; ingestion
+ownership-failure isolation is now proven by an explicit test. Automatic
+re-resolution after a mapping change (C-1/C-2) remains deferred to a future
+Opus-supervised packet and does not gate Phase 2.
+
+**Exact next task: P2-T2a — IOC reputation enrichment.** Real `AbuseIPDBProvider`
 behind an `IocEnrichmentProvider` abstraction, with a `MockProvider` used by
 every automated test (never live quota). Required behaviour per
 `BUILD_PLAN.md` §"2A": cache results keyed by indicator with a configurable
