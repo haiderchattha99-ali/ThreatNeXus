@@ -10,11 +10,14 @@ _Operational status / handoff note. Authoritative plan lives in
 - **Phase:** Phase 1 (Ingest → Finding) is **complete, gate-complete, audited and merged**. Phase 2's
   first task, **P2-T1 (ownership mapping)**, is **complete** — see "Completed — P2-T1" below.
   **P2-H1 (ownership correctness + test hardening)** is also **complete** — see "Completed — P2-H1"
-  below. **P2-T2a (IOC enrichment provider contract + MockProvider)** is also **complete** — see
-  "Completed — P2-T2a" below.
-- **Next task: P2-T2b — `IocEnrichment` schema, migration, and the durable queue/cache model.** No
-  `AbuseIPDBProvider`, persistence, caching, or ingestion wiring exists yet — see "Completed — P2-T2a"
-  for exactly what this packet did and did not build.
+  below. **P2-T2a (IOC enrichment provider contract + MockProvider)** is **complete** — see
+  "Completed — P2-T2a" below. **P2-T2b (`IocEnrichment` schema, migration, durable cache/queue)** is
+  also **complete** — see "Completed — P2-T2b" below.
+- **Next task: P2-T2c — cache/queue policy and AbuseIPDB provider integration.** The persistence
+  layer now exists, but **nothing calls a provider yet**: there is no `AbuseIPDBProvider`, no HTTP
+  client, no network code, no TTL policy defaults, no ingestion wiring, no routes/controllers/RBAC,
+  and no audit events on any enrichment path. See "Completed — P2-T2b" for exactly what this packet
+  did and did not build.
 
 ## Completed — P2-T1 (ownership mapping, deterministic resolution, analyst override)
 
@@ -269,6 +272,129 @@ other, this packet does not conflate them.
 - **Phase 1 evaluator:** `npm run eval:phase1` — **9/9 PASS**, unchanged.
 - `npx prisma validate` clean; migration count unchanged at 10; `schema.prisma` untouched; `git diff
   --check` clean.
+
+## Completed — P2-T2b (`IocEnrichment` schema, migration, durable cache/queue)
+
+The persistence layer for IOC reputation enrichment: an indicator-level result cache and a durable,
+leased work queue that a later packet's `AbuseIPDBProvider` plugs into. **No provider is called
+anywhere in this packet** — not even `MockProvider` — and no network code exists. Full decision
+record: `DECISIONS.md` D-007.
+
+**Migration:** `20260727210128_add_phase2_ioc_enrichment_cache_queue` — exactly one additive
+migration (two `CREATE TYPE`, one `CREATE TABLE`, five `CREATE INDEX`; no `ALTER`, no `DROP`, no
+foreign key, no partial index, no raw SQL). Migration count 10 → 11.
+
+### Schema and cache identity
+
+`IocEnrichment` plus enums `IocIndicatorType {IPV4}` and `IocEnrichmentStatus` (the nine P2-T2a
+statuses; `PENDING` is the only non-terminal one). Cache identity is
+`(provider, indicatorType, canonical indicator, normalized queryParams)` — **indicator-level, never
+Finding-level**: ten Findings on one IP share one lookup, one row and one TTL.
+
+`enrichmentCacheKey.js` is pure (no Prisma, no clock, no filesystem, no randomness). It reuses
+P2-T2a's `sanitizeQueryParams` allow-list and `ipv4Cidr.isValidIpv4`, hashes a **key-sorted
+`[key, value]` pair array** (object insertion order is explicitly not the contract) into
+`queryParamsHash`, then hashes `provider|indicatorType|indicator|queryParamsHash` into `cacheKey`.
+Provider comparison is case-sensitive — `"AbuseIPDB"` is rejected, never folded. An unknown
+parameter (an accidental API key, a nonce) is dropped before it can reach the hash input, the stored
+column, or the key.
+
+**No `rawResponse` column, no credential column.** Only the allow-listed normalized P2-T2a fields
+are persisted, and `errorMessage` is re-derived from `errorInfo.code` through the closed
+`PROVIDER_ERROR_MESSAGES` map at write time — a caught `Error.message`, a response fragment, or a
+URL carrying a key cannot reach the table even from a malformed provider. This is `BUILD_PLAN.md`
+§2A's "or a safely stored normalized subset" branch, taken deliberately.
+
+**Finding FK decision: none, deliberately.** `IocEnrichment` references no other model. A `findingId`
+FK would force one cache row per Finding and re-query the provider per Finding, burning the exact
+quota the cache protects. Because no `Restrict` FK is introduced, **no existing real-database
+cleanup path changed** — `reportIngestionConcurrency.test.js` and `eval/run_phase1_gate.js` are
+untouched, and the durable risk the P2-T1 audit flagged does not arise. Verified empirically: after
+repeated real-DB and evaluator runs, both disposable databases hold zero `IocEnrichment` rows.
+
+### Active-job uniqueness and lease semantics
+
+`activeCacheKey String? @unique` carries `cacheKey` while PENDING and `null` once terminal — the same
+mechanism as D-006's `currentForFindingId`, relying on PostgreSQL treating multiple NULLs in a unique
+index as distinct. **No raw SQL, no partial index.** Terminal rows coexist freely for one `cacheKey`,
+which is what preserves lookup history: an attempt after TTL expiry inserts a *new* row and the prior
+result stays readable.
+
+`scheduleEnrichment` returns an explicit `CACHE_HIT` / `SCHEDULED` / `ALREADY_PENDING`. It never
+calls a provider, never audits, and never throws for a safely-resolvable uniqueness race: a losing
+racer's `P2002` is recovered **outside any transaction** by re-reading committed state (bounded to 5
+attempts). That placement is the point — a constraint violation caught inside an open PostgreSQL
+transaction leaves it aborted (25P02) and every later statement fails opaquely, the defect already
+recorded for P1-T4.
+
+Claiming is one guarded `updateMany` whose WHERE names the expected lease state
+`(status, claimToken, leaseExpiresAt)`; PostgreSQL row-locks and re-evaluates it, so exactly one
+consumer wins and the rest match zero rows. `updatedAt` is **never** used as a version token.
+Completion requires the correct claim token, is guarded on `status: PENDING`, clears
+`activeCacheKey`/lease metadata, and sets `queriedAt`/`expiresAt` explicitly — so it cannot run
+twice, cannot overwrite an existing terminal result, and an expired-lease reclaim (which mints a new
+token) structurally invalidates the previous holder. `releaseClaimedJob` is the narrow abandon path
+for a worker that failed before making any provider call: the job stays durably PENDING with no
+invented result. **No retry loop and no daemon ship in this packet.**
+
+### Cache semantics
+
+Positive (`SUCCESS`) and negative (`NOT_FOUND`, `RATE_LIMITED`, `INVALID_KEY`, `TIMEOUT`, `FAILED`,
+`UNSUPPORTED_INDICATOR`, `SKIPPED_DISABLED`) results are both cached, each with its own explicit
+`expiresAt`. Caching failures is deliberate — re-hammering a provider that just returned 429 is how
+remaining quota gets burned. Freshness is the half-open window `[queriedAt, expiresAt)`; a null or
+already-past `expiresAt` means not fresh. **A cached failure is never a clean address**: the stored
+status is returned exactly, so later risk scoring can always distinguish `SUCCESS` with
+`abuseConfidenceScore: 0` (the provider looked and found nothing — real evidence) from
+`TIMEOUT`/`FAILED`/`RATE_LIMITED` (no context exists — absence of data, not evidence of safety). A
+PENDING row is never returned as cached evidence. TTL *policy* is not decided here; every TTL is
+passed in explicitly, and no provider-specific environment default was added.
+
+**No wall-clock reads anywhere in the decision path** — every time-sensitive function takes an
+explicit `now`/`asOf`, which is what makes the expiry-boundary tests exact rather than approximate.
+
+### Files
+
+`backend/prisma/schema.prisma` (+144, purely additive — zero deletions) · new migration ·
+`src/services/enrichment/enrichmentCacheKey.js` (pure identity/hashing) ·
+`iocEnrichmentCacheRules.js` (pure freshness/claimability/field-projection rules) ·
+`iocEnrichmentRepository.js` (all Prisma access) · `enrichmentQueueService.js` (scheduling
+orchestration). Nothing else in the repository was touched: no routes, no controllers, no
+capabilities, no audit events, no `env.js` change, no ingestion wiring, no frontend.
+
+### Tests
+
+- **98 new tests.** `enrichmentCacheKey.test.js` (16 — determinism, key-order stability, provider/
+  indicator/`maxAgeInDays` separation, unknown-param dropping, secret-absent-from-hash-input, strict
+  IPv4 and indicator-type validation), `iocEnrichmentCacheRules.test.js` (22 — terminal taxonomy,
+  exact freshness boundaries, claimability, allow-listed field projection, `errorMessage`
+  re-derivation, no-partial-data-on-failure), `iocEnrichmentRepository.test.js` (46 — in-memory fake
+  Prisma: cache hit/miss, exact-status passthrough, deterministic newest-result selection, schedule
+  outcomes, `P2002` recovery, claim-token enforcement, terminal immutability, release semantics),
+  `tests/integration/iocEnrichmentQueue.test.js` (14 — real PostgreSQL).
+- **Real-PostgreSQL suite has proven teeth.** The concurrency tests use **separate `PrismaClient`
+  instances** (independent connection pools), because `Promise.all` over one shared client serializes
+  enough to hide the race entirely — measured directly: with the unique index dropped, six schedulers
+  on one client still produced exactly one row, while six separate clients produced six. Verified by
+  mutation: dropping `IocEnrichment_activeCacheKey_key` fails tests 1 and 1b; removing `claimToken`
+  from the completion guard fails real tests 4 and 4b plus 2 unit tests. Both mutations were reverted
+  and the suite re-verified green.
+- **Full backend suite: 1105 passed / 0 skipped** (49 files) with `TEST_DATABASE_URL`,
+  `EVAL_DATABASE_URL` and the app env vars supplied — was 1007 total, +98 from this packet. Without a
+  database: 1064 passed / 41 skipped, so `npm test` still passes on a bare checkout.
+- **All real-PostgreSQL suites together (dedup + ingestion + phase1Gate + ownership + enrichment):
+  41/41.**
+- **Phase 1 evaluator: 9/9 PASS**, run twice, unchanged.
+- `npx prisma validate` clean · migration applied to both disposable databases with `migrate deploy`
+  (never generated against them) · exactly one migration added (10 → 11) · no raw SQL anywhere in
+  `src/`, `tests/` or the migration · `git diff --check` clean.
+
+### Not built here (P2-T2c and later)
+
+No `AbuseIPDBProvider`, no HTTP client, no network call of any kind · nothing calls `MockProvider`
+from the queue layer · no TTL policy defaults or provider-specific env additions · no ingestion
+wiring · no routes, controllers, capabilities or RBAC · no audit events · no enrichment data exposed
+through any Finding API · no automatic retry loop or daemon.
 
 ## Phase 1 release audit
 
@@ -1230,17 +1356,23 @@ provider registry all exist and are fully tested; no `AbuseIPDBProvider`, no
 persistence, no caching, and no ingestion wiring exist yet — those are
 P2-T2b/T2c's job.
 
-**Exact next task: P2-T2b — `IocEnrichment` schema, migration, and the
-durable queue/cache model.** Stored per lookup (`BUILD_PLAN.md` §"2A"):
-`provider · indicator · queryStatus · abuseConfidenceScore · totalReports ·
-countryCode · isp/domain · usageType · queriedAt · expiresAt · rawResponse
-(or a safely stored normalized subset) · errorInfo`. Cache results keyed by
-indicator with a configurable TTL, never re-query inside TTL. Once the schema
-exists, a following packet wires the real `AbuseIPDBProvider` (handling
-timeouts, HTTP 429/quota exhaustion, invalid keys, and provider outages —
-already modeled by this packet's status/error taxonomy) and enrichment into
-ingestion — **enrichment failure must never block ingestion**, the
-`IocEnrichment` row records `FAILED`/`RATE_LIMITED` instead. API keys from
+**P2-T2b (`IocEnrichment` schema, migration, durable cache/queue) is now
+complete** — see "Completed — P2-T2b" above and `DECISIONS.md` D-007. The
+indicator-level cache, the `activeCacheKey`-enforced single-active-job rule,
+claim-token leasing, terminal-result immutability and history preservation all
+exist and are proven against real PostgreSQL. **Nothing calls a provider yet.**
+
+**Exact next task: P2-T2c — cache/queue policy and AbuseIPDB provider
+integration.** That packet owns: the real `AbuseIPDBProvider` HTTP client
+behind the P2-T2a contract (handling timeouts, HTTP 429/quota exhaustion,
+invalid keys and provider outages — already modeled by the existing
+status/error taxonomy); the TTL policy that decides each terminal status's
+`expiresAt` (this packet deliberately takes every TTL as an explicit caller
+argument and adds no provider-specific environment default); the consumer that
+claims queued work, calls the provider **outside** any database transaction,
+and completes the claim; and the ingestion wiring. **Enrichment failure must
+never block ingestion** — findings are still created and the `IocEnrichment`
+row records `FAILED`/`RATE_LIMITED` instead. API keys from
 environment variables only, redacted from all logs and error responses. This
 is a separate path from the existing KEV/EPSS/NVD vulnerability enrichment
 design (unchanged, not started) and from ownership mapping (P2-T1/P2-H1,
