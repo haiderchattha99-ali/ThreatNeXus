@@ -504,3 +504,147 @@ model FindingOwnership {
   @@index([status])
   @@index([organizationId])
 }
+
+// ===========================================================================
+// Phase 2 (P2-T2b) — IOC reputation enrichment: durable cache + work queue.
+//
+// Additive only. Introduces IocEnrichment plus two enums. No column on any
+// Phase 0/1/P2-T1 model is altered, and this model deliberately has NO
+// relation to Finding (see "Cache identity" below) — nothing in the existing
+// evidence chain gains a new foreign key, so no existing real-database
+// cleanup path changes.
+//
+// Out of scope here (P2-T2c and later): the AbuseIPDBProvider HTTP client,
+// TTL policy defaults, ingestion wiring, routes/controllers, audit events.
+// This packet is the persistence layer only.
+//
+// ---------------------------------------------------------------------------
+// Cache identity is indicator-level, never Finding-level or report-level
+// ---------------------------------------------------------------------------
+// One reputation lookup answers a question about an *address*, not about a
+// Finding. Ten Findings on the same IP must share one lookup and one TTL, so
+// identity is (provider, indicatorType, indicator, normalized queryParams),
+// collapsed into the deterministic `cacheKey` (see enrichmentCacheKey.js). A
+// `findingId` FK would silently force one cache row per Finding, re-querying
+// the provider once per Finding and burning quota — so it is deliberately
+// absent. Whichever Finding motivated a lookup is a caller-side concern that
+// belongs to the P2-T2c orchestration layer, not to cache identity.
+//
+// ---------------------------------------------------------------------------
+// No raw provider response bodies, ever
+// ---------------------------------------------------------------------------
+// There is no `rawResponse` column and no credential column of any kind. Only
+// the normalized, allow-listed P2-T2a result fields are persisted (see
+// iocEnrichmentCacheRules.buildTerminalFields). `errorMessage` is re-derived
+// from the closed PROVIDER_ERROR_MESSAGES map at write time — a caught
+// Error's own `.message`, a response-body fragment, or a URL carrying an API
+// key can never reach this table. This is BUILD_PLAN.md §2A's "or a safely
+// stored normalized subset" branch, chosen deliberately over `rawResponse`.
+// ===========================================================================
+
+// Indicator types this cache can key on. IPV4 only for the MVP — matching
+// iocEnrichmentTypes.INDICATOR_TYPES exactly. Adding a type later is additive.
+enum IocIndicatorType {
+  IPV4
+}
+
+// One-to-one with iocEnrichmentTypes.ENRICHMENT_STATUS. PENDING is the single
+// non-terminal state (durable queued work); every other value is terminal and
+// may carry an explicit `expiresAt`. A terminal row is never mutated again.
+enum IocEnrichmentStatus {
+  PENDING
+  SUCCESS
+  NOT_FOUND
+  RATE_LIMITED
+  INVALID_KEY
+  TIMEOUT
+  FAILED
+  UNSUPPORTED_INDICATOR
+  SKIPPED_DISABLED
+}
+
+// One durable enrichment attempt: queued (PENDING), leased by a consumer, then
+// completed once into exactly one terminal status. Terminal rows are retained
+// as lookup history — a later attempt for the same cacheKey inserts a NEW row
+// rather than overwriting the previous result.
+model IocEnrichment {
+  id Int @id @default(autoincrement())
+
+  // --- Cache identity -----------------------------------------------------
+  // Stable lowercase provider identifier ("mock", "abuseipdb") — a string,
+  // not an enum, so adding a provider needs no migration (D-007).
+  provider        String
+  indicatorType   IocIndicatorType
+  // Canonical indicator (strict dotted-quad IPv4 for IPV4).
+  indicator       String
+  // The allow-listed, normalized query parameters actually used — never a
+  // passthrough of caller input (unknown keys, including an accidental
+  // credential, are dropped before they get here).
+  queryParams     Json
+  queryParamsHash String
+  // sha256 over the canonical (provider, indicatorType, indicator,
+  // queryParams) serialization. THE cache identity; see enrichmentCacheKey.js.
+  cacheKey        String
+
+  // --- Queue ownership ----------------------------------------------------
+  status      IocEnrichmentStatus @default(PENDING)
+  requestedAt DateTime            @default(now())
+
+  // Lease metadata. A live lease is (claimToken != null AND leaseExpiresAt >
+  // now); an expired lease is reclaimable by another consumer. `claimToken`
+  // is the ONLY completion credential — `updatedAt` is never used as a
+  // concurrency version token (that mistake is already recorded and withdrawn
+  // in STATUS.md for P1-T4).
+  claimedAt      DateTime?
+  leaseExpiresAt DateTime?
+  claimToken     String?
+
+  // "At most one active PENDING job per cacheKey", expressed as a plain
+  // Prisma unique column — the same mechanism as FindingOwnership's
+  // `currentForFindingId` (D-006). A PENDING row carries activeCacheKey ==
+  // cacheKey; completion sets it back to null. PostgreSQL treats multiple
+  // NULLs in a unique index as distinct, so any number of terminal history
+  // rows may coexist for one cacheKey while at most one is active. No raw
+  // SQL, no partial index.
+  activeCacheKey String? @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // --- Terminal result (all null while PENDING) ---------------------------
+  // queriedAt/expiresAt are always supplied explicitly by the caller — no
+  // wall-clock default. A null or already-past expiresAt means "not fresh",
+  // for a success and a failure alike: a failed lookup is never readable as a
+  // clean address.
+  queriedAt DateTime?
+  expiresAt DateTime?
+
+  // Normalized SUCCESS payload only — populated for SUCCESS, null for every
+  // other status (no partial/best-effort data on a failure).
+  abuseConfidenceScore Int?
+  totalReports         Int?
+  countryCode          String?
+  isp                  String?
+  domain               String?
+  usageType            String?
+  isWhitelisted        Boolean?
+  lastReportedAt       DateTime?
+
+  // Transport/diagnostic context. errorCode is a closed PROVIDER_ERROR_CODES
+  // value; errorMessage is re-derived from it, never caller-supplied text.
+  // retryAfterSeconds is stored as whole seconds, rounded up (never shorter
+  // than the provider asked for).
+  httpStatus        Int?
+  errorCode         String?
+  errorMessage      String?
+  retryAfterSeconds Int?
+
+  // Fresh-cache lookup: newest unexpired terminal row for one cacheKey.
+  @@index([cacheKey, status, expiresAt])
+  // Pending-work lookup, in deterministic requestedAt order.
+  @@index([status, requestedAt])
+  // Expired-lease recovery.
+  @@index([status, leaseExpiresAt])
+  // Provider/indicator lookup history.
+  @@index([provider, indicatorType, indicator, queriedAt])
+}
