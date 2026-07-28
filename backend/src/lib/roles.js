@@ -33,6 +33,15 @@ const CAPABILITIES = Object.freeze({
   // explicit-grants-per-role convention.
   MANAGE_OWNERSHIP_MAPPINGS: "manage:ownership-mappings",
   OVERRIDE_FINDING_OWNERSHIP: "override:finding-ownership",
+
+  // Phase 2 (P2-T2e-2) — IOC enrichment. Additive, non-hierarchical, same
+  // convention as above. TRIGGER_FINDING_ENRICHMENT lets an analyst ask for a
+  // fresh/forced lookup on one Finding; EXECUTE_ENRICHMENT_BATCH lets an admin
+  // run the bounded worker against the durable queue. Enrichment reads reuse
+  // READ_FINDINGS rather than a new capability — this table decides only
+  // which roles may cause work or provider spend, not which may see results.
+  TRIGGER_FINDING_ENRICHMENT: "trigger:finding-enrichment",
+  EXECUTE_ENRICHMENT_BATCH: "execute:enrichment-batch",
 });
 
 const CAPABILITY_VALUES = Object.freeze(Object.values(CAPABILITIES));
@@ -63,6 +72,10 @@ const ROLE_CAPABILITIES = Object.freeze({
     // may not touch the AssetMapping registry itself (that stays ADMIN-only
     // below, via CAPABILITY_VALUES).
     CAPABILITIES.OVERRIDE_FINDING_OWNERSHIP,
+    // P2-T2e-2 — an analyst may request/force re-enrichment on a Finding they
+    // triage, but may not run the administrator bounded-batch worker (that
+    // stays ADMIN-only below, via CAPABILITY_VALUES).
+    CAPABILITIES.TRIGGER_FINDING_ENRICHMENT,
   ]),
   ADMIN: Object.freeze([...CAPABILITY_VALUES]),
 });

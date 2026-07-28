@@ -112,12 +112,18 @@ describe("capability constants", () => {
         "delete:records",
       ])
     );
-    expect(CAPABILITY_VALUES).toHaveLength(10 + 2); // + P2-T1 ownership capabilities
+    expect(CAPABILITY_VALUES).toHaveLength(10 + 2 + 2); // + P2-T1 ownership + P2-T2e-2 enrichment
   });
 
   it("defines the P2-T1 ownership capability set", () => {
     expect(CAPABILITY_VALUES).toEqual(
       expect.arrayContaining(["manage:ownership-mappings", "override:finding-ownership"])
+    );
+  });
+
+  it("defines the P2-T2e-2 enrichment capability set", () => {
+    expect(CAPABILITY_VALUES).toEqual(
+      expect.arrayContaining(["trigger:finding-enrichment", "execute:enrichment-batch"])
     );
   });
 
@@ -180,6 +186,8 @@ describe("VIEWER capabilities", () => {
       C.MANAGE_USERS,
       C.MANAGE_SYSTEM,
       C.DELETE_RECORDS,
+      C.TRIGGER_FINDING_ENRICHMENT,
+      C.EXECUTE_ENRICHMENT_BATCH,
     ].forEach((capability) => {
       expect(hasCapability("VIEWER", capability)).toBe(false);
     });
@@ -234,6 +242,13 @@ describe("ANALYST capabilities", () => {
     expect(hasCapability("ANALYST", C.OVERRIDE_FINDING_OWNERSHIP)).toBe(true);
     expect(hasCapability("ANALYST", C.MANAGE_OWNERSHIP_MAPPINGS)).toBe(false);
   });
+
+  // P2-T2e-2: an analyst may trigger/force re-enrichment on a Finding but not
+  // run the administrator bounded-batch worker.
+  it("can trigger finding enrichment but not execute the enrichment batch worker", () => {
+    expect(hasCapability("ANALYST", C.TRIGGER_FINDING_ENRICHMENT)).toBe(true);
+    expect(hasCapability("ANALYST", C.EXECUTE_ENRICHMENT_BATCH)).toBe(false);
+  });
 });
 
 describe("P2-T1 ownership capability grants", () => {
@@ -249,6 +264,22 @@ describe("P2-T1 ownership capability grants", () => {
     expect(hasCapability("ANALYST", C.OVERRIDE_FINDING_OWNERSHIP)).toBe(true);
     expect(hasCapability("REVIEWER", C.OVERRIDE_FINDING_OWNERSHIP)).toBe(false);
     expect(hasCapability("VIEWER", C.OVERRIDE_FINDING_OWNERSHIP)).toBe(false);
+  });
+});
+
+describe("P2-T2e-2 enrichment capability grants", () => {
+  it("trigger:finding-enrichment is ADMIN and ANALYST only", () => {
+    expect(hasCapability("ADMIN", C.TRIGGER_FINDING_ENRICHMENT)).toBe(true);
+    expect(hasCapability("ANALYST", C.TRIGGER_FINDING_ENRICHMENT)).toBe(true);
+    expect(hasCapability("REVIEWER", C.TRIGGER_FINDING_ENRICHMENT)).toBe(false);
+    expect(hasCapability("VIEWER", C.TRIGGER_FINDING_ENRICHMENT)).toBe(false);
+  });
+
+  it("execute:enrichment-batch is ADMIN only", () => {
+    expect(hasCapability("ADMIN", C.EXECUTE_ENRICHMENT_BATCH)).toBe(true);
+    expect(hasCapability("ANALYST", C.EXECUTE_ENRICHMENT_BATCH)).toBe(false);
+    expect(hasCapability("REVIEWER", C.EXECUTE_ENRICHMENT_BATCH)).toBe(false);
+    expect(hasCapability("VIEWER", C.EXECUTE_ENRICHMENT_BATCH)).toBe(false);
   });
 });
 

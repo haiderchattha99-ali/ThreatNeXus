@@ -16,6 +16,8 @@ const notificationRoutes = require("./routes/notificationRoutes");
 const organizationRoutes = require("./routes/organizationRoutes");
 const ownershipRoutes = require("./routes/ownershipRoutes");
 const findingOwnershipRoutes = require("./routes/findingOwnershipRoutes");
+const findingEnrichmentRoutes = require("./routes/findingEnrichmentRoutes");
+const enrichmentBatchRoutes = require("./routes/enrichmentBatchRoutes");
 const app = express();
 
 const allowedOrigins = env.CORS_ORIGIN.split(",")
@@ -48,6 +50,8 @@ app.use("/api/notifications", notificationRoutes);
 app.use("/api/organizations", organizationRoutes);
 app.use("/api/ownership", ownershipRoutes);
 app.use("/api/findings", findingOwnershipRoutes);
+app.use("/api/findings", findingEnrichmentRoutes);
+app.use("/api/enrichment", enrichmentBatchRoutes);
 // Home Route
 app.get("/", (req, res) => {
   res.json({
