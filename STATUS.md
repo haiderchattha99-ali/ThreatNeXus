@@ -16,14 +16,15 @@ _Operational status / handoff note. Authoritative plan lives in
   policy)** is also **complete** — see "Completed — P2-T2c" below. **P2-T2d (bounded enrichment
   runner + queue completion integration)** is also **complete** — see "Completed — P2-T2d" below.
   **P2-T2e-1 (retry/dead-letter safety, runner hardening, production composition root, audited
-  execution service)** is also **complete** — see "Completed — P2-T2e-1" below.
-- **Next task: P2-T2e-2 — schedule enrichment after ingestion and add enrichment read/manual trigger
-  APIs with RBAC.** A batch can now be composed and executed against real configuration, with an
-  attempt budget, a retry gate, a DEAD_LETTER terminal state and bounded aggregate audit events —
-  but **nothing calls `executeEnrichmentBatch` yet**: no report-ingestion wiring schedules enrichment
-  work, no route/controller exposes enrichment reads or a manual trigger, and no capability guard
-  exists for anything enrichment-related. See "Completed — P2-T2e-1" for exactly what this packet did
-  and did not build.
+  execution service)** is also **complete** — see "Completed — P2-T2e-1" below. **P2-T2e-2 (ingestion
+  scheduling, safe enrichment reads, manual/forced scheduling, administrator bounded-batch execution,
+  RBAC, audits)** is also **complete** — see "Completed — P2-T2e-2" below. The IOC enrichment workflow
+  is now reachable end to end: ingestion → durable scheduling → analyst reads → manual/forced
+  re-enrichment → administrator batch execution.
+- **Next task: P2-T3 — deterministic risk scoring.** Stored factor contributions, an explanation
+  rendered from those stored values (never AI-generated), rescoring triggers, and read/trigger APIs.
+  Ownership (P2-T1/P2-H1) and IOC enrichment (P2-T2a → P2-T2e-2) are both complete and reachable; risk
+  scoring is the next distinct pipeline stage, per `BUILD_PLAN.md`/`DECISIONS.md` D-002.
 
 ## Completed — P2-T1 (ownership mapping, deterministic resolution, analyst override)
 
@@ -943,6 +944,179 @@ report-ingestion code path schedules enrichment work or invokes a batch, no rout
 trigger or reads enrichment data, no capability/RBAC guard exists for anything enrichment-related, and
 there is no daemon, cron process or worker loop anywhere in the repository. Those are **P2-T2e-2** —
 schedule enrichment after ingestion, and add enrichment read/manual-trigger APIs with RBAC.
+
+## Completed — P2-T2e-2 (ingestion scheduling, safe reads, manual/forced scheduling, administrator
+batch execution, RBAC, audits)
+
+Branch `feat/phase-2-enrichment-risk`. Closes the reachability gap P2-T2e-1 deliberately left open: the
+durable queue, AbuseIPDB provider, TTL/retry policy, bounded runner, production runtime and audited
+execution service all existed but nothing outside a unit test could reach them. This packet makes the
+whole IOC enrichment workflow reachable end to end — `report ingestion → durable enrichment scheduling
+→ analyst-safe enrichment reads → analyst manual scheduling/re-enrichment → administrator bounded batch
+execution` — while touching **zero schema/migration** (12 migrations, unchanged; `schema.prisma`
+byte-identical) and calling **no external provider anywhere in ingestion or scheduling**.
+
+**Part 1 — Ingestion scheduling (`reportIngestionService.js`).** After each Finding group's
+`recordFindingObservation`/`resolveOwnershipSafely` calls (both already committed/isolated), a new
+`scheduleEnrichmentSafely` call schedules durable enrichment through the existing
+`enrichmentQueueService.scheduleEnrichment` — once per distinct Finding group, never once per
+duplicate CSV row, since it runs from the same per-group loop iteration ownership resolution already
+uses. Provider is the fixed, non-configurable `"abuseipdb"`; `queryParams` carries only the normalized
+`{maxAgeInDays: env.ABUSEIPDB_MAX_AGE_DAYS}` (the same default the batch runner's own provider uses, so
+an ingestion-scheduled job and a later manually-scheduled job for the same indicator share one cache
+identity rather than fragmenting it); `asOf` is one explicit `new Date()` captured once per ingestion
+attempt (never a per-row `observedAt`, never read again inside any queue/cache decision function — those
+still take only explicit `asOf`/`now`, unchanged). No provider call, no HTTP request, no runner
+execution, and no `ABUSEIPDB_API_KEY` requirement anywhere in this path — `scheduleEnrichment` is a
+database-only decision.
+
+**Failure isolation mirrors `resolveOwnershipSafely` exactly.** `scheduleEnrichmentSafely` catches every
+failure (a validation error classified as `UNSUPPORTED`, anything else as `FAILED`) and never rethrows —
+ingestion continues regardless, exactly like ownership resolution. Verified structurally (a genuinely
+broken `iocEnrichment.create` cannot roll back `RawReport`/`RawReportRow`/`Finding`/`FindingOccurrence`,
+cannot convert a valid row to `INVALID`, and cannot mark the report `FAILED`) and by real-PostgreSQL
+test (scenario 3 below).
+
+**Ingestion audit — one bounded aggregate event per processed report, never one per Finding.**
+`enrichment.ingestion.schedule.completed` (or `.failed` if summarizing the already-collected counts
+itself misbehaves, a defensive branch distinct from any per-group failure) carries exactly
+`{rawReportId via entityId, distinctFindingCount, scheduledCount, cacheHitCount, alreadyPendingCount,
+unsupportedCount, failedCount, provider}` — never an indicator, cache key, claim token or raw exception
+text. Emitted only in the success tail (a `DUPLICATE_COMPLETED`/`DUPLICATE_IN_PROGRESS` short-circuit
+never reaches this code, matching the existing "report.ingestion.started" convention).
+
+**Part 2 — Safe Finding-scoped read service (`findingEnrichmentReadService.js`, new).** Because
+`IocEnrichment` is deliberately indicator-level with no `findingId` FK (D-007), this module loads the
+Finding, takes its own canonical `indicatorValue`, and queries `IocEnrichment` by
+`(provider, indicatorType, indicator)` only — never inventing a relational link. Three loaders:
+`loadCurrent` (newest **fresh** terminal row — mirrors `findFreshCachedResult`'s half-open-window rule
+but is broader than one exact cacheKey, since a read should surface the freshest evidence regardless of
+which `queryParams` variant produced it), `loadActiveJob` (newest PENDING row, if any), `loadHistory`
+(bounded, paginated, every non-PENDING row — which includes `DEAD_LETTER`, ordered by `requestedAt`
+since dead-lettered rows never carry `queriedAt`). `serializeEnrichmentRecord` is the **one** allow-list
+every row crosses before reaching an HTTP response — `cacheKey`, `queryParamsHash`, `activeCacheKey`,
+`claimToken`, `claimedAt`, `leaseExpiresAt` and any provider payload are never even read off the row, so
+a future column addition cannot leak through by default. `DEAD_LETTER` can never become `current`
+(`loadCurrent` selects only from `TERMINAL_STATUSES`, which structurally excludes it) — a dead-lettered
+job is visible only inside `history`, tagged with its own status, never presented as a clean result.
+
+**Part 3 — `GET /api/findings/:id/enrichments`.** Reuses `read:findings` (ADMIN/ANALYST/REVIEWER/VIEWER,
+the existing Finding-read matrix — no new capability for reads). Query params: `provider` (default
+`abuseipdb`), `page`, `pageSize` (capped at 100), `includeHistory` (default true, skips the paginated
+history query entirely when false). Unknown Finding → 404; invalid id/query → 400; response follows the
+existing `{success, data}` envelope. Mounted as its own router file
+(`findingEnrichmentRoutes.js`, at `/api/findings`) rather than growing
+`findingOwnershipRoutes.js` beyond its documented ownership-only scope.
+
+**Part 4 — `POST /api/findings/:id/enrichment` — manual normal/forced scheduling
+(`findingEnrichmentScheduleService.js`, new).** New capability `trigger:finding-enrichment` (ADMIN +
+ANALYST; REVIEWER/VIEWER denied). Body: `provider` (default `abuseipdb`), `maxAgeInDays` (optional,
+bounded positive integer, defaults to the same `env.ABUSEIPDB_MAX_AGE_DAYS` ingestion uses), `force`
+(default false), `justification` (**required**, 1-1000 chars, when `force=true`; optional otherwise).
+`force=false` is exactly `scheduleEnrichment` (`CACHE_HIT`/`ALREADY_PENDING`/`SCHEDULED`).
+`force=true` calls a new sibling, `scheduleEnrichmentForced` — added to `enrichmentQueueService.js` by
+extracting the shared read-decide-write loop (`scheduleEnrichmentCore`) both functions now call, so the
+cache-key construction and P2002 recovery loop are never duplicated. Forced scheduling **bypasses the
+fresh-cache short-circuit** but **never** bypasses active-job uniqueness — an existing active PENDING job
+still returns `ALREADY_PENDING` under force, and a forced `SCHEDULED` outcome only ever **inserts** a new
+row (a terminal/dead-letter row's `activeCacheKey` is already null, so it can never collide), preserving
+every prior history row untouched by construction, not by a separate check. `maxAttempts` is
+`DEFAULT_MAX_ATTEMPTS` from `iocEnrichmentCacheRules.js` — the same constant the production runtime
+itself defaults to.
+
+Audit actions `enrichment.manual.schedule.{requested,completed,failed}`. Unlike ingestion's
+must-never-fail contract, a genuine scheduling failure here **is** audited as `.failed` and then
+**re-thrown** — there is no unrelated upload to protect, and the caller needs to know. Payload allow-list:
+`findingId, provider, force, outcome, enrichmentId, justification` (bounded 200-char preview, same
+`boundedJustificationPreview` convention as `findingOwnershipService.js`) — never the indicator, cache
+key, claim token or raw error text; actor attribution comes from the standard `auditContext` columns, not
+duplicated into the payload.
+
+**Part 5 — `POST /api/enrichment/batches/run` — administrator bounded batch execution
+(`enrichmentBatchController.js`, new).** New capability `execute:enrichment-batch` (ADMIN only). Thin by
+design: the entire decision already lives in `enrichmentExecutionService.executeEnrichmentBatch` /
+`enrichmentRunner.runEnrichmentBatch`. The controller bounds `batchSize` (integer, 1..
+`MAX_PENDING_BATCH_SIZE`, defaulting to the runtime's own default when omitted), captures `now` once,
+and **generates** a `workerId` (`http-batch-<uuid>`) — the request body is never read for `workerId`,
+`provider`, an API key, a claim token or a cache key. `executeEnrichmentBatch` already owns aggregate
+batch auditing; the route creates no duplicate audit event. Response is an explicit allow-list of
+aggregate counts (`requestedBatchSize, candidateCount, claimedCount, completedCount, releasedCount,
+deadLetteredCount, heldUnknownStateCount, internalFailureCount, staleCompletionCount,
+unknownProviderCount, skippedNotClaimedCount, cancelled, statusCounts`) plus a per-job list limited to
+`{enrichmentId, provider, outcome, terminalStatus, queriedAt, expiresAt, failureClass,
+terminalReasonCode, attemptCount, maxAttempts}` — **no indicator, workerId, claim token, cacheKey,
+activeCacheKey, header or provider payload anywhere in the response.**
+
+**Part 6/7 — Configuration and RBAC.** No changes to `enrichmentRuntime.js`/`env.js`: ingestion and
+manual scheduling never build a runtime or resolve a provider at all (pure database decisions), so
+neither needs an API key. Batch execution uses the existing production runtime unmodified — the real
+AbuseIPDB provider from validated env, no MockProvider fallback, tests inject
+`runtimeOverrides.providerRegistry` or rely on the real provider's own "no key → `SKIPPED_DISABLED`,
+zero fetch" contract (P2-T2c). Two new capabilities added to `lib/roles.js`, additive and
+non-hierarchical per the file's existing convention: `trigger:finding-enrichment` (ADMIN, ANALYST) and
+`execute:enrichment-batch` (ADMIN only); enrichment reads reuse `read:findings` unchanged. Every guard is
+server-side `requireCapability`, runs before the controller (proved by route tests), and the existing
+`authorization.denied` audit path is untouched.
+
+### Verification
+
+- **Unit** (fake Prisma clients, no DB): 9 new ingestion-scheduling tests in
+  `reportIngestionService.test.js` (one-job-per-group, two-distinct-Findings, `CACHE_HIT`,
+  `ALREADY_PENDING`, swallowed failure, idempotent duplicate upload, exact aggregate audit fields, no
+  secret leakage, audit-failure isolation); 13 in `findingEnrichmentReadService.test.js` (not-found,
+  invalid id, no-result vs SUCCESS-score-0 vs fresh-FAILED/RATE_LIMITED, active job separate from
+  current, `DEAD_LETTER` never `current` but visible in history, deterministic pagination/ordering,
+  `includeHistory=false`, full serializer allow-list, canonical indicator sourced from the Finding);
+  10 in `findingEnrichmentScheduleService.test.js` (normal `CACHE_HIT`/`ALREADY_PENDING`/`SCHEDULED`,
+  not-found, forced justification requirement, forced cache bypass preserving history, forced
+  active-job uniqueness, requested/completed audit with bounded justification and no secrets,
+  audited-and-rethrown failure, broken-audit-sink isolation).
+- **Route/RBAC** (`enrichmentRouteAuthorization.test.js`, 21 tests, real routes/middleware/controllers
+  against a stubbed Prisma): read route across all 4 roles + 401/404 + no-secret-leak; manual-schedule
+  route ADMIN/ANALYST allowed, REVIEWER/VIEWER denied (403, nothing scheduled, `authorization.denied`
+  audited), 401 unauthenticated, `force=true` without justification → 400, a denied caller's forced
+  request never reaches the service; batch route ADMIN allowed (zero-candidate real execution, no
+  workerId/cacheKey/claimToken leak), ANALYST/REVIEWER/VIEWER denied with no `enrichment.batch.requested`
+  audit, 401 unauthenticated, batch-size upper-bound rejected before execution, a caller-supplied
+  `workerId` is silently ignored.
+- **Real PostgreSQL** (`enrichmentWorkflowConcurrency.test.js`, self-skips without `TEST_DATABASE_URL`,
+  dedicated `198.21.0-2.x` range distinct from every other suite's marker/IP convention, separate
+  pre-connected `PrismaClient`s for genuine concurrency, scoped batch listing by indicator prefix — the
+  same isolation technique P2-T2e-1's suites use by provider marker, adapted here because ingestion and
+  manual scheduling always use the real `"abuseipdb"` name, never a test marker): **10/10 scenarios**
+  covering (1) one report with duplicate rows → exactly one active job, correct evidence/lifecycle;
+  (2) a second report on the same Finding → no second active job; (3) an injected scheduling failure
+  rolls back nothing; (4) concurrent normal scheduling → exactly one active PENDING row; (5) concurrent
+  forced scheduling against an existing fresh terminal result → exactly one new active row, prior
+  terminal row unchanged; (6) forced recovery of a dead-lettered indicator → history preserved, one new
+  active attempt, no resurrection without the manual call; (7) batch claims and completes a scheduled
+  job, execution audit carries aggregates only; (8) a missing API key yields `SKIPPED_DISABLED` with
+  zero `fetch` calls (asserted via a throwing `global.fetch` stub), correctly readable as `current`
+  (never confused with a clean score) through the Finding enrichment service; (9) a forced
+  `auditLog.create` failure does not prevent manual scheduling or batch completion from persisting;
+  (10) a fully idempotent duplicate report upload creates no new enrichment row and exactly one
+  aggregate audit (for the original report, none for the duplicate). Stable across 3 repeated runs.
+- All P2-T2a → P2-T2e-2 enrichment real-PostgreSQL suites together (queue, runner, retry/dead-letter,
+  workflow, route authorization): **81/81 PASS**.
+- Full backend suite, real databases configured: **1417/1417 PASS** (64 files); **1350/1417 PASS, 67
+  skipped** with no database (bare checkout stays green). `roles.test.js` extended for the two new
+  capabilities (capability count 10+2 → 10+2+2; new ANALYST/ADMIN grant-matrix assertions).
+- Phase 1 evaluator: `npm run eval:phase1` — **9/9 PASS**, unchanged.
+- `npx prisma validate` clean · **12 migrations, unchanged** · `schema.prisma` **byte-identical** (no
+  diff) · no raw SQL anywhere in `src/`/`tests/` · no real network access in any test (the one place a
+  real network call could occur — the missing-key batch scenario — is asserted via a throwing `fetch`
+  stub, proving zero calls) · `git diff --check` clean (only a benign CRLF-normalization notice, the
+  same pre-existing repo convention every other file already has).
+
+### Accepted side effect (not a defect)
+
+Because ingestion now unconditionally schedules `abuseipdb` enrichment work for every Finding group it
+processes, older Phase-1-era real-PostgreSQL suites that ingest reports (e.g.
+`reportIngestionConcurrency.test.js`) will now also leave a small number of `PENDING` `IocEnrichment`
+rows in the test database — those suites predate enrichment and have no reason to clean up a table they
+don't know about. This is harmless (no assertion anywhere depends on `IocEnrichment` row counts outside
+this packet's own suite, and a stray `PENDING` row is inert until something claims it) and does not
+affect any test outcome; flagged here rather than silently left for a future session to rediscover.
 
 ## Phase 1 release audit
 
