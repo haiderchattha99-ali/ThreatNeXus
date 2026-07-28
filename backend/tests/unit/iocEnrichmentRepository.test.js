@@ -61,12 +61,22 @@ function createFakeClient() {
     return row === undefined || row === null ? null : { ...row };
   }
 
+  // Comparable scalar: Dates compare by epoch, numbers by value. Lets one
+  // set of gt/gte/lt/lte branches serve both `leaseExpiresAt` (Date) and
+  // `attemptCount` (Int) without a per-field special case.
+  function comparable(value) {
+    return value instanceof Date ? value.getTime() : value;
+  }
+
   function matchesCondition(value, condition) {
     if (condition && typeof condition === "object" && !(condition instanceof Date) && !Array.isArray(condition)) {
       if ("in" in condition) return condition.in.includes(value);
       if ("not" in condition) return value !== condition.not;
-      if ("gt" in condition) return value !== null && value !== undefined && value.getTime() > condition.gt.getTime();
-      if ("lte" in condition) return value !== null && value !== undefined && value.getTime() <= condition.lte.getTime();
+      if (value === null || value === undefined) return false;
+      if ("gt" in condition) return comparable(value) > comparable(condition.gt);
+      if ("gte" in condition) return comparable(value) >= comparable(condition.gte);
+      if ("lt" in condition) return comparable(value) < comparable(condition.lt);
+      if ("lte" in condition) return comparable(value) <= comparable(condition.lte);
       return true;
     }
     return value === condition;
@@ -75,9 +85,39 @@ function createFakeClient() {
   function matches(row, where = {}) {
     return Object.entries(where).every(([key, condition]) => {
       if (key === "OR") return condition.some((sub) => matches(row, sub));
+      if (key === "AND") return condition.every((sub) => matches(row, sub));
       return matchesCondition(row[key], condition);
     });
   }
+
+  // Prisma's atomic number operations. Applied per row so an increment always
+  // reads the row's own current value, exactly as the database would.
+  function applyUpdateData(row, data) {
+    Object.entries(data).forEach(([key, value]) => {
+      if (value && typeof value === "object" && !(value instanceof Date) && !Array.isArray(value)) {
+        if ("increment" in value) {
+          row[key] = (row[key] || 0) + value.increment;
+          return;
+        }
+        if ("decrement" in value) {
+          row[key] = (row[key] || 0) - value.decrement;
+          return;
+        }
+      }
+      row[key] = value;
+    });
+  }
+
+  // Every column the retry/dead-letter migration added, defaulted exactly as
+  // the schema does, so a seeded row behaves like a real one.
+  const RETRY_DEFAULTS = {
+    attemptCount: 0,
+    maxAttempts: 3,
+    nextAttemptAt: null,
+    lastAttemptAt: null,
+    deadLetteredAt: null,
+    terminalReasonCode: null,
+  };
 
   function compare(a, b, orderBy) {
     for (const clause of orderBy) {
@@ -104,7 +144,7 @@ function createFakeClient() {
     __seed(row) {
       const id = nextId;
       nextId += 1;
-      rows.set(id, { id, ...row });
+      rows.set(id, { id, ...RETRY_DEFAULTS, ...row });
       return clone(rows.get(id));
     },
     iocEnrichment: {
@@ -114,6 +154,7 @@ function createFakeClient() {
         assertActiveCacheKeyUnique(id, data.activeCacheKey ?? null);
         const row = {
           id,
+          ...RETRY_DEFAULTS,
           claimedAt: null,
           leaseExpiresAt: null,
           claimToken: null,
@@ -158,7 +199,8 @@ function createFakeClient() {
         const targets = [...rows.values()].filter((r) => matches(r, where));
         targets.forEach((row) => {
           if ("activeCacheKey" in data) assertActiveCacheKeyUnique(row.id, data.activeCacheKey);
-          Object.assign(row, data, { updatedAt: new Date() });
+          applyUpdateData(row, data);
+          row.updatedAt = new Date();
         });
         return { count: targets.length };
       },

@@ -48,9 +48,13 @@ const { buildEnrichmentCacheIdentity } = require("./enrichmentCacheKey");
 const {
   IocEnrichmentValidationError,
   TERMINAL_STATUSES,
+  QUEUE_STATUS,
+  ENRICHMENT_TERMINAL_REASON,
   buildTerminalFields,
   boundBatchSize,
   assertValidLeaseMs,
+  assertValidMaxAttempts,
+  assertValidTerminalReasonCode,
   isTerminalStatus,
 } = require("./iocEnrichmentCacheRules");
 
@@ -65,6 +69,15 @@ const COMPLETION_OUTCOME = Object.freeze({
 const RELEASE_OUTCOME = Object.freeze({
   RELEASED: "RELEASED",
   NOT_CLAIM_OWNER: "NOT_CLAIM_OWNER",
+});
+
+// Dead-letter outcomes. NOT_CLAIM_OWNER covers every stale/wrong credential
+// exactly as it does for completion; NOT_EXHAUSTED is the specific refusal
+// for the unleased sweep path when the row still has budget left.
+const DEAD_LETTER_OUTCOME = Object.freeze({
+  DEAD_LETTERED: "DEAD_LETTERED",
+  NOT_CLAIM_OWNER: "NOT_CLAIM_OWNER",
+  NOT_EXHAUSTED: "NOT_EXHAUSTED",
 });
 
 function resolveClient(client) {
@@ -153,6 +166,9 @@ async function createPendingJob(identityInput, options = {}) {
   const client = resolveClient(options.client);
   const requestedAt = assertValidDate(options.requestedAt, "requestedAt");
   const identity = buildEnrichmentCacheIdentity(identityInput);
+  // Bounded and persisted per job, so this job's budget cannot change under
+  // it later. Out-of-range throws rather than clamping (see the rule).
+  const maxAttempts = assertValidMaxAttempts(options.maxAttempts ?? null);
 
   return client.iocEnrichment.create({
     data: {
@@ -165,13 +181,27 @@ async function createPendingJob(identityInput, options = {}) {
       status: ENRICHMENT_STATUS.PENDING,
       requestedAt,
       activeCacheKey: identity.cacheKey,
+      // A brand-new job has spent nothing and is eligible immediately.
+      attemptCount: 0,
+      maxAttempts,
+      nextAttemptAt: null,
     },
   });
 }
 
 /**
  * Bounded, deterministically ordered list of jobs a consumer could claim as
- * of `asOf`: unclaimed PENDING rows plus PENDING rows whose lease has expired.
+ * of `asOf`: PENDING rows that are both lease-free (unclaimed, or an expired
+ * lease) and retry-eligible (`nextAttemptAt` null or already reached).
+ *
+ * DEAD_LETTER rows can never appear here: the `status: PENDING` filter
+ * excludes them structurally, and dead-lettering also clears the lease
+ * metadata, so there is no second way back in.
+ *
+ * A row that has already spent its attempt budget IS still listed. That is
+ * deliberate — it is the only way a job stranded at its limit by an earlier
+ * crash gets swept into DEAD_LETTER rather than sitting PENDING forever.
+ * `claimPendingJob` refuses it and `deadLetterExhaustedJob` retires it.
  *
  * Reading does NOT claim. Two consumers listing simultaneously will see the
  * same rows; claiming is what decides ownership.
@@ -187,9 +217,20 @@ async function listPendingCandidates(criteria = {}, options = {}) {
   return client.iocEnrichment.findMany({
     where: {
       status: ENRICHMENT_STATUS.PENDING,
-      // Lease boundary is inclusive: a lease expiring exactly at `asOf` is
-      // reclaimable, matching isClaimableRecord.
-      OR: [{ claimToken: null }, { leaseExpiresAt: { lte: asOf } }],
+      // Two independent gates, so both must hold. Expressed as an explicit
+      // AND of two ORs because a Prisma `where` may carry only one `OR` key.
+      AND: [
+        {
+          // Lease boundary is inclusive: a lease expiring exactly at `asOf`
+          // is reclaimable, matching isClaimableRecord.
+          OR: [{ claimToken: null }, { leaseExpiresAt: { lte: asOf } }],
+        },
+        {
+          // Retry boundary is inclusive too: nextAttemptAt === asOf is
+          // eligible, matching isRetryEligibleRecord.
+          OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: asOf } }],
+        },
+      ],
     },
     orderBy: [{ requestedAt: "asc" }, { id: "asc" }],
     take,
@@ -197,13 +238,25 @@ async function listPendingCandidates(criteria = {}, options = {}) {
 }
 
 /**
- * Atomically establishes a bounded lease on one PENDING job.
+ * Atomically establishes a bounded lease on one PENDING job AND consumes one
+ * unit of its attempt budget.
  *
  * Returns `{ record, claimToken }` for the single winning consumer, or null
  * for everyone else (already leased by someone with a live lease, already
- * terminal, or gone). Reclaiming an EXPIRED lease is allowed and mints a new
- * token — which is precisely what invalidates the previous holder's ability
- * to complete the job.
+ * terminal, not yet retry-eligible, budget exhausted, or gone). Reclaiming an
+ * EXPIRED lease is allowed and mints a new token — which is precisely what
+ * invalidates the previous holder's ability to complete the job.
+ *
+ * `attemptCount` is incremented by the SAME guarded statement that sets the
+ * lease, never by a follow-up write. That is what makes "attemptCount counts
+ * real attempts" true under concurrency: the loser of a claim race matches
+ * zero rows and therefore increments nothing.
+ *
+ * The budget guard compares the live `attemptCount` column against the row's
+ * own `maxAttempts`, read first. Reading it separately is safe because
+ * `maxAttempts` is immutable for the life of a row — the value is a constant
+ * in the WHERE clause, while `attemptCount` is re-evaluated by PostgreSQL at
+ * update time against the winner's committed row.
  *
  * @param {number} id
  * @param {{client?: object, now: Date, leaseMs: number}} options
@@ -214,18 +267,34 @@ async function claimPendingJob(id, options = {}) {
   const leaseMs = assertValidLeaseMs(options.leaseMs);
   assertValidId(id);
 
+  const existing = await client.iocEnrichment.findUnique({ where: { id } });
+  if (!existing || existing.status !== ENRICHMENT_STATUS.PENDING) return null;
+  const maxAttempts = Number.isInteger(existing.maxAttempts) ? existing.maxAttempts : 0;
+
   const claimToken = crypto.randomUUID();
   const leaseExpiresAt = new Date(now.getTime() + leaseMs);
 
   // The guard IS the concurrency control — a single statement whose WHERE
-  // names the lease state it expects to replace.
+  // names the lease state, the retry gate and the budget it expects.
   const { count } = await client.iocEnrichment.updateMany({
     where: {
       id,
       status: ENRICHMENT_STATUS.PENDING,
-      OR: [{ claimToken: null }, { leaseExpiresAt: { lte: now } }],
+      attemptCount: { lt: maxAttempts },
+      AND: [
+        { OR: [{ claimToken: null }, { leaseExpiresAt: { lte: now } }] },
+        { OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: now } }] },
+      ],
     },
-    data: { claimToken, claimedAt: now, leaseExpiresAt },
+    data: {
+      claimToken,
+      claimedAt: now,
+      leaseExpiresAt,
+      lastAttemptAt: now,
+      // Atomic with the lease: no separate read-modify-write, so two racers
+      // can never both count an attempt for the same lease.
+      attemptCount: { increment: 1 },
+    },
   });
 
   if (count === 0) return null;
@@ -338,6 +407,9 @@ async function completeClaimedJob(input, options = {}) {
       activeCacheKey: null,
       claimToken: null,
       leaseExpiresAt: null,
+      // A terminal row is never re-attempted, so a leftover retry gate from a
+      // previous failed attempt would be misleading history.
+      nextAttemptAt: null,
     },
   });
 
@@ -351,11 +423,26 @@ async function completeClaimedJob(input, options = {}) {
  * Releases a lease WITHOUT recording a result — the narrow abandon path for a
  * worker that failed before it made any provider call, or hit an unexpected
  * internal error and has nothing truthful to persist. The job stays durably
- * PENDING and immediately reclaimable; no terminal status is invented on the
- * provider's behalf.
+ * PENDING; no terminal status is invented on the provider's behalf.
+ *
+ * `nextAttemptAt` is the retry gate the caller's policy decided
+ * (enrichmentRetryPolicy.js). Omitting it releases the job as immediately
+ * eligible — correct for a plain abandon, wrong for a repeatable failure,
+ * which is exactly why the runner always passes one.
+ *
+ * `attemptCount` is NEVER reset. `refundAttempt` reverses exactly the single
+ * increment this claim made, and is used only for caller cancellation, where
+ * no processing attempt actually took place. It is safe under concurrency for
+ * the same reason the rest of this statement is: the guard requires our claim
+ * token, so no other worker can be mutating this row's attemptCount while we
+ * still hold the lease.
  *
  * This packet ships no retry loop and no daemon: releasing simply returns the
- * job to the queue for whatever schedules consumers later (P2-T2c).
+ * job to the queue for whatever invokes a runner later.
+ *
+ * @param {{id: number, claimToken: string, nextAttemptAt?: Date|null,
+ *   refundAttempt?: boolean}} input
+ * @param {{client?: object}} [options]
  */
 async function releaseClaimedJob(input, options = {}) {
   const client = resolveClient(options.client);
@@ -364,10 +451,19 @@ async function releaseClaimedJob(input, options = {}) {
   }
   const id = assertValidId(input.id);
   const claimToken = assertValidClaimToken(input.claimToken);
+  const nextAttemptAt = input.nextAttemptAt === undefined ? null : input.nextAttemptAt;
+  if (nextAttemptAt !== null) assertValidDate(nextAttemptAt, "nextAttemptAt");
+  const refundAttempt = input.refundAttempt === true;
 
   const { count } = await client.iocEnrichment.updateMany({
     where: { id, status: ENRICHMENT_STATUS.PENDING, claimToken },
-    data: { claimToken: null, claimedAt: null, leaseExpiresAt: null },
+    data: {
+      claimToken: null,
+      claimedAt: null,
+      leaseExpiresAt: null,
+      nextAttemptAt,
+      ...(refundAttempt ? { attemptCount: { decrement: 1 } } : {}),
+    },
   });
 
   if (count === 0) return { outcome: RELEASE_OUTCOME.NOT_CLAIM_OWNER, record: null };
@@ -376,9 +472,117 @@ async function releaseClaimedJob(input, options = {}) {
   return { outcome: RELEASE_OUTCOME.RELEASED, record: released };
 }
 
+/**
+ * Retires a job this worker holds the lease on into DEAD_LETTER — the "we
+ * have attempted this the agreed number of times and it fails the same way
+ * every time" path.
+ *
+ * Guarantees, all mirroring completeClaimedJob:
+ *  - requires the correct claim token; a wrong/stale one returns
+ *    NOT_CLAIM_OWNER and changes nothing
+ *  - cannot overwrite an already-terminal row (`status: PENDING` guard), so a
+ *    real provider result is never buried by a late dead-letter
+ *  - clears `activeCacheKey` (freeing the cacheKey for a future attempt) and
+ *    every piece of lease/claim metadata
+ *  - PRESERVES all previously stored normalized/provider evidence: this
+ *    statement writes only lifecycle columns, so whatever diagnostic context
+ *    a prior attempt recorded stays readable
+ *  - stores only a closed `terminalReasonCode`; no exception content, no
+ *    provider payload, no stack
+ *
+ * @param {{id: number, claimToken: string, reasonCode: string}} input
+ * @param {{client?: object, now: Date}} options
+ */
+async function deadLetterClaimedJob(input, options = {}) {
+  const client = resolveClient(options.client);
+  if (!input || typeof input !== "object") {
+    throw new IocEnrichmentValidationError("deadLetterClaimedJob: input must be an object");
+  }
+  const id = assertValidId(input.id);
+  const claimToken = assertValidClaimToken(input.claimToken);
+  const reasonCode = assertValidTerminalReasonCode(input.reasonCode);
+  const now = assertValidDate(options.now, "now");
+
+  const { count } = await client.iocEnrichment.updateMany({
+    where: { id, status: ENRICHMENT_STATUS.PENDING, claimToken },
+    data: {
+      status: QUEUE_STATUS.DEAD_LETTER,
+      deadLetteredAt: now,
+      terminalReasonCode: reasonCode,
+      activeCacheKey: null,
+      claimToken: null,
+      claimedAt: null,
+      leaseExpiresAt: null,
+      nextAttemptAt: null,
+    },
+  });
+
+  if (count === 0) return { outcome: DEAD_LETTER_OUTCOME.NOT_CLAIM_OWNER, record: null };
+
+  const deadLettered = await client.iocEnrichment.findUnique({ where: { id } });
+  return { outcome: DEAD_LETTER_OUTCOME.DEAD_LETTERED, record: deadLettered };
+}
+
+/**
+ * Retires a PENDING job that has ALREADY spent its attempt budget, without
+ * holding a claim on it — the sweep for a row stranded at its limit by an
+ * earlier crashed worker, which would otherwise stay PENDING and unclaimable
+ * forever (claimPendingJob refuses it, so no one can ever hold its token).
+ *
+ * Safe without a claim token because the guard is strictly narrower than
+ * "some row": it requires the row to still be PENDING, to be at or over its
+ * budget, and to have NO live lease. A job another worker is actively
+ * processing therefore cannot be retired out from under it.
+ *
+ * @param {{id: number}} input
+ * @param {{client?: object, now: Date, reasonCode?: string}} options
+ */
+async function deadLetterExhaustedJob(input, options = {}) {
+  const client = resolveClient(options.client);
+  if (!input || typeof input !== "object") {
+    throw new IocEnrichmentValidationError("deadLetterExhaustedJob: input must be an object");
+  }
+  const id = assertValidId(input.id);
+  const now = assertValidDate(options.now, "now");
+  const reasonCode = assertValidTerminalReasonCode(
+    options.reasonCode ?? ENRICHMENT_TERMINAL_REASON.MAX_ATTEMPTS_EXHAUSTED
+  );
+
+  const existing = await client.iocEnrichment.findUnique({ where: { id } });
+  if (!existing || existing.status !== ENRICHMENT_STATUS.PENDING) {
+    return { outcome: DEAD_LETTER_OUTCOME.NOT_CLAIM_OWNER, record: null };
+  }
+  const maxAttempts = Number.isInteger(existing.maxAttempts) ? existing.maxAttempts : 0;
+
+  const { count } = await client.iocEnrichment.updateMany({
+    where: {
+      id,
+      status: ENRICHMENT_STATUS.PENDING,
+      attemptCount: { gte: maxAttempts },
+      OR: [{ claimToken: null }, { leaseExpiresAt: { lte: now } }],
+    },
+    data: {
+      status: QUEUE_STATUS.DEAD_LETTER,
+      deadLetteredAt: now,
+      terminalReasonCode: reasonCode,
+      activeCacheKey: null,
+      claimToken: null,
+      claimedAt: null,
+      leaseExpiresAt: null,
+      nextAttemptAt: null,
+    },
+  });
+
+  if (count === 0) return { outcome: DEAD_LETTER_OUTCOME.NOT_EXHAUSTED, record: null };
+
+  const deadLettered = await client.iocEnrichment.findUnique({ where: { id } });
+  return { outcome: DEAD_LETTER_OUTCOME.DEAD_LETTERED, record: deadLettered };
+}
+
 module.exports = {
   COMPLETION_OUTCOME,
   RELEASE_OUTCOME,
+  DEAD_LETTER_OUTCOME,
   findFreshCachedResult,
   findActiveJobByCacheKey,
   createPendingJob,
@@ -387,4 +591,6 @@ module.exports = {
   claimPendingBatch,
   completeClaimedJob,
   releaseClaimedJob,
+  deadLetterClaimedJob,
+  deadLetterExhaustedJob,
 };

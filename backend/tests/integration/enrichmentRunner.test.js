@@ -17,6 +17,7 @@ const { scheduleEnrichment } = require("../../src/services/enrichment/enrichment
 const { claimPendingJob, completeClaimedJob, COMPLETION_OUTCOME } = require("../../src/services/enrichment/iocEnrichmentRepository");
 const { ENRICHMENT_STATUS, createEnrichmentResult } = require("../../src/services/enrichment/iocEnrichmentTypes");
 const { resolveEnrichmentTtl } = require("../../src/services/enrichment/enrichmentTtlPolicy");
+const { resolveEnrichmentRetry } = require("../../src/services/enrichment/enrichmentRetryPolicy");
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 
@@ -43,6 +44,34 @@ function racerClients(count) {
     racers.push(new PrismaClient({ datasources: { db: { url: TEST_DATABASE_URL } } }));
   }
   return racers.slice(0, count);
+}
+
+// A runner batch is a GLOBAL queue consumer by design: it claims whatever is
+// pending. That is correct in production and hostile in a shared test
+// database, where vitest runs integration files in parallel — an unscoped
+// batch here would claim, delay and (since P2-T2e-1) eventually dead-letter
+// the rows belonging to iocEnrichmentQueue.test.js.
+//
+// So the worker gets a scoped view: a thin delegate whose candidate LISTING
+// is filtered to this suite's marker. Nothing else is changed — the claim,
+// completion and release statements are the real, unscoped ones, so every
+// concurrency guarantee under test is still the production one.
+function scopedClient(client) {
+  return {
+    auditLog: client.auditLog,
+    iocEnrichment: {
+      findMany: (args = {}) =>
+        client.iocEnrichment.findMany({
+          ...args,
+          where: { ...(args.where || {}), provider: { startsWith: MARKER } },
+        }),
+      findUnique: (args) => client.iocEnrichment.findUnique(args),
+      findFirst: (args) => client.iocEnrichment.findFirst(args),
+      create: (args) => client.iocEnrichment.create(args),
+      update: (args) => client.iocEnrichment.update(args),
+      updateMany: (args) => client.iocEnrichment.updateMany(args),
+    },
+  };
 }
 
 function identityFor(providerName, indicator, queryParams = null) {
@@ -101,6 +130,7 @@ function runnerOptions(overrides = {}) {
     batchSize: 10,
     leaseDurationSeconds: LEASE_SECONDS,
     ttlPolicy: resolveEnrichmentTtl,
+    retryPolicy: resolveEnrichmentRetry,
     workerId: "worker-1",
     ...overrides,
   };
@@ -137,7 +167,7 @@ describeDb("P2-T2d bounded enrichment runner — real PostgreSQL", () => {
 
     const summary = await runEnrichmentBatch({
       ...runnerOptions(),
-      prisma,
+      prisma: scopedClient(prisma),
       providerRegistry: registryOf({ [providerName]: provider }),
     });
 
@@ -166,12 +196,12 @@ describeDb("P2-T2d bounded enrichment runner — real PostgreSQL", () => {
     const [summaryA, summaryB] = await Promise.all([
       runEnrichmentBatch({
         ...runnerOptions({ workerId: "worker-a" }),
-        prisma: clientA,
+        prisma: scopedClient(clientA),
         providerRegistry: registryOf({ [providerName]: providerA }),
       }),
       runEnrichmentBatch({
         ...runnerOptions({ workerId: "worker-b" }),
-        prisma: clientB,
+        prisma: scopedClient(clientB),
         providerRegistry: registryOf({ [providerName]: providerB }),
       }),
     ]);
@@ -204,7 +234,7 @@ describeDb("P2-T2d bounded enrichment runner — real PostgreSQL", () => {
 
     const summaryB = await runEnrichmentBatch({
       ...runnerOptions({ now: reclaimAt, workerId: "worker-b" }),
-      prisma: clientB,
+      prisma: scopedClient(clientB),
       providerRegistry: registryOf({ [providerName]: providerB }),
     });
 
@@ -246,7 +276,7 @@ describeDb("P2-T2d bounded enrichment runner — real PostgreSQL", () => {
     try {
       summary = await runEnrichmentBatch({
         ...runnerOptions(),
-        prisma: client,
+        prisma: scopedClient(client),
         providerRegistry: registryOf({ [providerName]: provider }),
       });
     } finally {
@@ -307,7 +337,7 @@ describeDb("P2-T2d bounded enrichment runner — real PostgreSQL", () => {
 
     const summary = await runEnrichmentBatch({
       ...runnerOptions({ batchSize: 10 }),
-      prisma,
+      prisma: scopedClient(prisma),
       providerRegistry: registryOf({ [providerName]: provider }),
     });
 
@@ -337,12 +367,16 @@ describeDb("P2-T2d bounded enrichment runner — real PostgreSQL", () => {
     const provider = fakeProvider(providerName, () => successResult(providerName, indicator));
     const registry = registryOf({ [providerName]: provider });
 
-    const first = await runEnrichmentBatch({ ...runnerOptions(), prisma, providerRegistry: registry });
+    const first = await runEnrichmentBatch({
+      ...runnerOptions(),
+      prisma: scopedClient(prisma),
+      providerRegistry: registry,
+    });
     expect(first.completedCount).toBe(1);
 
     const second = await runEnrichmentBatch({
       ...runnerOptions({ now: new Date(T0.getTime() + 60000) }),
-      prisma,
+      prisma: scopedClient(prisma),
       providerRegistry: registry,
     });
     expect(second.candidateCount).toBe(0);
@@ -371,7 +405,7 @@ describeDb("P2-T2d bounded enrichment runner — real PostgreSQL", () => {
 
     const summary = await runEnrichmentBatch({
       ...runnerOptions({ batchSize: 3 }),
-      prisma,
+      prisma: scopedClient(prisma),
       providerRegistry: registryOf({ [providerName]: provider }),
     });
 
@@ -409,7 +443,7 @@ describeDb("P2-T2d bounded enrichment runner — real PostgreSQL", () => {
     try {
       summary = await runEnrichmentBatch({
         ...runnerOptions(),
-        prisma: client,
+        prisma: scopedClient(client),
         providerRegistry: registryOf({ [providerName]: provider }),
         signal: controller.signal,
       });
@@ -427,9 +461,26 @@ describeDb("P2-T2d bounded enrichment runner — real PostgreSQL", () => {
     expect(stored.leaseExpiresAt).toBeNull();
     expect(stored.queriedAt).toBeNull();
     expect(stored.errorCode).toBeNull();
+    // Since P2-T2e-1 a release also carries a bounded retry gate, and an
+    // interrupted attempt is refunded — cancellation is not a failed attempt.
+    expect(stored.nextAttemptAt).not.toBeNull();
+    expect(stored.attemptCount).toBe(0);
 
-    // Genuinely reclaimable — a fresh claim succeeds with a new token.
-    const reclaim = await claimPendingJob(record.id, { client: prisma, now: T0, leaseMs: 60000 });
+    // Not yet reclaimable: the retry gate is what prevents an immediate
+    // re-claim loop.
+    const tooEarly = await claimPendingJob(record.id, {
+      client: prisma,
+      now: new Date(stored.nextAttemptAt.getTime() - 1),
+      leaseMs: 60000,
+    });
+    expect(tooEarly).toBeNull();
+
+    // Genuinely reclaimable once the gate elapses — a fresh claim succeeds.
+    const reclaim = await claimPendingJob(record.id, {
+      client: prisma,
+      now: stored.nextAttemptAt,
+      leaseMs: 60000,
+    });
     expect(reclaim).not.toBeNull();
   }, 60000);
 });

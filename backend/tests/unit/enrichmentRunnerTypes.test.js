@@ -24,6 +24,7 @@ function validOptions(overrides = {}) {
     batchSize: 10,
     leaseDurationSeconds: 60,
     ttlPolicy: () => ({ expiresAt: T0, ttlSeconds: 60, policyReason: "TEST" }),
+    retryPolicy: () => ({ action: "RELEASE_WITH_DELAY", delaySeconds: 60, nextAttemptAt: T0 }),
     workerId: "worker-1",
     ...overrides,
   };
@@ -99,6 +100,18 @@ describe("enrichmentRunnerTypes — assertValidRunnerConfig", () => {
     );
   });
 
+  it("requires retryPolicy to be a function", () => {
+    // An injected dependency, exactly like ttlPolicy: a runner with no
+    // retry/dead-letter policy must fail before it touches the queue, not
+    // silently fall back to releasing everything immediately.
+    expect(() => assertValidRunnerConfig(validOptions({ retryPolicy: undefined }))).toThrow(
+      EnrichmentRunnerValidationError
+    );
+    expect(() => assertValidRunnerConfig(validOptions({ retryPolicy: "resolveEnrichmentRetry" }))).toThrow(
+      EnrichmentRunnerValidationError
+    );
+  });
+
   it("enforces workerId bounds", () => {
     expect(() => assertValidRunnerConfig(validOptions({ workerId: "" }))).toThrow(EnrichmentRunnerValidationError);
     expect(() => assertValidRunnerConfig(validOptions({ workerId: "   " }))).toThrow(
@@ -157,11 +170,45 @@ describe("enrichmentRunnerTypes — buildJobResult", () => {
       expiresAt: new Date(T0.getTime() + 1000),
     });
     expect(Object.keys(result).sort()).toEqual(
-      ["enrichmentId", "expiresAt", "indicator", "indicatorType", "outcome", "provider", "queriedAt", "terminalStatus"].sort()
+      [
+        "enrichmentId",
+        "expiresAt",
+        "indicator",
+        "indicatorType",
+        "outcome",
+        "provider",
+        "queriedAt",
+        "terminalStatus",
+        // P2-T2e-1 closed provenance/bookkeeping fields.
+        "failureClass",
+        "terminalReasonCode",
+        "nextAttemptAt",
+        "attemptCount",
+        "maxAttempts",
+      ].sort()
     );
     expect(Object.isFrozen(result)).toBe(true);
     expect(result).not.toHaveProperty("claimToken");
     expect(result).not.toHaveProperty("activeCacheKey");
+    expect(result).not.toHaveProperty("cacheKey");
+  });
+
+  it("rejects a failureClass or terminalReasonCode outside its closed vocabulary", () => {
+    const base = {
+      enrichmentId: 1,
+      provider: "mock",
+      indicatorType: "IPV4",
+      indicator: "198.18.0.1",
+      outcome: RUNNER_OUTCOME.RELEASE_FAILED,
+    };
+    // A raw error message must be structurally unable to become provenance.
+    expect(() => buildJobResult({ ...base, failureClass: "TypeError: boom" })).toThrow(
+      EnrichmentRunnerValidationError
+    );
+    expect(() => buildJobResult({ ...base, terminalReasonCode: "gave up, see stack" })).toThrow(
+      EnrichmentRunnerValidationError
+    );
+    expect(() => buildJobResult({ ...base, failureClass: null, terminalReasonCode: null })).not.toThrow();
   });
 
   it("clones Date fields rather than sharing the caller's instance", () => {
@@ -235,6 +282,52 @@ describe("enrichmentRunnerTypes — buildBatchSummary", () => {
     expect(Object.isFrozen(summary)).toBe(true);
     expect(Object.isFrozen(summary.results)).toBe(true);
     expect(Object.isFrozen(summary.statusCounts)).toBe(true);
+  });
+
+  it("counts dead letters (claimed and swept) and held-unknown-state separately", () => {
+    const results = [
+      buildJobResult({
+        enrichmentId: 1,
+        provider: "mock",
+        indicatorType: "IPV4",
+        indicator: "a",
+        outcome: RUNNER_OUTCOME.DEAD_LETTERED,
+        terminalReasonCode: "MAX_ATTEMPTS_PROVIDER_ERROR",
+      }),
+      buildJobResult({
+        enrichmentId: 2,
+        provider: "mock",
+        indicatorType: "IPV4",
+        indicator: "b",
+        outcome: RUNNER_OUTCOME.EXHAUSTED_DEAD_LETTERED,
+        terminalReasonCode: "MAX_ATTEMPTS_EXHAUSTED",
+      }),
+      buildJobResult({
+        enrichmentId: 3,
+        provider: "mock",
+        indicatorType: "IPV4",
+        indicator: "c",
+        outcome: RUNNER_OUTCOME.COMPLETION_FAILED,
+        failureClass: "COMPLETION_DATABASE_ERROR",
+      }),
+      buildJobResult({
+        enrichmentId: 4,
+        provider: "mock",
+        indicatorType: "IPV4",
+        indicator: "d",
+        outcome: RUNNER_OUTCOME.RELEASED_AFTER_COMPLETION_VALIDATION,
+        failureClass: "COMPLETION_VALIDATION_ERROR",
+      }),
+    ];
+
+    const summary = buildBatchSummary({ requestedBatchSize: 10, candidateCount: 4, cancelled: false, results });
+
+    expect(summary.deadLetteredCount).toBe(2);
+    // "We do not know" is counted apart from "we know it broke".
+    expect(summary.heldUnknownStateCount).toBe(1);
+    expect(summary.releasedCount).toBe(1); // only the validation release
+    // The swept dead letter never held a claim; the other three did.
+    expect(summary.claimedCount).toBe(3);
   });
 
   it("produces all-zero counts for an empty batch", () => {

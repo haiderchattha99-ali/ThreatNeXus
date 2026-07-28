@@ -30,6 +30,8 @@ const {
   IocEnrichmentValidationError,
   MIN_LEASE_MS,
   MAX_LEASE_MS,
+  DEFAULT_MAX_ATTEMPTS,
+  assertValidMaxAttempts,
 } = require("./iocEnrichmentCacheRules");
 const { buildEnrichmentCacheIdentity } = require("./enrichmentCacheKey");
 const {
@@ -77,10 +79,18 @@ function isRetryableConcurrencyError(error) {
  * loop re-reads and returns ALREADY_PENDING, or CACHE_HIT if the winner
  * completed in the meantime.
  *
+ * A previously DEAD_LETTERed row never blocks a later explicit scheduling
+ * call: dead-lettering clears `activeCacheKey` (so there is no active job)
+ * and DEAD_LETTER is not in TERMINAL_STATUSES (so it can never be a cache
+ * hit). The retired row stays as history and a brand-new attempt row is
+ * created with a full budget. Re-scheduling is therefore always a deliberate
+ * caller/analyst act, never an automatic resurrection.
+ *
  * @param {{provider: string, indicatorType: string, indicator: string,
  *   queryParams?: object|null}} identityInput
- * @param {{client?: object, asOf: Date}} options `asOf` is the explicit
- *   evaluation time — used for cache freshness AND as the job's requestedAt.
+ * @param {{client?: object, asOf: Date, maxAttempts?: number}} options `asOf`
+ *   is the explicit evaluation time — used for cache freshness AND as the
+ *   job's requestedAt. `maxAttempts` is bounded; omitted uses the default.
  * @returns {Promise<{outcome: string, cacheKey: string, record: object}>}
  */
 async function scheduleEnrichment(identityInput, options = {}) {
@@ -89,6 +99,9 @@ async function scheduleEnrichment(identityInput, options = {}) {
   if (!(asOf instanceof Date) || Number.isNaN(asOf.getTime())) {
     throw new IocEnrichmentValidationError("scheduleEnrichment: asOf must be an explicit, valid Date");
   }
+  // Validated up front, alongside identity: a bad budget is a programmer
+  // error and must fail before any row is touched.
+  const maxAttempts = assertValidMaxAttempts(options.maxAttempts ?? null);
 
   // Validates identity up front: a bad provider/indicator is a programmer
   // error and must fail before any row is touched, not inside the retry loop.
@@ -110,7 +123,7 @@ async function scheduleEnrichment(identityInput, options = {}) {
 
     try {
       // eslint-disable-next-line no-await-in-loop
-      const created = await createPendingJob(identity, { client, requestedAt: asOf });
+      const created = await createPendingJob(identity, { client, requestedAt: asOf, maxAttempts });
       return { outcome: SCHEDULE_OUTCOME.SCHEDULED, cacheKey: identity.cacheKey, record: created };
     } catch (error) {
       // Only a recoverable race is retried. A validation error, a programmer
@@ -130,5 +143,6 @@ module.exports = {
   MAX_SCHEDULE_ATTEMPTS,
   MIN_LEASE_MS,
   MAX_LEASE_MS,
+  DEFAULT_MAX_ATTEMPTS,
   scheduleEnrichment,
 };

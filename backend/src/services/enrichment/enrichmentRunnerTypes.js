@@ -11,7 +11,13 @@
 // enumerated in RUNNER_OUTCOME. Callers (and tests) must compare against
 // these constants, never a free-form string, so the taxonomy stays closed.
 
-const { MAX_PENDING_BATCH_SIZE, MIN_LEASE_MS, MAX_LEASE_MS } = require("./iocEnrichmentCacheRules");
+const {
+  MAX_PENDING_BATCH_SIZE,
+  MIN_LEASE_MS,
+  MAX_LEASE_MS,
+  ENRICHMENT_TERMINAL_REASON_VALUES,
+} = require("./iocEnrichmentCacheRules");
+const { FAILURE_CLASS_VALUES } = require("./enrichmentRetryPolicy");
 
 class EnrichmentRunnerValidationError extends Error {
   constructor(message) {
@@ -46,16 +52,39 @@ const RUNNER_OUTCOME = Object.freeze({
   // held, so there is nothing to release.
   CLAIM_FAILED: "CLAIM_FAILED",
   // A provider result was obtained and TTL was resolved, but the completion
-  // write itself raised an unexpected error (not a stale-claim response). The
-  // job's true durable state is not re-derived here; no blind retry.
+  // WRITE itself raised an unexpected (database) error. The write may have
+  // committed before the error surfaced, so the durable state is unknown: the
+  // lease is deliberately KEPT, nothing is released or dead-lettered, and
+  // lease expiry is the recovery path. This is the runner's realization of
+  // the retry policy's HOLD_UNKNOWN_STATE action.
   COMPLETION_FAILED: "COMPLETION_FAILED",
-  // A release attempt (after cancellation, an internal error, or an unknown
-  // provider) itself raised an unexpected error.
+  // completeClaimedJob REJECTED the result before writing anything (identity
+  // mismatch, missing queriedAt, unknown error code). Durable state is known
+  // exactly, so the retry policy applies: released with a delay, or
+  // dead-lettered once the budget is spent. Never conflated with the
+  // unknown-database case above.
+  RELEASED_AFTER_COMPLETION_VALIDATION: "RELEASED_AFTER_COMPLETION_VALIDATION",
+  // A release attempt (after cancellation, an internal error, an unknown
+  // provider, or a rejected completion) itself raised an unexpected error.
+  // The `failureClass` field on the job result preserves WHICH of those
+  // prompted it, as a closed code — never the exception's own content.
   RELEASE_FAILED: "RELEASE_FAILED",
   // The job's stored `provider` does not resolve through the injected
   // providerRegistry. Never falls back to mock. The claim is released rather
   // than inventing a terminal result on the provider's behalf.
   UNKNOWN_PROVIDER: "UNKNOWN_PROVIDER",
+  // The attempt budget is spent and this job was retired to DEAD_LETTER while
+  // this worker held its claim. A queue-lifecycle terminal state, never a
+  // reputation outcome.
+  DEAD_LETTERED: "DEAD_LETTERED",
+  // The candidate was ALREADY at/over its budget when the batch listed it —
+  // no claim was taken and no provider was called; the row was swept straight
+  // into DEAD_LETTER. This is what stops a job stranded at its limit by an
+  // earlier crash from sitting PENDING and unclaimable forever.
+  EXHAUSTED_DEAD_LETTERED: "EXHAUSTED_DEAD_LETTERED",
+  // The sweep above was attempted but the guarded write matched nothing or
+  // raised (another worker moved the row first). Nothing was changed.
+  EXHAUSTED_SWEEP_FAILED: "EXHAUSTED_SWEEP_FAILED",
 });
 
 const RUNNER_OUTCOME_VALUES = Object.freeze(Object.values(RUNNER_OUTCOME));
@@ -69,9 +98,11 @@ const CLAIMED_OUTCOMES = Object.freeze(
     RUNNER_OUTCOME.STALE_CLAIM_ON_COMPLETION,
     RUNNER_OUTCOME.RELEASED_AFTER_INTERNAL_ERROR,
     RUNNER_OUTCOME.RELEASED_AFTER_CANCELLATION,
+    RUNNER_OUTCOME.RELEASED_AFTER_COMPLETION_VALIDATION,
     RUNNER_OUTCOME.UNKNOWN_PROVIDER,
     RUNNER_OUTCOME.COMPLETION_FAILED,
     RUNNER_OUTCOME.RELEASE_FAILED,
+    RUNNER_OUTCOME.DEAD_LETTERED,
   ])
 );
 
@@ -80,9 +111,21 @@ const RELEASED_OUTCOMES = Object.freeze(
   new Set([
     RUNNER_OUTCOME.RELEASED_AFTER_INTERNAL_ERROR,
     RUNNER_OUTCOME.RELEASED_AFTER_CANCELLATION,
+    RUNNER_OUTCOME.RELEASED_AFTER_COMPLETION_VALIDATION,
     RUNNER_OUTCOME.UNKNOWN_PROVIDER,
   ])
 );
+
+// Outcomes that represent a confirmed DEAD_LETTER transition, claimed or
+// swept.
+const DEAD_LETTERED_OUTCOMES = Object.freeze(
+  new Set([RUNNER_OUTCOME.DEAD_LETTERED, RUNNER_OUTCOME.EXHAUSTED_DEAD_LETTERED])
+);
+
+// Outcomes where this worker deliberately still holds the lease because the
+// durable state is unknown. Counted separately from an internal failure so an
+// operator can tell "we do not know" from "we know it broke".
+const HELD_UNKNOWN_STATE_OUTCOMES = Object.freeze(new Set([RUNNER_OUTCOME.COMPLETION_FAILED]));
 
 // Outcomes that represent an unexpected failure of the runner/database
 // itself, as opposed to an expected provider outcome or caller cancellation.
@@ -90,8 +133,10 @@ const INTERNAL_FAILURE_OUTCOMES = Object.freeze(
   new Set([
     RUNNER_OUTCOME.CLAIM_FAILED,
     RUNNER_OUTCOME.RELEASED_AFTER_INTERNAL_ERROR,
+    RUNNER_OUTCOME.RELEASED_AFTER_COMPLETION_VALIDATION,
     RUNNER_OUTCOME.COMPLETION_FAILED,
     RUNNER_OUTCOME.RELEASE_FAILED,
+    RUNNER_OUTCOME.EXHAUSTED_SWEEP_FAILED,
   ])
 );
 
@@ -169,6 +214,7 @@ function assertValidRunnerConfig(options) {
     batchSize,
     leaseDurationSeconds,
     ttlPolicy,
+    retryPolicy,
     workerId,
     signal = null,
   } = options;
@@ -189,6 +235,9 @@ function assertValidRunnerConfig(options) {
   if (typeof ttlPolicy !== "function") {
     throw new EnrichmentRunnerValidationError("runEnrichmentBatch: ttlPolicy must be a function");
   }
+  if (typeof retryPolicy !== "function") {
+    throw new EnrichmentRunnerValidationError("runEnrichmentBatch: retryPolicy must be a function");
+  }
   const validWorkerId = assertValidWorkerId(workerId);
   if (signal !== null && signal !== undefined && typeof signal.aborted !== "boolean") {
     throw new EnrichmentRunnerValidationError(
@@ -203,6 +252,7 @@ function assertValidRunnerConfig(options) {
     batchSize: validBatchSize,
     leaseMs: validLeaseDurationSeconds * 1000,
     ttlPolicy,
+    retryPolicy,
     workerId: validWorkerId,
     signal: signal || null,
   });
@@ -231,12 +281,31 @@ function buildJobResult({
   terminalStatus = null,
   queriedAt = null,
   expiresAt = null,
+  failureClass = null,
+  terminalReasonCode = null,
+  nextAttemptAt = null,
+  attemptCount = null,
+  maxAttempts = null,
 }) {
   if (!RUNNER_OUTCOME_VALUES.includes(outcome)) {
     throw new EnrichmentRunnerValidationError(`buildJobResult: unknown outcome "${String(outcome)}"`);
   }
   if (!Number.isInteger(enrichmentId) || enrichmentId <= 0) {
     throw new EnrichmentRunnerValidationError("buildJobResult: enrichmentId must be a positive integer");
+  }
+  // Both of these are closed vocabularies. Validating them HERE (rather than
+  // trusting the runner) is what keeps a free-form string — an error message,
+  // a provider fragment — structurally unable to reach a caller through this
+  // shape, whatever a future call site does.
+  if (failureClass !== null && !FAILURE_CLASS_VALUES.includes(failureClass)) {
+    throw new EnrichmentRunnerValidationError(
+      `buildJobResult: unknown failureClass "${String(failureClass)}"`
+    );
+  }
+  if (terminalReasonCode !== null && !ENRICHMENT_TERMINAL_REASON_VALUES.includes(terminalReasonCode)) {
+    throw new EnrichmentRunnerValidationError(
+      `buildJobResult: unknown terminalReasonCode "${String(terminalReasonCode)}"`
+    );
   }
   return Object.freeze({
     enrichmentId,
@@ -247,6 +316,13 @@ function buildJobResult({
     terminalStatus: typeof terminalStatus === "string" ? terminalStatus : null,
     queriedAt: cloneDateOrNull(queriedAt),
     expiresAt: cloneDateOrNull(expiresAt),
+    // Closed provenance: WHY a release/dead-letter/hold happened. This is the
+    // only explanation that ever leaves the runner — never err.message.
+    failureClass,
+    terminalReasonCode,
+    nextAttemptAt: cloneDateOrNull(nextAttemptAt),
+    attemptCount: Number.isInteger(attemptCount) ? attemptCount : null,
+    maxAttempts: Number.isInteger(maxAttempts) ? maxAttempts : null,
   });
 }
 
@@ -267,6 +343,8 @@ function buildBatchSummary({ requestedBatchSize, candidateCount, cancelled, resu
   let staleCompletionCount = 0;
   let internalFailureCount = 0;
   let unknownProviderCount = 0;
+  let deadLetteredCount = 0;
+  let heldUnknownStateCount = 0;
 
   frozenResults.forEach((job) => {
     if (CLAIMED_OUTCOMES.has(job.outcome)) claimedCount += 1;
@@ -280,6 +358,8 @@ function buildBatchSummary({ requestedBatchSize, candidateCount, cancelled, resu
     if (job.outcome === RUNNER_OUTCOME.STALE_CLAIM_ON_COMPLETION) staleCompletionCount += 1;
     if (INTERNAL_FAILURE_OUTCOMES.has(job.outcome)) internalFailureCount += 1;
     if (job.outcome === RUNNER_OUTCOME.UNKNOWN_PROVIDER) unknownProviderCount += 1;
+    if (DEAD_LETTERED_OUTCOMES.has(job.outcome)) deadLetteredCount += 1;
+    if (HELD_UNKNOWN_STATE_OUTCOMES.has(job.outcome)) heldUnknownStateCount += 1;
   });
 
   return Object.freeze({
@@ -293,6 +373,8 @@ function buildBatchSummary({ requestedBatchSize, candidateCount, cancelled, resu
     staleCompletionCount,
     internalFailureCount,
     unknownProviderCount,
+    deadLetteredCount,
+    heldUnknownStateCount,
     cancelled: Boolean(cancelled),
     results: frozenResults,
   });
@@ -302,6 +384,11 @@ module.exports = {
   EnrichmentRunnerValidationError,
   RUNNER_OUTCOME,
   RUNNER_OUTCOME_VALUES,
+  CLAIMED_OUTCOMES,
+  RELEASED_OUTCOMES,
+  DEAD_LETTERED_OUTCOMES,
+  HELD_UNKNOWN_STATE_OUTCOMES,
+  INTERNAL_FAILURE_OUTCOMES,
   MIN_BATCH_SIZE,
   MAX_BATCH_SIZE,
   MIN_LEASE_SECONDS,

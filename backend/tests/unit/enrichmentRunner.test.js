@@ -4,6 +4,11 @@ const crypto = require("node:crypto");
 const { runEnrichmentBatch } = require("../../src/services/enrichment/enrichmentRunner");
 const { RUNNER_OUTCOME } = require("../../src/services/enrichment/enrichmentRunnerTypes");
 const { buildEnrichmentCacheIdentity } = require("../../src/services/enrichment/enrichmentCacheKey");
+const { FAILURE_CLASS } = require("../../src/services/enrichment/enrichmentRetryPolicy");
+const {
+  QUEUE_STATUS,
+  ENRICHMENT_TERMINAL_REASON,
+} = require("../../src/services/enrichment/iocEnrichmentCacheRules");
 const {
   ENRICHMENT_STATUS,
   PROVIDER_ERROR_CODES,
@@ -37,12 +42,19 @@ function createFakeClient() {
     return row === undefined || row === null ? null : { ...row };
   }
 
+  function comparable(value) {
+    return value instanceof Date ? value.getTime() : value;
+  }
+
   function matchesCondition(value, condition) {
     if (condition && typeof condition === "object" && !(condition instanceof Date) && !Array.isArray(condition)) {
       if ("in" in condition) return condition.in.includes(value);
       if ("not" in condition) return value !== condition.not;
-      if ("gt" in condition) return value !== null && value !== undefined && value.getTime() > condition.gt.getTime();
-      if ("lte" in condition) return value !== null && value !== undefined && value.getTime() <= condition.lte.getTime();
+      if (value === null || value === undefined) return false;
+      if ("gt" in condition) return comparable(value) > comparable(condition.gt);
+      if ("gte" in condition) return comparable(value) >= comparable(condition.gte);
+      if ("lt" in condition) return comparable(value) < comparable(condition.lt);
+      if ("lte" in condition) return comparable(value) <= comparable(condition.lte);
       return true;
     }
     return value === condition;
@@ -51,9 +63,36 @@ function createFakeClient() {
   function matches(row, where = {}) {
     return Object.entries(where).every(([key, condition]) => {
       if (key === "OR") return condition.some((sub) => matches(row, sub));
+      if (key === "AND") return condition.every((sub) => matches(row, sub));
       return matchesCondition(row[key], condition);
     });
   }
+
+  // Prisma's atomic number operations, applied per row.
+  function applyUpdateData(row, data) {
+    Object.entries(data).forEach(([key, value]) => {
+      if (value && typeof value === "object" && !(value instanceof Date) && !Array.isArray(value)) {
+        if ("increment" in value) {
+          row[key] = (row[key] || 0) + value.increment;
+          return;
+        }
+        if ("decrement" in value) {
+          row[key] = (row[key] || 0) - value.decrement;
+          return;
+        }
+      }
+      row[key] = value;
+    });
+  }
+
+  const RETRY_DEFAULTS = {
+    attemptCount: 0,
+    maxAttempts: 3,
+    nextAttemptAt: null,
+    lastAttemptAt: null,
+    deadLetteredAt: null,
+    terminalReasonCode: null,
+  };
 
   function compare(a, b, orderBy) {
     for (const clause of orderBy) {
@@ -80,6 +119,7 @@ function createFakeClient() {
       nextId += 1;
       const full = {
         id,
+        ...RETRY_DEFAULTS,
         claimedAt: null,
         leaseExpiresAt: null,
         claimToken: null,
@@ -112,6 +152,7 @@ function createFakeClient() {
         assertActiveCacheKeyUnique(id, data.activeCacheKey ?? null);
         const row = {
           id,
+          ...RETRY_DEFAULTS,
           claimedAt: null,
           leaseExpiresAt: null,
           claimToken: null,
@@ -156,7 +197,8 @@ function createFakeClient() {
         const targets = [...rows.values()].filter((r) => matches(r, where));
         targets.forEach((row) => {
           if ("activeCacheKey" in data) assertActiveCacheKeyUnique(row.id, data.activeCacheKey);
-          Object.assign(row, data, { updatedAt: new Date() });
+          applyUpdateData(row, data);
+          row.updatedAt = new Date();
         });
         return { count: targets.length };
       },
@@ -213,6 +255,13 @@ function realTtlPolicy() {
   return require("../../src/services/enrichment/enrichmentTtlPolicy").resolveEnrichmentTtl;
 }
 
+function realRetryPolicy() {
+  // Same reasoning as realTtlPolicy: the retry/dead-letter decisions the
+  // runner acts on are the real ones, so these tests prove the wiring rather
+  // than a fake's own arithmetic.
+  return require("../../src/services/enrichment/enrichmentRetryPolicy").resolveEnrichmentRetry;
+}
+
 function successResult(indicator, overrides = {}, provider = "mock") {
   return createEnrichmentResult({
     provider,
@@ -241,6 +290,7 @@ function baseOptions(overrides = {}) {
     batchSize: 10,
     leaseDurationSeconds: 60,
     ttlPolicy: realTtlPolicy(),
+    retryPolicy: realRetryPolicy(),
     workerId: "worker-1",
     ...overrides,
   };
@@ -658,25 +708,41 @@ describe("runEnrichmentBatch — TTL/completion", () => {
 describe("runEnrichmentBatch — cancellation", () => {
   it("keeps an already-completed job COMPLETED and starts no later candidate once cancelled", async () => {
     const client = createFakeClient();
-    client.__seed(pendingRow({ indicator: "198.18.0.21", requestedAt: T0 }));
-    client.__seed(pendingRow({ indicator: "198.18.0.22", requestedAt: new Date(T0.getTime() + 1) }));
+    const row1 = client.__seed(pendingRow({ indicator: "198.18.0.21", requestedAt: T0 }));
+    const row2 = client.__seed(pendingRow({ indicator: "198.18.0.22", requestedAt: new Date(T0.getTime() + 1) }));
+    const row3 = client.__seed(pendingRow({ indicator: "198.18.0.23", requestedAt: new Date(T0.getTime() + 2) }));
     const controller = new AbortController();
-    const provider1 = fakeProvider("mock", {
+    // Job 1 completes untouched; job 2 is the one interrupted mid-lookup;
+    // job 3 must never be started at all.
+    const provider = fakeProvider("mock", {
       resultFor: (input) => successResult(input.indicator),
-      onCall: () => controller.abort(),
+      onCall: (input) => {
+        if (input.indicator === "198.18.0.22") controller.abort();
+      },
     });
 
     const summary = await runEnrichmentBatch({
       ...baseOptions(),
       prisma: client,
-      providerRegistry: registryOf({ mock: provider1 }),
+      providerRegistry: registryOf({ mock: provider }),
       signal: controller.signal,
     });
 
     expect(summary.cancelled).toBe(true);
-    expect(summary.results).toHaveLength(1);
+    expect(summary.results).toHaveLength(2);
     expect(summary.results[0].outcome).toBe(RUNNER_OUTCOME.COMPLETED);
-    expect(provider1.getCalls()).toHaveLength(1);
+    // Cancelled after its provider returned but before completion — released,
+    // never completed (P2-T2d audit finding M4).
+    expect(summary.results[1].outcome).toBe(RUNNER_OUTCOME.RELEASED_AFTER_CANCELLATION);
+    expect(provider.getCalls()).toHaveLength(2);
+
+    // The earlier job's completion survives the later cancellation.
+    expect(client.__rows.get(row1.id).status).toBe(ENRICHMENT_STATUS.SUCCESS);
+    expect(client.__rows.get(row2.id).status).toBe(ENRICHMENT_STATUS.PENDING);
+    expect(client.__rows.get(row2.id).claimToken).toBeNull();
+    // Never claimed, never looked at.
+    expect(client.__rows.get(row3.id).claimToken).toBeNull();
+    expect(client.__rows.get(row3.id).attemptCount).toBe(0);
   });
 
   it("releases the currently claimed job when cancellation is observed before its own lookup", async () => {
@@ -822,6 +888,369 @@ describe("runEnrichmentBatch — unexpected exceptions", () => {
 
     expect(summary.results.map((r) => r.outcome)).toEqual([RUNNER_OUTCOME.COMPLETED, RUNNER_OUTCOME.COMPLETION_FAILED]);
     expect(JSON.stringify(summary)).not.toContain("simulated database failure");
+  });
+});
+
+describe("runEnrichmentBatch — retry, dead-letter and unknown-state hardening (P2-T2e-1)", () => {
+  it("makes zero database and provider calls when the signal is already aborted", async () => {
+    const client = createFakeClient();
+    client.__seed(pendingRow({ indicator: "198.18.0.34" }));
+    const provider = fakeProvider("mock", { resultFor: (input) => successResult(input.indicator) });
+
+    let findManyCalls = 0;
+    let updateManyCalls = 0;
+    const realFindMany = client.iocEnrichment.findMany.bind(client.iocEnrichment);
+    const realUpdateMany = client.iocEnrichment.updateMany.bind(client.iocEnrichment);
+    client.iocEnrichment.findMany = async (args) => {
+      findManyCalls += 1;
+      return realFindMany(args);
+    };
+    client.iocEnrichment.updateMany = async (args) => {
+      updateManyCalls += 1;
+      return realUpdateMany(args);
+    };
+
+    const controller = new AbortController();
+    controller.abort();
+
+    const summary = await runEnrichmentBatch({
+      ...baseOptions(),
+      prisma: client,
+      providerRegistry: registryOf({ mock: provider }),
+      signal: controller.signal,
+    });
+
+    expect(summary.cancelled).toBe(true);
+    expect(summary.candidateCount).toBe(0);
+    expect(summary.results).toHaveLength(0);
+    // Not merely "no work done" — no query was even issued.
+    expect(findManyCalls).toBe(0);
+    expect(updateManyCalls).toBe(0);
+    expect(provider.getCalls()).toHaveLength(0);
+  });
+
+  it("reports CLAIM_FAILED without a provider call when the claim query itself throws", async () => {
+    const client = createFakeClient();
+    client.__seed(pendingRow({ indicator: "198.18.0.35", requestedAt: T0 }));
+    client.__seed(pendingRow({ indicator: "198.18.0.36", requestedAt: new Date(T0.getTime() + 1) }));
+    const provider = fakeProvider("mock", { resultFor: (input) => successResult(input.indicator) });
+
+    // findUnique is claimPendingJob's first call; failing it once makes the
+    // claim raise rather than merely lose a race.
+    let claimReads = 0;
+    const realFindUnique = client.iocEnrichment.findUnique.bind(client.iocEnrichment);
+    client.iocEnrichment.findUnique = async (args) => {
+      claimReads += 1;
+      if (claimReads === 1) throw new Error("simulated claim read failure");
+      return realFindUnique(args);
+    };
+
+    const summary = await runEnrichmentBatch({
+      ...baseOptions(),
+      prisma: client,
+      providerRegistry: registryOf({ mock: provider }),
+    });
+
+    expect(summary.results[0].outcome).toBe(RUNNER_OUTCOME.CLAIM_FAILED);
+    expect(summary.claimedCount).toBe(1); // only the second job
+    expect(summary.internalFailureCount).toBe(1);
+    // A failed claim is not a failed batch: the next job still runs.
+    expect(summary.results[1].outcome).toBe(RUNNER_OUTCOME.COMPLETED);
+    expect(JSON.stringify(summary)).not.toContain("simulated claim read failure");
+  });
+
+  it("reports RELEASE_FAILED and preserves the release's provenance when the release write throws", async () => {
+    const client = createFakeClient();
+    client.__seed(pendingRow({ indicator: "198.18.0.37" }));
+    const provider = fakeProvider("mock", { resultFor: () => new TypeError("provider exploded") });
+
+    // Let the claim through, then fail the release (identified by clearing
+    // claimToken, which only the release/complete writes do).
+    const realUpdateMany = client.iocEnrichment.updateMany.bind(client.iocEnrichment);
+    client.iocEnrichment.updateMany = async (args) => {
+      if (args.data && args.data.claimToken === null) throw new Error("simulated release failure");
+      return realUpdateMany(args);
+    };
+
+    const summary = await runEnrichmentBatch({
+      ...baseOptions(),
+      prisma: client,
+      providerRegistry: registryOf({ mock: provider }),
+    });
+
+    expect(summary.results[0].outcome).toBe(RUNNER_OUTCOME.RELEASE_FAILED);
+    // Part 4C: WHY the release was attempted survives, as a closed code.
+    expect(summary.results[0].failureClass).toBe(FAILURE_CLASS.PROVIDER_PROGRAMMER_ERROR);
+    expect(JSON.stringify(summary)).not.toContain("simulated release failure");
+    expect(JSON.stringify(summary)).not.toContain("provider exploded");
+  });
+
+  it("treats a rejected completion payload as a LOCAL validation error and releases with a delay", async () => {
+    const client = createFakeClient();
+    const row = client.__seed(pendingRow({ indicator: "198.18.0.38" }));
+    // A result whose provider identity does not match the claimed row makes
+    // completeClaimedJob throw IocEnrichmentValidationError *before* it
+    // writes anything — the durable state is therefore known exactly.
+    const provider = fakeProvider("mock", {
+      resultFor: (input) => successResult(input.indicator, {}, "someone-else"),
+    });
+
+    const summary = await runEnrichmentBatch({
+      ...baseOptions(),
+      prisma: client,
+      providerRegistry: registryOf({ mock: provider }),
+    });
+
+    expect(summary.results[0].outcome).toBe(RUNNER_OUTCOME.RELEASED_AFTER_COMPLETION_VALIDATION);
+    expect(summary.results[0].failureClass).toBe(FAILURE_CLASS.COMPLETION_VALIDATION_ERROR);
+    expect(summary.results[0].nextAttemptAt).toBeInstanceOf(Date);
+    expect(summary.results[0].nextAttemptAt.getTime()).toBeGreaterThan(T0.getTime());
+
+    const stored = client.__rows.get(row.id);
+    expect(stored.status).toBe(ENRICHMENT_STATUS.PENDING);
+    expect(stored.claimToken).toBeNull(); // genuinely released
+    expect(stored.queriedAt).toBeNull(); // no partial terminal fields
+    expect(stored.abuseConfidenceScore).toBeNull();
+    expect(stored.nextAttemptAt).toBeInstanceOf(Date);
+  });
+
+  it("HOLDS the lease for an unknown completion database error — never releases or dead-letters", async () => {
+    const client = createFakeClient();
+    const row = client.__seed(pendingRow({ indicator: "198.18.0.39" }));
+    const provider = fakeProvider("mock", { resultFor: (input) => successResult(input.indicator) });
+
+    // Fail only the completion write (identifiable by `data.status`), i.e.
+    // the case where the row may or may not already carry the result.
+    const realUpdateMany = client.iocEnrichment.updateMany.bind(client.iocEnrichment);
+    client.iocEnrichment.updateMany = async (args) => {
+      if (args.data && "status" in args.data) throw new Error("simulated completion database failure");
+      return realUpdateMany(args);
+    };
+
+    const summary = await runEnrichmentBatch({
+      ...baseOptions(),
+      prisma: client,
+      providerRegistry: registryOf({ mock: provider }),
+    });
+
+    expect(summary.results[0].outcome).toBe(RUNNER_OUTCOME.COMPLETION_FAILED);
+    expect(summary.results[0].failureClass).toBe(FAILURE_CLASS.COMPLETION_DATABASE_ERROR);
+    expect(summary.heldUnknownStateCount).toBe(1);
+    expect(summary.releasedCount).toBe(0);
+    expect(summary.deadLetteredCount).toBe(0);
+
+    const stored = client.__rows.get(row.id);
+    // The lease is deliberately still held: lease expiry is the recovery path.
+    expect(stored.claimToken).not.toBeNull();
+    expect(stored.leaseExpiresAt).not.toBeNull();
+    expect(stored.status).toBe(ENRICHMENT_STATUS.PENDING);
+    expect(stored.nextAttemptAt).toBeNull();
+    expect(JSON.stringify(summary)).not.toContain("simulated completion database failure");
+  });
+
+  it("does not complete a job cancelled after its provider returned but before completion", async () => {
+    const client = createFakeClient();
+    const row = client.__seed(pendingRow({ indicator: "198.18.0.40" }));
+    const controller = new AbortController();
+    const provider = fakeProvider("mock", {
+      // Returns a perfectly good result, but the signal fires first.
+      resultFor: (input) => successResult(input.indicator),
+      onCall: () => controller.abort(),
+    });
+
+    const summary = await runEnrichmentBatch({
+      ...baseOptions(),
+      prisma: client,
+      providerRegistry: registryOf({ mock: provider }),
+      signal: controller.signal,
+    });
+
+    expect(provider.getCalls()).toHaveLength(1);
+    expect(summary.cancelled).toBe(true);
+    expect(summary.results[0].outcome).toBe(RUNNER_OUTCOME.RELEASED_AFTER_CANCELLATION);
+    expect(summary.completedCount).toBe(0);
+
+    const stored = client.__rows.get(row.id);
+    expect(stored.status).toBe(ENRICHMENT_STATUS.PENDING);
+    expect(stored.queriedAt).toBeNull();
+    expect(stored.claimToken).toBeNull();
+    // Refunded: an interrupted attempt must not consume the budget.
+    expect(stored.attemptCount).toBe(0);
+  });
+
+  it("dead-letters an unknown provider once its attempt budget is spent, and stops calling it", async () => {
+    const client = createFakeClient();
+    const row = client.__seed(pendingRow({ provider: "ghost", indicator: "198.18.0.41" }));
+    const mock = fakeProvider("mock", { resultFor: (input) => successResult(input.indicator) });
+    const registry = registryOf({ mock });
+
+    // Three attempts, each after the previous delay has elapsed.
+    const outcomes = [];
+    let clock = T0;
+    let lastRunAt = T0;
+    for (let i = 0; i < 3; i += 1) {
+      lastRunAt = clock;
+      // eslint-disable-next-line no-await-in-loop
+      const summary = await runEnrichmentBatch({
+        ...baseOptions({ now: clock }),
+        prisma: client,
+        providerRegistry: registry,
+      });
+      outcomes.push(summary.results[0].outcome);
+      const stored = client.__rows.get(row.id);
+      clock = stored.nextAttemptAt ? new Date(stored.nextAttemptAt.getTime()) : new Date(clock.getTime() + 1);
+    }
+
+    expect(outcomes).toEqual([
+      RUNNER_OUTCOME.UNKNOWN_PROVIDER,
+      RUNNER_OUTCOME.UNKNOWN_PROVIDER,
+      RUNNER_OUTCOME.DEAD_LETTERED,
+    ]);
+
+    const stored = client.__rows.get(row.id);
+    expect(stored.status).toBe(QUEUE_STATUS.DEAD_LETTER);
+    expect(stored.terminalReasonCode).toBe(ENRICHMENT_TERMINAL_REASON.MAX_ATTEMPTS_UNKNOWN_PROVIDER);
+    expect(stored.activeCacheKey).toBeNull();
+    expect(stored.claimToken).toBeNull();
+    // Stamped with the explicit `now` of the run that retired it — never a
+    // wall-clock read.
+    expect(stored.deadLetteredAt).toEqual(lastRunAt);
+
+    // A fourth invocation must not see it at all.
+    const after = await runEnrichmentBatch({
+      ...baseOptions({ now: new Date(clock.getTime() + 86400000) }),
+      prisma: client,
+      providerRegistry: registry,
+    });
+    expect(after.candidateCount).toBe(0);
+    expect(mock.getCalls()).toHaveLength(0);
+  });
+
+  it("bounds a repeatedly-failing provider to maxAttempts calls, then dead-letters it", async () => {
+    const client = createFakeClient();
+    const row = client.__seed(pendingRow({ indicator: "198.18.0.42" }));
+    const provider = fakeProvider("mock", { resultFor: () => new TypeError("always broken") });
+    const registry = registryOf({ mock: provider });
+
+    // Run far more batches than the budget allows.
+    let clock = T0;
+    for (let i = 0; i < 8; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await runEnrichmentBatch({
+        ...baseOptions({ now: clock }),
+        prisma: client,
+        providerRegistry: registry,
+      });
+      const stored = client.__rows.get(row.id);
+      clock = stored.nextAttemptAt ? new Date(stored.nextAttemptAt.getTime()) : new Date(clock.getTime() + 60000);
+    }
+
+    // The poison job cost exactly its budget, not one call per batch.
+    expect(provider.getCalls()).toHaveLength(3);
+    const stored = client.__rows.get(row.id);
+    expect(stored.status).toBe(QUEUE_STATUS.DEAD_LETTER);
+    expect(stored.terminalReasonCode).toBe(ENRICHMENT_TERMINAL_REASON.MAX_ATTEMPTS_PROVIDER_ERROR);
+    expect(stored.attemptCount).toBe(3);
+  });
+
+  it("does not let one poison job starve healthy jobs in the same batch", async () => {
+    const client = createFakeClient();
+    client.__seed(pendingRow({ indicator: "198.18.0.43", requestedAt: T0 }));
+    const healthy = client.__seed(pendingRow({ indicator: "198.18.0.44", requestedAt: new Date(T0.getTime() + 1) }));
+    const provider = fakeProvider("mock", {
+      resultFor: (input) => {
+        if (input.indicator === "198.18.0.43") throw new TypeError("poison");
+        return successResult(input.indicator);
+      },
+    });
+
+    const summary = await runEnrichmentBatch({
+      ...baseOptions(),
+      prisma: client,
+      providerRegistry: registryOf({ mock: provider }),
+    });
+
+    expect(summary.results.map((r) => r.outcome)).toEqual([
+      RUNNER_OUTCOME.RELEASED_AFTER_INTERNAL_ERROR,
+      RUNNER_OUTCOME.COMPLETED,
+    ]);
+    expect(client.__rows.get(healthy.id).status).toBe(ENRICHMENT_STATUS.SUCCESS);
+  });
+
+  it("sweeps an already-exhausted candidate into DEAD_LETTER without claiming or calling a provider", async () => {
+    const client = createFakeClient();
+    // A row stranded at its limit by an earlier crashed worker: claimable
+    // forever in the old model, permanently unclaimable in the new one.
+    const row = client.__seed(pendingRow({ indicator: "198.18.0.45" }));
+    client.__rows.get(row.id).attemptCount = 3;
+    const provider = fakeProvider("mock", { resultFor: (input) => successResult(input.indicator) });
+
+    const summary = await runEnrichmentBatch({
+      ...baseOptions(),
+      prisma: client,
+      providerRegistry: registryOf({ mock: provider }),
+    });
+
+    expect(summary.results[0].outcome).toBe(RUNNER_OUTCOME.EXHAUSTED_DEAD_LETTERED);
+    expect(summary.deadLetteredCount).toBe(1);
+    expect(summary.claimedCount).toBe(0);
+    expect(provider.getCalls()).toHaveLength(0);
+
+    const stored = client.__rows.get(row.id);
+    expect(stored.status).toBe(QUEUE_STATUS.DEAD_LETTER);
+    expect(stored.terminalReasonCode).toBe(ENRICHMENT_TERMINAL_REASON.MAX_ATTEMPTS_EXHAUSTED);
+    expect(stored.activeCacheKey).toBeNull();
+    expect(stored.attemptCount).toBe(3); // never incremented by the sweep
+  });
+
+  it("does not list a job whose retry delay has not elapsed, and does at the exact boundary", async () => {
+    const client = createFakeClient();
+    const row = client.__seed(pendingRow({ indicator: "198.18.0.46" }));
+    const nextAttemptAt = new Date(T0.getTime() + 300000);
+    client.__rows.get(row.id).nextAttemptAt = nextAttemptAt;
+    const provider = fakeProvider("mock", { resultFor: (input) => successResult(input.indicator) });
+    const registry = registryOf({ mock: provider });
+
+    const tooEarly = await runEnrichmentBatch({
+      ...baseOptions({ now: new Date(nextAttemptAt.getTime() - 1) }),
+      prisma: client,
+      providerRegistry: registry,
+    });
+    expect(tooEarly.candidateCount).toBe(0);
+    expect(provider.getCalls()).toHaveLength(0);
+
+    const exactly = await runEnrichmentBatch({
+      ...baseOptions({ now: nextAttemptAt }),
+      prisma: client,
+      providerRegistry: registry,
+    });
+    expect(exactly.candidateCount).toBe(1);
+    expect(exactly.results[0].outcome).toBe(RUNNER_OUTCOME.COMPLETED);
+  });
+
+  it("never lets a raw exception, secret or claim token reach a dead-lettered summary", async () => {
+    const client = createFakeClient();
+    const row = client.__seed(pendingRow({ indicator: "198.18.0.47" }));
+    client.__rows.get(row.id).attemptCount = 2; // one attempt left
+    const SECRET = "dead-letter-secret-must-not-leak";
+    const provider = fakeProvider("mock", { resultFor: () => new TypeError(`boom ${SECRET}`) });
+
+    const KNOWN_TOKEN = "KNOWN-DEADLETTER-CLAIM-TOKEN";
+    const spy = vi.spyOn(crypto, "randomUUID").mockReturnValue(KNOWN_TOKEN);
+    const summary = await runEnrichmentBatch({
+      ...baseOptions(),
+      prisma: client,
+      providerRegistry: registryOf({ mock: provider }),
+    });
+    spy.mockRestore();
+
+    expect(summary.results[0].outcome).toBe(RUNNER_OUTCOME.DEAD_LETTERED);
+    expect(summary.deadLetteredCount).toBe(1);
+    const serialized = JSON.stringify(summary);
+    expect(serialized).not.toContain(SECRET);
+    expect(serialized).not.toContain(KNOWN_TOKEN);
+    expect(serialized).not.toContain("TypeError");
+    expect(serialized).not.toContain(client.__rows.get(row.id).cacheKey);
   });
 });
 
