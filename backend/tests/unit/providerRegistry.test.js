@@ -23,13 +23,23 @@ describe("providerRegistry — resolution", () => {
   });
 
   it("rejects an unknown provider name with a controlled, typed error", () => {
-    expect(() => resolveIocEnrichmentProvider("abuseipdb")).toThrow(UnknownIocEnrichmentProviderError);
     expect(() => resolveIocEnrichmentProvider("does-not-exist")).toThrow(UnknownIocEnrichmentProviderError);
   });
 
-  it("is case-sensitive: 'Mock'/'MOCK' are not the registered 'mock'", () => {
+  it("resolves the real abuseipdb provider by its exact registered name (P2-T2c)", async () => {
+    const provider = resolveIocEnrichmentProvider("abuseipdb");
+    expect(provider.name).toBe("abuseipdb");
+    // No API key supplied — this proves resolving the registry never
+    // requires one; the provider is simply disabled at lookup time.
+    const result = await provider.lookup({ indicatorType: "IPV4", indicator: "203.0.113.10", asOf: ASOF });
+    expect(result.status).toBe("SKIPPED_DISABLED");
+  });
+
+  it("is case-sensitive: 'Mock'/'MOCK' and 'AbuseIPDB'/'ABUSEIPDB' are not registered", () => {
     expect(() => resolveIocEnrichmentProvider("Mock")).toThrow(UnknownIocEnrichmentProviderError);
     expect(() => resolveIocEnrichmentProvider("MOCK")).toThrow(UnknownIocEnrichmentProviderError);
+    expect(() => resolveIocEnrichmentProvider("AbuseIPDB")).toThrow(UnknownIocEnrichmentProviderError);
+    expect(() => resolveIocEnrichmentProvider("ABUSEIPDB")).toThrow(UnknownIocEnrichmentProviderError);
   });
 
   it("rejects prototype-chain lookups like 'constructor' or 'toString' as unknown providers", () => {
@@ -54,14 +64,14 @@ describe("providerRegistry — resolution", () => {
 });
 
 describe("providerRegistry — immutability", () => {
-  it("lists 'mock' as the only registered provider name", () => {
-    expect(listRegisteredIocEnrichmentProviderNames()).toEqual(["mock"]);
+  it("lists 'mock' and 'abuseipdb' as the registered provider names", () => {
+    expect(listRegisteredIocEnrichmentProviderNames()).toEqual(["mock", "abuseipdb"]);
   });
 
   it("returns a frozen names array that cannot be mutated by a consumer", () => {
     const names = listRegisteredIocEnrichmentProviderNames();
     expect(Object.isFrozen(names)).toBe(true);
-    expect(() => names.push("abuseipdb")).toThrow();
+    expect(() => names.push("something-else")).toThrow();
   });
 
   it("does not export the underlying factory map for direct mutation", () => {

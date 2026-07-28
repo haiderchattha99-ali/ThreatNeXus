@@ -7,7 +7,10 @@ const MANAGED_KEYS = [
   "CORS_ORIGIN",
   "PORT",
   "UPLOAD_MAX_BYTES",
+  "ABUSEIPDB_API_KEY",
+  "ABUSEIPDB_BASE_URL",
   "ABUSEIPDB_TIMEOUT_MS",
+  "ABUSEIPDB_MAX_AGE_DAYS",
   "ABUSEIPDB_CACHE_TTL_HOURS",
   "SOME_UNRELATED_SECRET",
 ];
@@ -92,10 +95,74 @@ describe("env.js configuration validation", () => {
     expect(() => loadEnv()).toThrowError(/PORT/);
   });
 
-  it("falls back to defaults for invalid optional numeric values (Phase 2 vars)", () => {
-    setEnv({ ...VALID_BASE, ABUSEIPDB_TIMEOUT_MS: "not-a-number" });
+  it("falls back to the default for an invalid ABUSEIPDB_CACHE_TTL_HOURS (not yet consumed by anything)", () => {
+    setEnv({ ...VALID_BASE, ABUSEIPDB_CACHE_TTL_HOURS: "not-a-number" });
     const config = loadEnv();
-    expect(config.ABUSEIPDB_TIMEOUT_MS).toBe(5000);
+    expect(config.ABUSEIPDB_CACHE_TTL_HOURS).toBe(24);
+  });
+
+  it("loads AbuseIPDB defaults when no Phase 2 vars are set", () => {
+    setEnv(VALID_BASE);
+    const config = loadEnv();
+    expect(config.ABUSEIPDB_API_KEY).toBe("");
+    expect(config.ABUSEIPDB_BASE_URL).toBe("https://api.abuseipdb.com/api/v2");
+    expect(config.ABUSEIPDB_TIMEOUT_MS).toBe(8000);
+    expect(config.ABUSEIPDB_MAX_AGE_DAYS).toBe(90);
+  });
+
+  it("fails when ABUSEIPDB_TIMEOUT_MS is not a number", () => {
+    setEnv({ ...VALID_BASE, ABUSEIPDB_TIMEOUT_MS: "not-a-number" });
+    expect(() => loadEnv()).toThrowError(/ABUSEIPDB_TIMEOUT_MS/);
+  });
+
+  it("fails when ABUSEIPDB_TIMEOUT_MS is below the minimum bound", () => {
+    setEnv({ ...VALID_BASE, ABUSEIPDB_TIMEOUT_MS: "500" });
+    expect(() => loadEnv()).toThrowError(/ABUSEIPDB_TIMEOUT_MS/);
+  });
+
+  it("fails when ABUSEIPDB_TIMEOUT_MS is above the maximum bound", () => {
+    setEnv({ ...VALID_BASE, ABUSEIPDB_TIMEOUT_MS: "999999" });
+    expect(() => loadEnv()).toThrowError(/ABUSEIPDB_TIMEOUT_MS/);
+  });
+
+  it("fails when ABUSEIPDB_MAX_AGE_DAYS is out of bounds", () => {
+    setEnv({ ...VALID_BASE, ABUSEIPDB_MAX_AGE_DAYS: "0" });
+    expect(() => loadEnv()).toThrowError(/ABUSEIPDB_MAX_AGE_DAYS/);
+  });
+
+  it("fails when ABUSEIPDB_MAX_AGE_DAYS exceeds the maximum bound", () => {
+    setEnv({ ...VALID_BASE, ABUSEIPDB_MAX_AGE_DAYS: "366" });
+    expect(() => loadEnv()).toThrowError(/ABUSEIPDB_MAX_AGE_DAYS/);
+  });
+
+  it("accepts valid overrides for ABUSEIPDB_TIMEOUT_MS and ABUSEIPDB_MAX_AGE_DAYS", () => {
+    setEnv({ ...VALID_BASE, ABUSEIPDB_TIMEOUT_MS: "3000", ABUSEIPDB_MAX_AGE_DAYS: "30" });
+    const config = loadEnv();
+    expect(config.ABUSEIPDB_TIMEOUT_MS).toBe(3000);
+    expect(config.ABUSEIPDB_MAX_AGE_DAYS).toBe(30);
+  });
+
+  it("fails when ABUSEIPDB_BASE_URL is not HTTPS and not an explicit local test URL", () => {
+    setEnv({ ...VALID_BASE, ABUSEIPDB_BASE_URL: "http://api.abuseipdb.com/api/v2" });
+    expect(() => loadEnv()).toThrowError(/ABUSEIPDB_BASE_URL/);
+  });
+
+  it("accepts an explicit local test URL for ABUSEIPDB_BASE_URL", () => {
+    setEnv({ ...VALID_BASE, ABUSEIPDB_BASE_URL: "http://localhost:4010/api/v2" });
+    const config = loadEnv();
+    expect(config.ABUSEIPDB_BASE_URL).toBe("http://localhost:4010/api/v2");
+  });
+
+  it("never includes the ABUSEIPDB_API_KEY value in a configuration error message", () => {
+    const fakeKey = "FAKE-ABUSEIPDB-KEY-do-not-actually-use-1a2b3c";
+    setEnv({ ...VALID_BASE, ABUSEIPDB_API_KEY: fakeKey, ABUSEIPDB_TIMEOUT_MS: "not-a-number" });
+    try {
+      loadEnv();
+      throw new Error("expected loadEnv to throw");
+    } catch (err) {
+      expect(err.message).not.toContain(fakeKey);
+      expect(err.message).toMatch(/ABUSEIPDB_TIMEOUT_MS/);
+    }
   });
 
   it("does not expose the supplied secret value in error output", () => {

@@ -3,8 +3,9 @@
 // Small, immutable, code-level IOC enrichment provider registry (P2-T2a) —
 // mirrors the existing reportSourceRegistry.js pattern: no database-backed
 // registry, no generic plugin framework, no dependency-injection container.
-// Registering the future AbuseIPDBProvider is one small additive entry in
-// PROVIDER_FACTORIES below, never a rewrite of this module or its callers.
+// Registering the real AbuseIPDBProvider (P2-T2c) was one small additive
+// entry in PROVIDER_FACTORIES below, never a rewrite of this module or its
+// callers.
 //
 // The registry itself is never exported — only resolve/list functions are —
 // so a consumer has no reference to mutate, on top of PROVIDER_FACTORIES
@@ -13,6 +14,7 @@
 // call count across unrelated resolutions.
 
 const { createMockIocEnrichmentProvider } = require("./mockIocEnrichmentProvider");
+const { createAbuseIpdbProvider } = require("./abuseIpdbProvider");
 const { assertImplementsIocEnrichmentProvider } = require("./iocEnrichmentProvider");
 
 class UnknownIocEnrichmentProviderError extends Error {
@@ -23,10 +25,13 @@ class UnknownIocEnrichmentProviderError extends Error {
 }
 
 // Exact, case-sensitive provider names only — "Mock"/"MOCK"/" mock" are not
-// "mock". Do NOT register a fake/stub AbuseIPDB implementation here; that
-// provider does not exist until the packet that implements it for real.
+// "mock", and "AbuseIPDB" is not "abuseipdb" (see DECISIONS.md D-007).
+// createAbuseIpdbProvider requires no config at all — resolving "abuseipdb"
+// with no API key present never fails; it only affects that provider's
+// lookup() (SKIPPED_DISABLED), never construction or import.
 const PROVIDER_FACTORIES = Object.freeze({
   mock: (config) => createMockIocEnrichmentProvider(config),
+  abuseipdb: (config) => createAbuseIpdbProvider(config),
 });
 
 /**
