@@ -15,12 +15,15 @@ _Operational status / handoff note. Authoritative plan lives in
   also **complete** — see "Completed — P2-T2b" below. **P2-T2c (real `AbuseIPDBProvider` + TTL
   policy)** is also **complete** — see "Completed — P2-T2c" below. **P2-T2d (bounded enrichment
   runner + queue completion integration)** is also **complete** — see "Completed — P2-T2d" below.
-- **Next task: P2-T2e — ingestion scheduling, enrichment read/trigger APIs, RBAC and audits.** The
-  runner can now claim a job, call a provider outside any transaction, apply TTL policy, and complete
-  the claim — but **nothing calls the runner yet**: no report-ingestion wiring schedules enrichment
-  work, no route/controller exposes enrichment reads or a manual trigger, no capability guards either,
-  and no audit event exists on any enrichment path. See "Completed — P2-T2d" for exactly what this
-  packet did and did not build.
+  **P2-T2e-1 (retry/dead-letter safety, runner hardening, production composition root, audited
+  execution service)** is also **complete** — see "Completed — P2-T2e-1" below.
+- **Next task: P2-T2e-2 — schedule enrichment after ingestion and add enrichment read/manual trigger
+  APIs with RBAC.** A batch can now be composed and executed against real configuration, with an
+  attempt budget, a retry gate, a DEAD_LETTER terminal state and bounded aggregate audit events —
+  but **nothing calls `executeEnrichmentBatch` yet**: no report-ingestion wiring schedules enrichment
+  work, no route/controller exposes enrichment reads or a manual trigger, and no capability guard
+  exists for anything enrichment-related. See "Completed — P2-T2e-1" for exactly what this packet did
+  and did not build.
 
 ## Completed — P2-T1 (ownership mapping, deterministic resolution, analyst override)
 
@@ -687,6 +690,259 @@ The runner is never invoked automatically: no report-ingestion code path schedul
 route exposes a "run worker" trigger or reads enrichment data, no capability/RBAC guard exists for
 anything enrichment-related, and no `AuditLog` event is written on any enrichment path. Those are
 **P2-T2e** — ingestion scheduling, enrichment read/trigger APIs, RBAC and audits.
+
+## Completed — P2-T2e-1 (retry/dead-letter safety, runner hardening, composition root, audited execution)
+
+Closes the two risks the P2-T2d release audit raised (verdict: *approved with non-blocking risks*)
+and makes the runner production-*composable* — while deliberately leaving it production-*unreachable*.
+**No ingestion scheduling, no routes/controllers, no RBAC capability, no daemon, cron or worker
+loop.** See "Still no ingestion or API reachability" below for the exact boundary.
+
+### Migration
+
+`20260728071624_add_phase2_enrichment_retry_dead_letter` — the only migration in this packet, strictly
+additive and non-destructive: one enum value (`IocEnrichmentStatus.DEAD_LETTER`), six nullable/defaulted
+columns on `IocEnrichment` (`attemptCount` default 0, `maxAttempts` default 3, `nextAttemptAt`,
+`lastAttemptAt`, `deadLetteredAt`, `terminalReasonCode`), and one index
+`(status, nextAttemptAt, requestedAt)` for the retry-eligible pending lookup. No column dropped, no
+type changed, no data rewritten, no raw SQL, no partial index. Migration count **11 → 12**. Applied
+cleanly to both disposable databases (`threatnexus_test`, `threatnexus_eval`); the development
+database was never touched.
+
+### DEAD_LETTER is a queue state, never a reputation outcome
+
+`DEAD_LETTER` was added to the Prisma `IocEnrichmentStatus` enum but **deliberately not** to
+`iocEnrichmentTypes.ENRICHMENT_STATUS`, the provider-result taxonomy. Because `TERMINAL_STATUSES` is
+derived from that provider taxonomy, three things are structurally true rather than merely documented:
+`createEnrichmentResult` can never produce `DEAD_LETTER`, `buildTerminalFields` can never write one,
+and `findFreshCachedResult` can never return one as a cache hit. "We stopped processing this job" is
+therefore incapable of ever reading as "the address is clean" — the same invariant P2-T2b established
+for cached failures, extended to the queue's own give-up state.
+
+### Attempt budget, retry gate and dead-lettering
+
+`attemptCount` is incremented by the **same guarded `updateMany` that establishes the lease**, never by
+a follow-up write — so it counts real attempts and a consumer that loses the claim race increments
+nothing. The budget guard compares the live `attemptCount` column against the row's own immutable
+`maxAttempts` (read first, used as a constant in the WHERE clause), so PostgreSQL re-evaluates it at
+update time against the winner's committed row. `maxAttempts` is persisted per job, bounded `[1, 10]`,
+default 3, and out-of-range **throws rather than clamping**.
+
+`nextAttemptAt` gates retry eligibility: null means "eligible now", a future value hides the row from
+`listPendingCandidates`. The boundary is inclusive (`nextAttemptAt === now` is eligible) and matches
+`isRetryEligibleRecord` exactly, so the pure rule and the query cannot disagree about the instant.
+
+New primitives: `deadLetterClaimedJob` (claim-token-guarded, for a worker that has exhausted its
+budget) and `deadLetterExhaustedJob` (no token, guarded instead on *already exhausted* **and** *no live
+lease* — the sweep for a row stranded at its limit by a crashed worker, which `claimPendingJob` refuses
+and which would otherwise sit `PENDING` and unclaimable forever). Both clear `activeCacheKey` and every
+lease field, write only a closed `terminalReasonCode`, and cannot overwrite an already-terminal row.
+Both **preserve** whatever normalized/provider evidence an earlier attempt recorded — the statement
+touches lifecycle columns only.
+
+A previously dead-lettered row never blocks a later *explicit* scheduling call: `activeCacheKey` is
+cleared and `DEAD_LETTER` is not a cache hit, so `scheduleEnrichment` creates a fresh attempt row with
+a full budget while the retired row stays as history. Re-scheduling is always a deliberate act, never
+an automatic resurrection.
+
+### Retry policy (pure)
+
+`enrichmentRetryPolicy.js` — no Prisma, no provider, no wall clock (`now` is the only time input).
+Closed failure classes → closed actions:
+
+| Failure class | Action | Notes |
+|---|---|---|
+| `EXPECTED_PROVIDER_RESULT` | `COMPLETE` | every terminal provider status, incl. negatives; budget never applies |
+| `CALLER_CANCELLATION` | `RELEASE_WITH_DELAY` | short delay, attempt **refunded**, **never** dead-letters at any count |
+| `PROVIDER_PROGRAMMER_ERROR` | `RELEASE_WITH_DELAY` → `DEAD_LETTER` | 5m doubling, capped 1h; retires at budget |
+| `UNKNOWN_PROVIDER` | `RELEASE_WITH_DELAY` → `DEAD_LETTER` | flat 1h (only an operator can change the outcome) |
+| `COMPLETION_VALIDATION_ERROR` | `RELEASE_WITH_DELAY` → `DEAD_LETTER` | safe to act on: no write happened |
+| `COMPLETION_DATABASE_ERROR` | `HOLD_UNKNOWN_STATE` | budget ignored deliberately |
+| `RELEASE_DATABASE_ERROR` | `HOLD_UNKNOWN_STATE` | budget ignored deliberately |
+
+Every delay is clamped into `[60s, 24h]`, so a zero-delay re-claim loop is structurally impossible and
+no delay is infinite. A provider's `Retry-After` may only **extend** the policy's delay, never shorten
+it, and is rounded up. Cancellation refunds exactly the one increment its own claim made — that is a
+reversal, not a reset, and is safe because the release is claim-token-guarded, so no other worker can
+be touching the row while we hold the lease.
+
+### Runner audit fixes (P2-T2d findings M1–M4)
+
+**A. Completion validation vs. unknown database state.** P2-T2d turned *every* `completeClaimedJob`
+throw into `COMPLETION_FAILED` and held the lease. It now classifies on the **typed domain error**
+(`IocEnrichmentValidationError` vs. anything else) — never by parsing `error.message`:
+
+- rejected-before-write → `COMPLETION_VALIDATION_ERROR` → durable state known exactly → released with
+  a delay, or dead-lettered once the budget is spent
+- the write itself raised → `COMPLETION_DATABASE_ERROR` → the write may have committed → `HOLD_UNKNOWN_STATE`:
+  nothing is released, nothing is dead-lettered, the lease is kept and **lease expiry is the recovery
+  path**. Releasing here could hand a job that already completed to another worker; dead-lettering it
+  could bury a good result.
+
+**B. Cancellation re-check.** The `AbortSignal` is now re-checked *after* `provider.lookup()` returns
+and *before* TTL/completion. A provider that returns normally while the signal fires — or that does not
+honour the signal at all — no longer gets its job completed: the job is released under the cancellation
+policy and the batch stops. Earlier completed jobs stay completed; later candidates never start.
+
+**C. Release-failure provenance.** Every job result now carries a closed `failureClass`, so a
+`RELEASE_FAILED` says *why* the release was attempted (cancellation / provider error / unknown provider
+/ completion validation) without exposing any exception content. `buildJobResult` validates
+`failureClass` and `terminalReasonCode` against their closed vocabularies, so a raw error string is
+structurally unable to reach a caller through this shape.
+
+**D. Missing-path tests** — all six now exist (see Tests).
+
+New outcomes: `RELEASED_AFTER_COMPLETION_VALIDATION`, `DEAD_LETTERED`, `EXHAUSTED_DEAD_LETTERED`,
+`EXHAUSTED_SWEEP_FAILED`. New summary counts: `deadLetteredCount`, `heldUnknownStateCount` (kept
+separate from `internalFailureCount` so an operator can tell "we do not know" from "we know it broke").
+
+### Production composition root
+
+`enrichmentRuntime.js` — one function returning a frozen object. Not a DI framework, not a worker:
+building a runtime starts no timer, loop or batch (proven with fake timers). Importing it makes no
+network call and requires no API key; `config/env.js` is loaded lazily so a unit test needn't satisfy
+the whole application's configuration. It binds the exact, case-sensitive provider registry, the real
+TTL and retry policies, and bounded lease/batch/attempt defaults. **It never falls back to
+MockProvider**: an unregistered name throws (the runner reports `UNKNOWN_PROVIDER`), and
+`allowMockProvider: false` removes even an explicit `"mock"`. `describe()` reports *whether* an
+AbuseIPDB key is configured — never the key, a prefix of it, or its length.
+
+### Audited execution service
+
+`enrichmentExecutionService.executeEnrichmentBatch({prisma, actorContext, now, batchSize, workerId,
+signal, runtimeOverrides})` invokes `runEnrichmentBatch` **at most once** per call. It has actor/source
+context but **no HTTP dependency** — no `req`, no Express import — so a system caller passes
+`SYSTEM_ACTOR_CONTEXT` (actorUserId null: attributing system work to a real user would be a false
+attribution) and a future route caller will pass `buildAuditContext(req)`.
+
+Audit actions, following the existing dotted convention: `enrichment.batch.requested` (always, before
+any work), then exactly one of `enrichment.batch.completed` / `.cancelled` / `.failed`. At most three
+rows per call **whatever the batch size** — there is no per-job audit event by design. A per-job
+failure is a count inside a *completed* batch, not a failed batch.
+
+`buildBatchAuditPayload` is an **allow-list, not a redaction pass**: it names the aggregate fields it
+copies, so a field added to the runner summary later cannot leak through it by default. Audited:
+counts plus the terminal-status histogram. Never audited: `results[].indicator`, claim token, cache
+key, `activeCacheKey`, API key, request headers, raw provider response, `Error.message`, stack, or a
+row dump. The indicator exclusion is deliberate — per-job evidence already lives in `IocEnrichment`,
+which is its correct queryable home; copying it into every batch's audit trail would both flood the
+trail and duplicate victim-adjacent data. Audit failure cannot damage queue processing (`safeLogAuditEvent`
+plus a local guard), and the runner itself stays audit-agnostic.
+
+### Durable decisions recorded by this packet
+
+Recorded here rather than in `DECISIONS.md`: that file lives in the **read-only** planning folder
+(`../ThreatNeXus-Planning/`), which `AGENTS.md`/`CLAUDE.md` forbid editing and which is not under
+version control, so an edit there would be unversioned and hard to reverse. Flagged for the owner to
+port across if wanted.
+
+- **D-T2e1-a — Bounded attempt budget.** `maxAttempts` is persisted per job, bounded `[1, 10]`,
+  default 3. Persisted (not read from config at claim time) so a job's budget cannot change under it
+  between attempts. Out-of-range throws rather than clamping.
+- **D-T2e1-b — `nextAttemptAt` governs retry eligibility.** Inclusive boundary. A release always
+  carries a bounded, non-zero delay, so an immediate re-claim loop is structurally impossible.
+- **D-T2e1-c — `DEAD_LETTER` is a queue-lifecycle state, not a provider outcome.** It is absent from
+  the provider result taxonomy, so it can never be produced by a provider or read as reputation
+  evidence. Dead-lettering preserves prior evidence and clears `activeCacheKey`.
+- **D-T2e1-d — An unknown completion database error holds the lease.** No release, no dead-letter, no
+  blind retry; lease expiry is the recovery path. Distinguished from a local validation rejection by
+  typed domain error, never by message parsing.
+- **D-T2e1-e — Cancellation is not a failed attempt.** It refunds its own attempt increment and can
+  never dead-letter a job at any attempt count.
+- **D-T2e1-f — Audit belongs to the execution service.** The pure runner and the repository primitives
+  stay audit-agnostic; they have no actor/request context. Batch audits are aggregate-only and never
+  per-job.
+
+### Tests
+
+**110 new/updated tests**, none touching the real internet (every provider is a fake or a real provider
+with an injected `fetchImpl`).
+
+- `enrichmentRetryPolicy.test.js` (**33**) — every failure class; exact attempt boundaries (below /
+  exactly at / past budget, and `maxAttempts: 1`); bounded, deterministic, non-zero delays; exponential
+  growth capped; `Retry-After` extends but never shortens and rounds up; extreme values clamped;
+  cancellation never dead-letters; `PENDING`/`DEAD_LETTER`/invalid inputs rejected; `nextAttemptAt`
+  derived from the explicit `now` (asserted against a far-future date, so a wall-clock read would fail).
+- `iocEnrichmentRetryQueue.test.js` (**24**) — pure predicates; default and explicit budget; exactly one
+  increment per claim; a lost claim increments nothing; exhausted claims refused; release never resets
+  and refunds exactly one; retry gate hides/admits at the exact boundary; dead-letter clears
+  active/lease fields, requires the right token, cannot overwrite a terminal row, preserves prior
+  evidence, rejects free-form reason text, is never listed and never a cache hit; sweep refuses a row
+  with budget left or a live lease; re-scheduling after a dead letter creates a fresh row while
+  active-job uniqueness still holds.
+- `enrichmentRunner.test.js` (**+12**, 36 total) — pre-aborted signal makes **zero** database and
+  provider calls (findMany/updateMany call counters, not just "no work"); `claimPendingJob` throws →
+  `CLAIM_FAILED` and the batch continues; `releaseClaimedJob` throws → `RELEASE_FAILED` with closed
+  provenance; local completion-validation error → released with a delay, no partial terminal fields;
+  unknown completion DB error → lease **held**, nothing released or dead-lettered; cancellation after
+  the provider returned → not completed, attempt refunded; unknown provider dead-letters after its
+  budget and is never called again; a repeatedly failing provider costs exactly `maxAttempts` calls
+  across eight batches; a poison job does not starve a healthy one beside it; exhausted candidate swept
+  without a claim or provider call; retry boundary honoured end to end; no secret/stack/claim
+  token/cache key in a dead-lettered summary.
+- `enrichmentRuntime.test.js` (**16**) — builds with no key and no network; binds the real policies;
+  starts no timer; exact case-sensitive resolution; **never** falls back to mock; mock disablable;
+  config from env; `describe()` leaks no key, prefix or length; logs nothing.
+- `enrichmentExecutionService.test.js` (**12**) — one requested/completed pair; cancellation audit;
+  pre-processing failure audit + rethrow; 12 jobs still produce 2 audit rows; per-job failure counted
+  not audited as a failed batch; payload key set asserted exactly; no indicator/cache key/hash/error
+  text in any audit row; `buildBatchAuditPayload` ignores unknown future fields; audit outage does not
+  alter a completed job; SYSTEM vs explicit actor context; input validation writes nothing; at most one
+  runner invocation and no timer.
+- `enrichmentRunnerTypes.test.js` (**+3**) — `retryPolicy` required; new closed fields in the job-result
+  key set; closed-vocabulary rejection for `failureClass`/`terminalReasonCode`; dead-letter and
+  held-unknown-state counts derived separately.
+
+**8 real-PostgreSQL tests** (`tests/integration/enrichmentRetryDeadLetter.test.js`, self-skips without
+`TEST_DATABASE_URL`, dedicated marker `p2t2e1-mock` + IP range `198.20.0.x`, distinct from P2-T2b's
+`p2t2b-mock`/`198.18.0.x` and P2-T2d's `p2t2d-mock`/`198.19.0.x`): (1) two workers on separate
+pre-connected `PrismaClient`s racing for one job produce **exactly one** attempt increment and one
+provider call, the loser incrementing nothing; (2) retry eligibility boundary — not listed before
+`nextAttemptAt`, listed at it exactly, honoured end to end by the runner; (3) dead-letter requires the
+correct claim token, clears terminal/active/lease fields, and the row is never listed again; (4) a
+repeatedly failing provider costs at most `maxAttempts` calls across eight batches, ends `DEAD_LETTER`
+with no exception text on the row, and is not called again 30 days later; (5) a rejected completion
+payload writes no terminal provider fields, releases with a gate, then dead-letters at the budget;
+(6) an unknown completion database error holds the lease — no release, no dead-letter, no other worker
+can even list the row while the lease is live — and recovers on lease expiry; (7) cancellation after the
+provider returned does not complete the job, releases it with a gate, refunds the attempt, and a later
+worker completes it normally; (8) a forced audit-write failure leaves the completed batch and its row
+fully intact.
+
+**Test-isolation fix (test-only).** A runner batch is a *global* queue consumer by design, and vitest
+runs integration files in parallel against one database — so an unscoped batch in the P2-T2d/P2-T2e-1
+suites would claim, delay and (now) dead-letter the rows belonging to `iocEnrichmentQueue.test.js`.
+Both runner suites now pass the worker a thin delegate whose candidate **listing** is filtered to that
+suite's own marker. Only the listing is scoped: the claim, completion, release and dead-letter
+statements are the real, unscoped ones, so every concurrency guarantee under test is still the
+production one. This was latent under P2-T2d (a release restored the row invisibly); the retry gate and
+dead-letter made it visible.
+
+### Verification
+
+- All P2-T2a → P2-T2e-1 targeted unit suites together: **389/389 PASS**.
+- Ownership regression (`findingOwnershipService`, `ownershipResolver`, `assetMappingService`, `roles`,
+  `reportIngestionService`): **147/147 PASS**, unchanged — this packet touches no ownership code.
+- Full backend suite, real databases configured: **1351/1351 PASS** (60 files), including all real-PostgreSQL
+  suites (dedup + ingestion + phase1Gate + ownership + enrichment queue + enrichment runner + enrichment
+  retry/dead-letter). No flake observed on this run — including the previously noted `cleanupUpload`
+  timing flake, which is unrelated to this diff and not touched by it.
+- Phase 1 evaluator: `npm run eval:phase1` — **9/9 PASS**, unchanged.
+- `npx prisma validate` clean · `prisma migrate status` reports **12 migrations, up to date** on both
+  `threatnexus_test` and `threatnexus_eval` · exactly **one** new migration · no raw SQL anywhere in
+  `src/` or `tests/` · no real network access in any test · `git diff --check` clean (only benign
+  CRLF-normalization notices).
+- Note: the full suite requires `DATABASE_URL`/`JWT_SECRET`/`CORS_ORIGIN` to be set, because
+  `reportIngestionService` imports `config/env.js`. Without them two `ownershipConcurrency` tests fail
+  with `ConfigError` — a known environment gotcha, not a defect, and unrelated to this packet.
+
+### Still no ingestion or API reachability (deliberately, this packet stops here)
+
+`executeEnrichmentBatch` exists and is production-composable, but **nothing calls it**: no
+report-ingestion code path schedules enrichment work or invokes a batch, no route exposes a manual
+trigger or reads enrichment data, no capability/RBAC guard exists for anything enrichment-related, and
+there is no daemon, cron process or worker loop anywhere in the repository. Those are **P2-T2e-2** —
+schedule enrichment after ingestion, and add enrichment read/manual-trigger APIs with RBAC.
 
 ## Phase 1 release audit
 
