@@ -64,6 +64,67 @@ function isRetryableConcurrencyError(error) {
 }
 
 /**
+ * Shared read-decide-write loop behind both `scheduleEnrichment` and
+ * `scheduleEnrichmentForced`. The two differ in exactly one respect —
+ * whether a fresh cached terminal result short-circuits the call — so that
+ * difference is the only thing the two public functions pass in; the
+ * cache-key construction and P2002 recovery loop are never duplicated.
+ *
+ * @param {{provider: string, indicatorType: string, indicator: string,
+ *   queryParams?: object|null}} identityInput
+ * @param {{client?: object, asOf: Date, maxAttempts?: number}} options
+ * @param {{bypassCache: boolean}} mode
+ */
+async function scheduleEnrichmentCore(identityInput, options, { bypassCache }) {
+  const { client } = options;
+  const { asOf } = options;
+  if (!(asOf instanceof Date) || Number.isNaN(asOf.getTime())) {
+    throw new IocEnrichmentValidationError("scheduleEnrichment: asOf must be an explicit, valid Date");
+  }
+  // Validated up front, alongside identity: a bad budget is a programmer
+  // error and must fail before any row is touched.
+  const maxAttempts = assertValidMaxAttempts(options.maxAttempts ?? null);
+
+  // Validates identity up front: a bad provider/indicator is a programmer
+  // error and must fail before any row is touched, not inside the retry loop.
+  const identity = buildEnrichmentCacheIdentity(identityInput);
+
+  let lastError = null;
+  for (let attempt = 1; attempt <= MAX_SCHEDULE_ATTEMPTS; attempt += 1) {
+    if (!bypassCache) {
+      // eslint-disable-next-line no-await-in-loop
+      const cached = await findFreshCachedResult(identity, { client, asOf });
+      if (cached) {
+        return { outcome: SCHEDULE_OUTCOME.CACHE_HIT, cacheKey: identity.cacheKey, record: cached };
+      }
+    }
+
+    // Active-job uniqueness is NEVER bypassed, forced or not: this is the
+    // one check both callers always run.
+    // eslint-disable-next-line no-await-in-loop
+    const active = await findActiveJobByCacheKey(identity.cacheKey, { client });
+    if (active) {
+      return { outcome: SCHEDULE_OUTCOME.ALREADY_PENDING, cacheKey: identity.cacheKey, record: active };
+    }
+
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const created = await createPendingJob(identity, { client, requestedAt: asOf, maxAttempts });
+      return { outcome: SCHEDULE_OUTCOME.SCHEDULED, cacheKey: identity.cacheKey, record: created };
+    } catch (error) {
+      // Only a recoverable race is retried. A validation error, a programmer
+      // error, or an unknown database failure propagates untouched.
+      if (!isRetryableConcurrencyError(error)) throw error;
+      lastError = error;
+    }
+  }
+
+  // Exhausting the budget means sustained contention on one cacheKey, which
+  // is a real operational signal — never swallowed into a fake outcome.
+  throw lastError;
+}
+
+/**
  * Ensures reputation context for one indicator is either already available or
  * durably queued — never both, never twice.
  *
@@ -94,48 +155,36 @@ function isRetryableConcurrencyError(error) {
  * @returns {Promise<{outcome: string, cacheKey: string, record: object}>}
  */
 async function scheduleEnrichment(identityInput, options = {}) {
-  const { client } = options;
-  const { asOf } = options;
-  if (!(asOf instanceof Date) || Number.isNaN(asOf.getTime())) {
-    throw new IocEnrichmentValidationError("scheduleEnrichment: asOf must be an explicit, valid Date");
-  }
-  // Validated up front, alongside identity: a bad budget is a programmer
-  // error and must fail before any row is touched.
-  const maxAttempts = assertValidMaxAttempts(options.maxAttempts ?? null);
+  return scheduleEnrichmentCore(identityInput, options, { bypassCache: false });
+}
 
-  // Validates identity up front: a bad provider/indicator is a programmer
-  // error and must fail before any row is touched, not inside the retry loop.
-  const identity = buildEnrichmentCacheIdentity(identityInput);
-
-  let lastError = null;
-  for (let attempt = 1; attempt <= MAX_SCHEDULE_ATTEMPTS; attempt += 1) {
-    // eslint-disable-next-line no-await-in-loop
-    const cached = await findFreshCachedResult(identity, { client, asOf });
-    if (cached) {
-      return { outcome: SCHEDULE_OUTCOME.CACHE_HIT, cacheKey: identity.cacheKey, record: cached };
-    }
-
-    // eslint-disable-next-line no-await-in-loop
-    const active = await findActiveJobByCacheKey(identity.cacheKey, { client });
-    if (active) {
-      return { outcome: SCHEDULE_OUTCOME.ALREADY_PENDING, cacheKey: identity.cacheKey, record: active };
-    }
-
-    try {
-      // eslint-disable-next-line no-await-in-loop
-      const created = await createPendingJob(identity, { client, requestedAt: asOf, maxAttempts });
-      return { outcome: SCHEDULE_OUTCOME.SCHEDULED, cacheKey: identity.cacheKey, record: created };
-    } catch (error) {
-      // Only a recoverable race is retried. A validation error, a programmer
-      // error, or an unknown database failure propagates untouched.
-      if (!isRetryableConcurrencyError(error)) throw error;
-      lastError = error;
-    }
-  }
-
-  // Exhausting the budget means sustained contention on one cacheKey, which
-  // is a real operational signal — never swallowed into a fake outcome.
-  throw lastError;
+/**
+ * Deliberate analyst re-enrichment (P2-T2e-2): identical to
+ * `scheduleEnrichment` except a fresh cached terminal result no longer
+ * short-circuits the call — the caller has explicitly asked to bypass it.
+ *
+ * Still never bypassed: active-job uniqueness. If a PENDING job for this
+ * exact cacheKey already exists (from ingestion, a prior manual request, or a
+ * concurrent forced request racing this one), that job is returned as
+ * ALREADY_PENDING and no second row is created — "force" means "ignore the
+ * cache", never "ignore the queue".
+ *
+ * A forced SCHEDULED call never deletes or overwrites the prior terminal (or
+ * DEAD_LETTER) row: `createPendingJob` only ever inserts, and a terminal
+ * row's `activeCacheKey` is already null, so it can never collide with the
+ * new PENDING row's claim on the unique column. History is therefore
+ * preserved by construction, not by a separate check.
+ *
+ * @param {{provider: string, indicatorType: string, indicator: string,
+ *   queryParams?: object|null}} identityInput
+ * @param {{client?: object, asOf: Date, maxAttempts?: number}} options
+ * @returns {Promise<{outcome: string, cacheKey: string, record: object}>}
+ *   `outcome` is only ever SCHEDULED or ALREADY_PENDING — CACHE_HIT can never
+ *   be returned, since the cache check this function skips is the only
+ *   source of that outcome.
+ */
+async function scheduleEnrichmentForced(identityInput, options = {}) {
+  return scheduleEnrichmentCore(identityInput, options, { bypassCache: true });
 }
 
 module.exports = {
@@ -145,4 +194,5 @@ module.exports = {
   MAX_LEASE_MS,
   DEFAULT_MAX_ATTEMPTS,
   scheduleEnrichment,
+  scheduleEnrichmentForced,
 };

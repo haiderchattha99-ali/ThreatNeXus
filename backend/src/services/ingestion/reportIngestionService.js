@@ -54,8 +54,28 @@ const {
   CLASSIFICATION,
 } = require("./reportIdentityService");
 const { resolveOneFinding } = require("../ownership/findingOwnershipService");
+const { scheduleEnrichment, SCHEDULE_OUTCOME } = require("../enrichment/enrichmentQueueService");
+const { INDICATOR_TYPES } = require("../enrichment/iocEnrichmentTypes");
+const { EnrichmentCacheKeyError } = require("../enrichment/enrichmentCacheKey");
 const { AUDIT_OUTCOMES, safeLogAuditEvent } = require("../auditService");
 const env = require("../../config/env");
+
+// P2-T2e-2 — the one provider ingestion ever schedules work for. Never
+// user/request-supplied: a report row cannot choose its own enrichment
+// provider any more than it can choose its own reportType/schemaVersion (see
+// the trusted-source note above).
+const ENRICHMENT_PROVIDER = "abuseipdb";
+
+// Closed classification for one group's scheduling attempt — used only to
+// build the report-level aggregate audit payload below, never persisted or
+// returned to a caller.
+const ENRICHMENT_SCHEDULE_RESULT = Object.freeze({
+  SCHEDULED: "SCHEDULED",
+  CACHE_HIT: "CACHE_HIT",
+  ALREADY_PENDING: "ALREADY_PENDING",
+  UNSUPPORTED: "UNSUPPORTED",
+  FAILED: "FAILED",
+});
 
 const INGESTION_OUTCOMES = Object.freeze({
   REJECTED: "REJECTED",
@@ -302,6 +322,71 @@ async function resolveOwnershipSafely(client, auditContext, findingId, asn) {
   }
 }
 
+// P2-T2e-2 — schedules durable IOC enrichment work for one Finding group,
+// once per distinct Finding identity (never once per duplicate CSV row: this
+// is called from the same per-group loop iteration as resolveOwnershipSafely,
+// after the group's dedupService transaction has already committed). Mirrors
+// resolveOwnershipSafely's isolation contract exactly:
+//   - scheduleEnrichment never performs I/O beyond the database (no provider
+//     lookup, no HTTP request, no runner execution) — see
+//     enrichmentQueueService.js's own module header
+//   - a missing AbuseIPDB API key cannot affect this call: scheduling never
+//     constructs or resolves a provider, so no key is ever read here
+//   - any failure (a validation error, an unexpected database failure) is
+//     caught and classified, never rethrown — ingestion must continue
+//     regardless of ownership or enrichment outcome
+//
+// `asOf` is the caller's single explicit ingestion-processing timestamp
+// (never a per-row observedAt, never read from the wall clock inside this
+// function) — see the module-level ENRICHMENT_SCHEDULE_RESULT note.
+async function scheduleEnrichmentSafely(client, indicatorValue, asOf) {
+  try {
+    const outcome = await scheduleEnrichment(
+      {
+        provider: ENRICHMENT_PROVIDER,
+        indicatorType: INDICATOR_TYPES.IPV4,
+        indicator: indicatorValue,
+        // The only allow-listed query parameter (P2-T2a's
+        // ALLOWED_QUERY_PARAM_KEYS): a normalized maxAgeInDays, sourced from
+        // validated config, never from request/report data. Kept identical
+        // to the value the batch runner's AbuseIPDBProvider itself defaults
+        // to, so an ingestion-scheduled job and a later manually-scheduled
+        // job for the same indicator share one cache identity rather than
+        // silently fragmenting into two.
+        queryParams: { maxAgeInDays: env.ABUSEIPDB_MAX_AGE_DAYS },
+      },
+      { client, asOf }
+    );
+    if (outcome.outcome === SCHEDULE_OUTCOME.SCHEDULED) return ENRICHMENT_SCHEDULE_RESULT.SCHEDULED;
+    if (outcome.outcome === SCHEDULE_OUTCOME.CACHE_HIT) return ENRICHMENT_SCHEDULE_RESULT.CACHE_HIT;
+    return ENRICHMENT_SCHEDULE_RESULT.ALREADY_PENDING;
+  } catch (error) {
+    if (error instanceof EnrichmentCacheKeyError) {
+      console.error("Enrichment scheduling skipped: unsupported indicator", { name: error.name });
+      return ENRICHMENT_SCHEDULE_RESULT.UNSUPPORTED;
+    }
+    console.error("Enrichment scheduling failed during ingestion", { name: error && error.name });
+    return ENRICHMENT_SCHEDULE_RESULT.FAILED;
+  }
+}
+
+// Allow-listed aggregate-only payload for the one enrichment-scheduling audit
+// event this report emits — never an indicator, cacheKey, claim token, or
+// exception message. Every count is derived from the closed
+// ENRICHMENT_SCHEDULE_RESULT tally built while looping over groups, so it can
+// never drift from what actually happened.
+function enrichmentScheduleSummary(counts, distinctFindingCount) {
+  return {
+    distinctFindingCount,
+    scheduledCount: counts[ENRICHMENT_SCHEDULE_RESULT.SCHEDULED] || 0,
+    cacheHitCount: counts[ENRICHMENT_SCHEDULE_RESULT.CACHE_HIT] || 0,
+    alreadyPendingCount: counts[ENRICHMENT_SCHEDULE_RESULT.ALREADY_PENDING] || 0,
+    unsupportedCount: counts[ENRICHMENT_SCHEDULE_RESULT.UNSUPPORTED] || 0,
+    failedCount: counts[ENRICHMENT_SCHEDULE_RESULT.FAILED] || 0,
+    provider: ENRICHMENT_PROVIDER,
+  };
+}
+
 // Terminal short-circuit for a classification that means "do not process":
 // returns a result object for DUPLICATE_COMPLETED / DUPLICATE_IN_PROGRESS, or
 // null when the classification means processing should continue
@@ -477,6 +562,18 @@ async function ingestAccessibleRdpReport(input, options = {}) {
 
   const findingCounts = {};
   const reopenedFindings = [];
+  const enrichmentCounts = {};
+  // Set once the groups are computed inside the try block below; declared
+  // here (not `const groups` inside the try) so the success-path audit after
+  // the try/catch can still read the count.
+  let distinctFindingCount = 0;
+  // P2-T2e-2 — one explicit ingestion-processing timestamp, captured once
+  // for this whole attempt and reused as every group's `asOf`. Deliberately
+  // NOT a per-row/per-group value and NOT derived from any row's own
+  // observedAt (see scheduleEnrichmentSafely's header): cache freshness must
+  // reflect when this report was actually processed, never when the
+  // Shadowserver-style report claims the row was observed.
+  const enrichmentAsOf = new Date();
 
   try {
     // 6. Persist invalid rows — no Finding/FindingOccurrence involvement.
@@ -497,6 +594,7 @@ async function ingestAccessibleRdpReport(input, options = {}) {
     // 7-8. Group valid rows by exact Finding identity, process groups
     // sequentially in deterministic order, one dedup-service call per group.
     const groups = groupValidRows(normalizedValidRows);
+    distinctFindingCount = groups.length;
 
     // eslint-disable-next-line no-restricted-syntax
     for (const group of groups) {
@@ -547,6 +645,18 @@ async function ingestAccessibleRdpReport(input, options = {}) {
         lifecycleResult.finding.id,
         canonicalRow.validated.normalized ? canonicalRow.validated.normalized.asn : null
       );
+
+      // P2-T2e-2 — durable enrichment scheduling for this Finding group, once
+      // per distinct identity (this loop iterates groups, never rows), fully
+      // isolated from the lifecycle transaction above exactly like ownership
+      // resolution: no provider call, no HTTP request, never rethrown.
+      // eslint-disable-next-line no-await-in-loop
+      const enrichmentOutcome = await scheduleEnrichmentSafely(
+        client,
+        lifecycleResult.finding.indicatorValue,
+        enrichmentAsOf
+      );
+      enrichmentCounts[enrichmentOutcome] = (enrichmentCounts[enrichmentOutcome] || 0) + 1;
 
       // eslint-disable-next-line no-restricted-syntax
       for (const rowInGroup of group.rows) {
@@ -626,6 +736,34 @@ async function ingestAccessibleRdpReport(input, options = {}) {
         : "Report ingestion completed with invalid rows",
   });
 
+  // 11b. One bounded aggregate enrichment-scheduling audit event per
+  // processed report — never one per Finding/group. The per-group scheduling
+  // calls above never throw (scheduleEnrichmentSafely catches everything),
+  // so reaching `.failed` here means summarizing the already-collected counts
+  // itself misbehaved — a defensive branch, not the common path — and even
+  // then nothing already committed (RawReport/RawReportRow/Finding/
+  // FindingOccurrence, or the report-level audit above) is affected.
+  try {
+    const summary = enrichmentScheduleSummary(enrichmentCounts, distinctFindingCount);
+    await audit(client, auditContext, {
+      action: "enrichment.ingestion.schedule.completed",
+      outcome: AUDIT_OUTCOMES.SUCCESS,
+      entityType: "RawReport",
+      entityId: finishedReport.id,
+      after: summary,
+      reason: "IOC enrichment scheduling evaluated for report findings",
+    });
+  } catch (error) {
+    console.error("Enrichment scheduling summary failed", { name: error && error.name });
+    await audit(client, auditContext, {
+      action: "enrichment.ingestion.schedule.failed",
+      outcome: AUDIT_OUTCOMES.FAILURE,
+      entityType: "RawReport",
+      entityId: finishedReport.id,
+      reason: "IOC enrichment scheduling summary could not be computed",
+    });
+  }
+
   // eslint-disable-next-line no-restricted-syntax
   for (const finding of reopenedFindings) {
     // eslint-disable-next-line no-await-in-loop
@@ -643,14 +781,19 @@ async function ingestAccessibleRdpReport(input, options = {}) {
     outcome: INGESTION_OUTCOMES.PROCESSED,
     report: reportSummary(finishedReport),
     findingCounts,
+    enrichmentCounts,
   };
 }
 
 module.exports = {
   INGESTION_OUTCOMES,
   NO_VALID_ROWS_REASON,
+  ENRICHMENT_PROVIDER,
+  ENRICHMENT_SCHEDULE_RESULT,
   RowEvidenceIntegrityError,
   resolveOwnershipSafely,
+  scheduleEnrichmentSafely,
+  enrichmentScheduleSummary,
   deepEqualJson,
   ingestAccessibleRdpReport,
 };
