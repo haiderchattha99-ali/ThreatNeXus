@@ -561,6 +561,16 @@ enum IocEnrichmentStatus {
   FAILED
   UNSUPPORTED_INDICATOR
   SKIPPED_DISABLED
+  // Queue-lifecycle terminal state (P2-T2e-1), NOT a provider reputation
+  // outcome. A job reaches DEAD_LETTER when a repeatable local failure
+  // (a provider contract bug, an unregistered provider name, a rejected
+  // completion payload) has exhausted `maxAttempts` — the provider never
+  // produced this status and never can: createEnrichmentResult's taxonomy
+  // (iocEnrichmentTypes.js ENRICHMENT_STATUS) deliberately does not contain
+  // it, so `buildTerminalFields`/`findFreshCachedResult` can never treat a
+  // dead-lettered row as reputation evidence. "We gave up processing this
+  // job" is not "the address is clean".
+  DEAD_LETTER
 }
 
 // One durable enrichment attempt: queued (PENDING), leased by a consumer, then
@@ -639,10 +649,39 @@ model IocEnrichment {
   errorMessage      String?
   retryAfterSeconds Int?
 
+  // --- Retry / dead-letter bookkeeping (P2-T2e-1) -------------------------
+  // Bounds how often a repeatably-failing job may be re-attempted, so a
+  // "poison" job (e.g. persisted queryParams a provider's contract check
+  // rejects on every call) cannot occupy a batch slot forever once scheduled
+  // execution exists.
+  //
+  // attemptCount is incremented by the SAME guarded updateMany that
+  // establishes a lease, so it counts genuine processing attempts only: a
+  // consumer that loses the claim race never increments it.
+  attemptCount Int @default(0)
+  // Persisted per job (not read from config at claim time) so a job's budget
+  // cannot silently change under it between attempts. Bounded on write by
+  // iocEnrichmentCacheRules.assertValidMaxAttempts.
+  maxAttempts Int @default(3)
+  // Retry eligibility gate. null means "eligible now"; a future value hides
+  // the row from listPendingCandidates until then. Always supplied
+  // explicitly by the caller's policy — never a wall-clock default.
+  nextAttemptAt DateTime?
+  lastAttemptAt DateTime?
+
+  // Set only on the DEAD_LETTER transition. terminalReasonCode is a closed
+  // ENRICHMENT_TERMINAL_REASON value — never a caught Error's message, a
+  // provider payload, or any free-form text.
+  deadLetteredAt     DateTime?
+  terminalReasonCode String?
+
   // Fresh-cache lookup: newest unexpired terminal row for one cacheKey.
   @@index([cacheKey, status, expiresAt])
   // Pending-work lookup, in deterministic requestedAt order.
   @@index([status, requestedAt])
+  // Retry-eligible pending-work lookup: status + nextAttemptAt gate, then the
+  // deterministic requestedAt ordering the listing returns.
+  @@index([status, nextAttemptAt, requestedAt])
   // Expired-lease recovery.
   @@index([status, leaseExpiresAt])
   // Provider/indicator lookup history.
