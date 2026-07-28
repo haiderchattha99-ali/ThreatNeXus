@@ -12,12 +12,14 @@ _Operational status / handoff note. Authoritative plan lives in
   **P2-H1 (ownership correctness + test hardening)** is also **complete** — see "Completed — P2-H1"
   below. **P2-T2a (IOC enrichment provider contract + MockProvider)** is **complete** — see
   "Completed — P2-T2a" below. **P2-T2b (`IocEnrichment` schema, migration, durable cache/queue)** is
-  also **complete** — see "Completed — P2-T2b" below.
-- **Next task: P2-T2c — cache/queue policy and AbuseIPDB provider integration.** The persistence
-  layer now exists, but **nothing calls a provider yet**: there is no `AbuseIPDBProvider`, no HTTP
-  client, no network code, no TTL policy defaults, no ingestion wiring, no routes/controllers/RBAC,
-  and no audit events on any enrichment path. See "Completed — P2-T2b" for exactly what this packet
-  did and did not build.
+  also **complete** — see "Completed — P2-T2b" below. **P2-T2c (real `AbuseIPDBProvider` + TTL
+  policy)** is also **complete** — see "Completed — P2-T2c" below.
+- **Next task: P2-T2d — bounded enrichment runner and queue completion integration.** The provider
+  and the TTL policy now both exist as pure/injectable modules, but **nothing calls either of them
+  from the queue layer yet**: no worker/runner claims a `PENDING` job, calls `AbuseIPDBProvider.lookup`
+  outside a transaction, applies `resolveEnrichmentTtl` to the result, and completes the claim; no
+  ingestion wiring, no routes/controllers/RBAC, and no audit events on any enrichment path. See
+  "Completed — P2-T2c" for exactly what this packet did and did not build.
 
 ## Completed — P2-T1 (ownership mapping, deterministic resolution, analyst override)
 
@@ -395,6 +397,134 @@ No `AbuseIPDBProvider`, no HTTP client, no network call of any kind · nothing c
 from the queue layer · no TTL policy defaults or provider-specific env additions · no ingestion
 wiring · no routes, controllers, capabilities or RBAC · no audit events · no enrichment data exposed
 through any Finding API · no automatic retry loop or daemon.
+
+## Completed — P2-T2c (real `AbuseIPDBProvider` + explicit TTL policy)
+
+The real IOC reputation provider behind the P2-T2a `IocEnrichmentProvider` contract, and the pure TTL
+policy a future worker applies to its results. **Still nothing wires either into the queue, ingestion,
+routes, or audit log** — see "Not built here" below.
+
+### `AbuseIPDBProvider`
+
+`src/services/enrichment/abuseIpdbProvider.js` implements the AbuseIPDB v2 `/check` endpoint behind
+`createAbuseIpdbProvider(config)`, registered in `providerRegistry.js` under the exact lowercase name
+`abuseipdb` (case-sensitive, per D-007 — `"AbuseIPDB"`/`"ABUSEIPDB"` are unknown). The registry and the
+provider module both import cleanly and construct with **zero configuration and no API key** — a
+missing key never blocks startup, it only means every `lookup()` call short-circuits to
+`SKIPPED_DISABLED` / `ENRICHMENT_DISABLED` before touching the network, exactly like a disabled
+`MockProvider`.
+
+**Request:** one `GET {baseUrl}/check?ipAddress=<canonical IPv4>&maxAgeInDays=<n>` per lookup, no
+retry. The key travels only in the `Key` header (never the query string), `Accept: application/json`
+is always sent, and no other query parameter is ever added. `maxAgeInDays` comes from the caller's
+sanitized `queryParams` when present (validated against `[1, 365]`, throwing `TypeError` — a contract
+violation, not an expected outcome — for anything else) or the provider's configured default
+otherwise. An `AbortController` composes an internal timeout with an optional caller `AbortSignal`
+without relying on `AbortSignal.any` (not assumed available); the timeout handle is always cleared,
+success or failure. Caller cancellation propagates the `AbortError` verbatim rather than being folded
+into `TIMEOUT` — the two are structurally distinguished by which side triggered the abort, never
+guessed from the error shape.
+
+**Outcome mapping (all closed, all normalized through `createEnrichmentResult` — never a thrown
+provider outcome):** `400` → `FAILED`/`PROVIDER_REJECTED` · `401`/`403` → `INVALID_KEY`/
+`PROVIDER_INVALID_KEY` · `404` → `NOT_FOUND` · `429` → `RATE_LIMITED`/`PROVIDER_RATE_LIMITED` with
+`Retry-After` parsed as delta-seconds only (an HTTP-date or any non-numeric value becomes `null`, never
+an exception) and clamped to the same `MAX_RETRY_AFTER_SECONDS` bound `createEnrichmentResult` itself
+enforces · `5xx` → `FAILED`/`PROVIDER_UNAVAILABLE` · a timed-out internal `AbortController` →
+`TIMEOUT`/`PROVIDER_TIMEOUT` · a DNS/connect/socket/fetch-level failure → `FAILED`/
+`PROVIDER_UNREACHABLE` · malformed JSON, a non-object body, or `data` present but the wrong shape →
+`FAILED`/`PROVIDER_MALFORMED_RESPONSE` · `data: null`/`undefined` on a 2xx → `NOT_FOUND`, not
+malformed. Every field pulled from the response body is individually type/range-checked *before* it
+reaches `createEnrichmentResult` — a bad `abuseConfidenceScore` or `totalReports` becomes
+`PROVIDER_MALFORMED_RESPONSE` rather than an uncaught `TypeError` from `createEnrichmentResult`'s own
+stricter validation, and an invalid `countryCode`/`lastReportedAt`/etc. becomes `null` rather than
+throwing. Only `abuseConfidenceScore`, `totalReports`, `countryCode`, `isp`, `domain`, `usageType`,
+`isWhitelisted`, and `lastReportedAt` are ever read from the response — `hostnames`,
+`numDistinctUsers`, and everything else are ignored. **No raw response body, header, or `Error.message`
+is ever copied into a result** — only the fixed, closed `PROVIDER_ERROR_MESSAGES` map (already enforced
+by P2-T2a) reaches `errorInfo.message`.
+
+A genuine programmer/contract violation (missing `asOf`, an invalid `queryParams.maxAgeInDays`) still
+throws `TypeError` rather than being flattened into a provider outcome — narrowly guarding only the
+`fetchImpl` call and JSON parse means a bug anywhere else in this module propagates as a real exception
+instead of silently becoming `FAILED`.
+
+### Configuration (`env.js` / `abuseIpdbConfig.js`)
+
+New shared pure module `abuseIpdbConfig.js` holds the bounds/defaults both `env.js` and
+`abuseIpdbProvider.js` validate against, so the two can never drift apart: `ABUSEIPDB_TIMEOUT_MS`
+(default 8000ms, bounded `[1000, 30000]`), `ABUSEIPDB_MAX_AGE_DAYS` (new variable; default 90, bounded
+`[1, 365]`), `ABUSEIPDB_BASE_URL` (default `https://api.abuseipdb.com/api/v2`; must be HTTPS, or an
+explicit `http://localhost`/`http://127.0.0.1` test URL — never a blanket HTTP allowance). Unlike
+P2-T2a/b's lenient placeholder values, these are now **real request parameters sent to a live third
+party**, so an invalid value (non-numeric, out of bounds, non-HTTPS) fails configuration validation at
+startup instead of silently substituting a default — matching how `PORT`/`UPLOAD_MAX_BYTES` already
+behave. `ABUSEIPDB_API_KEY` stays optional at startup (never required to start the app) and is never
+interpolated into any error message this module throws. `ABUSEIPDB_CACHE_TTL_HOURS` is left as-is,
+still declared and still unread by anything — TTL is a pure policy input (below), never sourced from
+the environment.
+
+### `enrichmentTtlPolicy.js` — pure TTL policy
+
+`resolveEnrichmentTtl({status, queriedAt, retryAfterSeconds, policyOverrides})` returns
+`{expiresAt, ttlSeconds, policyReason}`. No wall-clock read anywhere — `expiresAt` is always exactly
+`queriedAt + ttlSeconds`. Defaults: `SUCCESS` 24h · `NOT_FOUND` 6h · `INVALID_KEY`/`SKIPPED_DISABLED`
+15min · `TIMEOUT`/`FAILED` 5min · `UNSUPPORTED_INDICATOR` 24h · `RATE_LIMITED`
+`max(retryAfterSeconds, 15min)` capped at 24h (a `null`/absent `Retry-After` uses the 15min floor).
+`PENDING` is rejected (`EnrichmentTtlPolicyError`) — it is not a terminal result and has no policy.
+Every default and every override is clamped to `[60s, 24h]` before being returned, so no status —
+default or overridden — can ever receive an unbounded or accidentally-infinite cache duration. Overrides
+are explicit function input (`policyOverrides`), never environment-sourced, matching the "TTL policy is
+not decided by the provider" boundary D-007 already established. **The provider itself always leaves
+`expiresAt` null** — this module only decides the policy; P2-T2d's worker is what calls it and writes
+the result.
+
+### Security guarantees
+
+A dedicated `abuseIpdbProviderSecurity.test.js` (mirroring `iocEnrichmentSecurity.test.js`'s approach)
+proves a distinctive fake key appears **only** in the captured `Key` request header a fake `fetch`
+records for the test's own assertions — never in the request URL, the normalized result, `errorInfo`,
+a propagated `AbortError`, JSON serialization, console output (`log`/`warn`/`error` all spied), or the
+provider's own `name`/`describe()` representation. `env.test.js` proves the same for a configuration
+failure: an invalid `ABUSEIPDB_TIMEOUT_MS` with a fake key present throws `ConfigError` naming the
+variable, never the key value.
+
+### Files
+
+New: `src/services/enrichment/abuseIpdbConfig.js`, `abuseIpdbProvider.js`, `enrichmentTtlPolicy.js` ·
+`tests/unit/abuseIpdbProvider.test.js`, `abuseIpdbProviderSecurity.test.js`, `enrichmentTtlPolicy.test.js`.
+Modified: `src/config/env.js` (strict AbuseIPDB validation, `ABUSEIPDB_MAX_AGE_DAYS` added) ·
+`src/services/enrichment/providerRegistry.js` (`abuseipdb` entry) · `.env.example` / `.env.test.example`
+(new variable, updated default/comments) · `tests/unit/env.test.js` (strict-validation coverage) ·
+`tests/unit/providerRegistry.test.js` (registered-provider coverage). **No `schema.prisma` change, no
+migration, no route/controller/RBAC change, no audit event, no ingestion wiring, no frontend change.**
+
+### Tests
+
+- **88 net new/changed tests.** `abuseIpdbProvider.test.js` (47 — configuration, request shape,
+  successful normalization incl. malformed-field safety, every HTTP/network outcome mapping, timeout-
+  handle cleanup via fake timers, no-retry), `abuseIpdbProviderSecurity.test.js` (6 — key non-leakage
+  across success/failure/cancellation/config/console), `enrichmentTtlPolicy.test.js` (24 — every
+  terminal status, exact expiry arithmetic, `RATE_LIMITED` floor/cap, `PENDING` rejection, override
+  bounds, determinism, no-wall-clock), `env.test.js` (+10 net — strict bounds for
+  `ABUSEIPDB_TIMEOUT_MS`/`ABUSEIPDB_MAX_AGE_DAYS`/`ABUSEIPDB_BASE_URL`, key non-leakage in errors),
+  `providerRegistry.test.js` (+1 net — `abuseipdb` now resolves; exact-case rejection extended to it).
+- **Full backend suite: 1193 passed / 0 skipped** (52 files) with `TEST_DATABASE_URL`,
+  `EVAL_DATABASE_URL` and the app env vars supplied — was 1105, +88 from this packet. Without a
+  database: 1152 passed / 41 skipped, so `npm test` still passes on a bare checkout.
+- **All real-PostgreSQL suites together (dedup + ingestion + phase1Gate + ownership + enrichment):
+  41/41**, unchanged — this packet touches no database code.
+- **Phase 1 evaluator: 9/9 PASS.**
+- `npx prisma validate` clean · migration count unchanged at 11 · `schema.prisma` byte-identical (no
+  diff) · no real network call anywhere in the suite (every test injects a fake `fetchImpl`) ·
+  `git diff --check` clean.
+
+### Not built here (P2-T2d and later)
+
+No worker/runner claims a queued job, calls the provider, or completes the claim · nothing calls
+`resolveEnrichmentTtl` from any live code path · no ingestion wiring · no routes, controllers,
+capabilities or RBAC · no audit events · no enrichment data exposed through any Finding API · no
+automatic retry loop or daemon.
 
 ## Phase 1 release audit
 
@@ -1362,21 +1492,28 @@ indicator-level cache, the `activeCacheKey`-enforced single-active-job rule,
 claim-token leasing, terminal-result immutability and history preservation all
 exist and are proven against real PostgreSQL. **Nothing calls a provider yet.**
 
-**Exact next task: P2-T2c — cache/queue policy and AbuseIPDB provider
-integration.** That packet owns: the real `AbuseIPDBProvider` HTTP client
-behind the P2-T2a contract (handling timeouts, HTTP 429/quota exhaustion,
-invalid keys and provider outages — already modeled by the existing
-status/error taxonomy); the TTL policy that decides each terminal status's
-`expiresAt` (this packet deliberately takes every TTL as an explicit caller
-argument and adds no provider-specific environment default); the consumer that
-claims queued work, calls the provider **outside** any database transaction,
-and completes the claim; and the ingestion wiring. **Enrichment failure must
-never block ingestion** — findings are still created and the `IocEnrichment`
-row records `FAILED`/`RATE_LIMITED` instead. API keys from
-environment variables only, redacted from all logs and error responses. This
-is a separate path from the existing KEV/EPSS/NVD vulnerability enrichment
-design (unchanged, not started) and from ownership mapping (P2-T1/P2-H1,
-done) — neither substitutes for either of the others.
+**P2-T2c (real `AbuseIPDBProvider` + explicit TTL policy) is now complete** —
+see "Completed — P2-T2c" above. The real HTTP provider (timeouts, HTTP 429/
+quota exhaustion, invalid keys and provider outages all mapped onto the
+existing P2-T2a status/error taxonomy, never thrown) and the pure
+`resolveEnrichmentTtl` policy both exist and are fully tested offline; the
+provider registers under the exact lowercase name `abuseipdb` and requires no
+API key to construct or import. **Still nothing calls either of them from the
+queue layer.**
+
+**Exact next task: P2-T2d — bounded enrichment runner and queue completion
+integration.** That packet owns: the consumer that claims queued work via
+`enrichmentQueueService.js`, calls `AbuseIPDBProvider.lookup` **outside** any
+database transaction, applies `resolveEnrichmentTtl` to the result, and
+completes the claim; and the ingestion wiring that schedules enrichment for a
+Finding's IPv4 indicator. **Enrichment failure must never block ingestion** —
+findings are still created and the `IocEnrichment` row records
+`FAILED`/`RATE_LIMITED` instead. API keys from environment variables only,
+redacted from all logs and error responses (already proven for the provider
+and for `env.js` in P2-T2c). This is a separate path from the existing
+KEV/EPSS/NVD vulnerability enrichment design (unchanged, not started) and from
+ownership mapping (P2-T1/P2-H1, done) — neither substitutes for either of the
+others.
 
 Non-blocking carry-overs from the Phase 1 audit (none gate Phase 2): add a
 `RawReport.rawContent` byte-preservation test; fix the `cleanupUpload`
