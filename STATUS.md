@@ -13,13 +13,14 @@ _Operational status / handoff note. Authoritative plan lives in
   below. **P2-T2a (IOC enrichment provider contract + MockProvider)** is **complete** — see
   "Completed — P2-T2a" below. **P2-T2b (`IocEnrichment` schema, migration, durable cache/queue)** is
   also **complete** — see "Completed — P2-T2b" below. **P2-T2c (real `AbuseIPDBProvider` + TTL
-  policy)** is also **complete** — see "Completed — P2-T2c" below.
-- **Next task: P2-T2d — bounded enrichment runner and queue completion integration.** The provider
-  and the TTL policy now both exist as pure/injectable modules, but **nothing calls either of them
-  from the queue layer yet**: no worker/runner claims a `PENDING` job, calls `AbuseIPDBProvider.lookup`
-  outside a transaction, applies `resolveEnrichmentTtl` to the result, and completes the claim; no
-  ingestion wiring, no routes/controllers/RBAC, and no audit events on any enrichment path. See
-  "Completed — P2-T2c" for exactly what this packet did and did not build.
+  policy)** is also **complete** — see "Completed — P2-T2c" below. **P2-T2d (bounded enrichment
+  runner + queue completion integration)** is also **complete** — see "Completed — P2-T2d" below.
+- **Next task: P2-T2e — ingestion scheduling, enrichment read/trigger APIs, RBAC and audits.** The
+  runner can now claim a job, call a provider outside any transaction, apply TTL policy, and complete
+  the claim — but **nothing calls the runner yet**: no report-ingestion wiring schedules enrichment
+  work, no route/controller exposes enrichment reads or a manual trigger, no capability guards either,
+  and no audit event exists on any enrichment path. See "Completed — P2-T2d" for exactly what this
+  packet did and did not build.
 
 ## Completed — P2-T1 (ownership mapping, deterministic resolution, analyst override)
 
@@ -525,6 +526,167 @@ No worker/runner claims a queued job, calls the provider, or completes the claim
 `resolveEnrichmentTtl` from any live code path · no ingestion wiring · no routes, controllers,
 capabilities or RBAC · no audit events · no enrichment data exposed through any Finding API · no
 automatic retry loop or daemon.
+
+## Completed — P2-T2d (bounded enrichment runner + queue completion integration)
+
+The worker that finally connects the P2-T2b queue/cache primitives to a provider's `lookup()` and the
+P2-T2c TTL policy. Before this packet nothing ever called a provider from the queue layer; this
+packet is that one call site — and stops there. **No report-ingestion scheduling, no routes/
+controllers/RBAC, no audit events, no daemon or cron process.** See "No ingestion or API integration"
+below for the exact boundary.
+
+### Files
+
+New: `backend/src/services/enrichment/enrichmentRunnerTypes.js` (pure: outcome taxonomy, config
+validation, per-job/batch-summary shape-building — no Prisma, no provider call, no wall clock) and
+`enrichmentRunner.js` (orchestration: the one place that calls `listPendingCandidates`/
+`claimPendingJob`/`completeClaimedJob`/`releaseClaimedJob` from P2-T2b, a caller-injected
+`providerRegistry`/`ttlPolicy`, and nothing else). `backend/tests/unit/enrichmentRunnerTypes.test.js`,
+`enrichmentRunner.test.js`, `backend/tests/integration/enrichmentRunner.test.js`. **Nothing else in
+the repository was touched** — no `schema.prisma` change, no migration, no `env.js` change, no
+ingestion wiring, no routes, no frontend. Mirrors the pure/orchestration split already used throughout
+this directory (`iocEnrichmentCacheRules.js` / `iocEnrichmentRepository.js`).
+
+### Runner API and execution bounds
+
+`runEnrichmentBatch({prisma, providerRegistry, now, batchSize, leaseDurationSeconds, ttlPolicy,
+workerId, signal})` — every field validated by `assertValidRunnerConfig` *before* any database or
+provider call, so a malformed caller never partially processes work. `now` is explicit (no
+`Date.now()` anywhere in a decision path); `batchSize` bounded `[1, 200]` (reuses P2-T2b's
+`MAX_PENDING_BATCH_SIZE`, never silently clamped — out of range throws); `leaseDurationSeconds`
+bounded `[1, 3600]` (derived from P2-T2b's own lease bounds); `workerId` a non-empty, trimmed,
+control-character-free string ≤128 chars (validated but not yet consumed anywhere — no logger exists
+in this repository to hand it to; a future caller's own logging convention would thread it through,
+not this module); `signal` an optional `AbortSignal`. One invocation processes **at most
+`batchSize` candidates, strictly sequentially, one provider call in flight at a time** — no
+`Promise.all` over shared work, no concurrency invariant claimed beyond what P2-T2b's real-PostgreSQL
+suite already proves for genuine concurrent *processes*. The runner itself creates no schedule, timer,
+or daemon.
+
+### Claim → provider → TTL → completion flow
+
+Per candidate: `claimPendingJob` with the caller's explicit `now`/`leaseMs` (P2-T2b, unchanged) → on
+a lost race, `SKIPPED_NOT_CLAIMED`, no provider call, continue. On a successful claim: the job's own
+stored `provider` name is resolved through the **caller-injected** `providerRegistry.resolve(name)`
+— never a second registry, never a fallback to `mock` for an unregistered name. The provider's
+`lookup()` is built exclusively from allow-listed persisted fields
+(`indicatorType`/`indicator`/`queryParams`, defensively shallow-copied) plus the explicit `now` and
+`signal` — **never the claimed database row itself**, never `claimToken`/`cacheKey`/`activeCacheKey`/
+`workerId`. Exactly one `lookup()` call per successfully claimed job, always **outside** any Prisma
+transaction. Its terminal result (a `PENDING` result is rejected as a contract violation, not accepted)
+goes through the caller-injected `ttlPolicy` (`resolveEnrichmentTtl` in production) to derive
+`expiresAt`, then `completeClaimedJob` with the exact claimed `id`/`claimToken` — reusing every P2-T2b
+guarantee unchanged (wrong/stale token cannot complete, a terminal row cannot be overwritten, no
+`updatedAt` version token).
+
+### Cancellation behavior
+
+Checked at three points: before starting a new candidate (stops the loop, no partial job started),
+immediately after a successful claim and before any provider call, and via the provider's own
+`AbortError` (propagated verbatim by `abuseIpdbProvider.js` on genuine caller cancellation — never
+guessed from error shape). In every case the held claim is released (`releaseClaimedJob`, the P2-T2b
+abandon path — the job stays durably `PENDING`, immediately reclaimable, no invented terminal status)
+and the outcome is the dedicated `RELEASED_AFTER_CANCELLATION` code — **never** `TIMEOUT` or any other
+provider outcome. `summary.cancelled` is set once, at the batch level; already-completed earlier jobs
+in the same batch are untouched.
+
+### Unexpected internal-error behavior
+
+A. **Expected provider outcome** (`TIMEOUT`/`RATE_LIMITED`/`FAILED`/etc.) — TTL applied, completed
+normally, exactly like `SUCCESS`. B. **Caller cancellation** — see above. C. **Unexpected provider/
+programmer exception** (a thrown `TypeError`, a malformed dependency, a corrupt provider result) — the
+claim is released (`RELEASED_AFTER_INTERNAL_ERROR`), the job stays `PENDING` with **no** partial
+terminal fields, and the batch continues to the next candidate; `err.message` is never copied into any
+result, log, or the database — the closed outcome code is the only signal that ever leaves this
+module. D. **Completion/release failure** (an unknown database error during the completion or release
+write itself) — a safe closed outcome (`COMPLETION_FAILED`/`RELEASE_FAILED`), no blind retry, no
+Prisma error text exposed, and every earlier successfully-completed job in the batch is preserved
+untouched. An unregistered/unknown `provider` name never invents a terminal result on the provider's
+behalf — the claim is released and reported as `UNKNOWN_PROVIDER`.
+
+Closed outcome taxonomy (`RUNNER_OUTCOME`, `enrichmentRunnerTypes.js`): `COMPLETED ·
+SKIPPED_NOT_CLAIMED · RELEASED_AFTER_INTERNAL_ERROR · RELEASED_AFTER_CANCELLATION ·
+STALE_CLAIM_ON_COMPLETION · CLAIM_FAILED · COMPLETION_FAILED · RELEASE_FAILED · UNKNOWN_PROVIDER`.
+
+### Batch summary design
+
+`buildBatchSummary` derives every count from the `results` array itself — nothing is tracked
+separately, so the summary can never drift from the per-job list it describes. Returned fields:
+`requestedBatchSize, candidateCount, claimedCount, completedCount, statusCounts (by terminal status),
+skippedNotClaimedCount, releasedCount, staleCompletionCount, internalFailureCount,
+unknownProviderCount, cancelled, results`. Each per-job result carries only
+`enrichmentId/provider/indicatorType/indicator/outcome/terminalStatus/queriedAt/expiresAt` — **never**
+`claimToken`, `activeCacheKey`, an API key, a header, a raw provider payload, a raw `Error.message`, a
+stack trace, or a full database row. The whole summary, its `results` array, every per-job result, and
+`statusCounts` are all `Object.freeze`d, and every `Date` field is defensively cloned rather than
+shared with the underlying database row.
+
+### Transaction and concurrency guarantees
+
+No provider call ever occurs inside a Prisma transaction. Every concurrency invariant the runner
+depends on (`activeCacheKey` uniqueness, the guarded claim/complete `updateMany` compare-and-swap) is
+the exact same one P2-T2b's real-PostgreSQL suite already proves under genuine concurrent
+*processes* — this packet's own real-PostgreSQL suite proves the runner uses those primitives
+correctly (two separate `PrismaClient`s racing for one job via `Promise.all` yield exactly one
+provider call and one completion; a lease expiring mid-lookup lets a second worker reclaim while the
+first worker's stale token is safely rejected; a forced completion-write failure leaves the row in its
+prior valid `PENDING`+leased state with no partial terminal field, and that same lease still completes
+correctly afterward).
+
+### Tests
+
+**42 new unit tests** against an in-memory fake Prisma client and fake/real providers (never a real
+network call): `enrichmentRunnerTypes.test.js` (18 — config validation bounds, `buildJobResult`/
+`buildBatchSummary` shape and immutability, exact count derivation). `enrichmentRunner.test.js` (24 —
+happy path incl. score-0 persistence and an injected out-of-range TTL persisted verbatim; claim-safety
+incl. a claim-token-never-leaks proof via a `crypto.randomUUID` spy; provider selection incl. the real
+`createAbuseIpdbProvider` with no API key producing a `COMPLETED`/`SKIPPED_DISABLED` result, and an
+unregistered provider never falling back to mock; TTL/completion incl. a rejected `PENDING` provider
+result and a stale-claim-at-completion simulation; cancellation incl. the provider's own `AbortError`
+never being misclassified as `TIMEOUT`; unexpected-exception handling incl. a thrown `TypeError`
+leaking no raw text and the batch continuing to the next job; and a fake-AbuseIPDB-key-never-leaks
+proof reusing the real provider with an injected `fetchImpl`).
+
+**8 real-PostgreSQL tests** (`tests/integration/enrichmentRunner.test.js`, self-skips without
+`TEST_DATABASE_URL`, dedicated marker `p2t2d-mock` + IP range `198.19.0.x` — distinct from P2-T2b's own
+real-DB suite's `p2t2b-mock`/`198.18.0.x` so both can run together): (1) a claimed job completes with
+terminal fields exact and lease metadata cleared; (2) two separate `PrismaClient`s racing for one job
+via `Promise.all` produce exactly one provider call and one completion, the loser reporting
+`SKIPPED_NOT_CLAIMED`; (3) a lease expiring mid-lookup lets a second worker reclaim and complete while
+the first worker's now-stale token is safely rejected; (4) a forced completion-`updateMany` failure
+leaves no partial terminal field and the row's live lease still completes correctly afterward; (5) a
+mixed batch (success, `NOT_FOUND`, an unregistered provider, a thrown `TypeError`) completes
+independently per job with exact row states; (6) a repeated invocation never reprocesses a terminal
+row or re-calls the provider; (7) five pending rows with `batchSize: 3` processes exactly three, in
+deterministic `requestedAt`/`id` order, leaving the rest untouched; (8) a job released after
+cancellation is genuinely reclaimable via a fresh `claimPendingJob` call, with no partial result
+fields. Run 4× back-to-back: 3 clean, 1 hit a one-off timing flake in test 4 under full-suite
+contention that did not reproduce on retry (not a defect — the guarded `updateMany` semantics this
+test depends on are otherwise proven stable).
+
+### Verification
+
+- Targeted P2-T2a/b/c/d unit suites together: **309/309 PASS**.
+- Ownership regression (`findingOwnershipService`, `ownershipResolver`, `assetMappingService`, `roles`,
+  `reportIngestionService`): **147/147 PASS**, unchanged — this packet touches no ownership code.
+- Full backend suite (with `TEST_DATABASE_URL`/`EVAL_DATABASE_URL` set): **1243/1243** on 3 of 4 runs;
+  the 4th run hit the enrichmentRunner real-DB flake above (retried clean) and, separately, the
+  already-known pre-existing `cleanupUpload.test.js` timing flake (unrelated file, not touched by this
+  packet, not new).
+- All real-PostgreSQL suites (dedup + ingestion + phase1Gate + ownership + enrichment queue +
+  enrichment runner) run together as part of the full suite above.
+- Phase 1 evaluator: `npm run eval:phase1` — **9/9 PASS**.
+- `npx prisma validate` clean · migration count unchanged at **11** · `schema.prisma` byte-identical
+  (no diff) · no real network call anywhere in the suite (every provider is `MockProvider`-shaped or a
+  real provider with an injected fake) · `git diff --check` clean (only benign CRLF-normalization
+  notices on the new files).
+
+### No ingestion or API integration (deliberately, this packet stops here)
+
+The runner is never invoked automatically: no report-ingestion code path schedules or calls it, no
+route exposes a "run worker" trigger or reads enrichment data, no capability/RBAC guard exists for
+anything enrichment-related, and no `AuditLog` event is written on any enrichment path. Those are
+**P2-T2e** — ingestion scheduling, enrichment read/trigger APIs, RBAC and audits.
 
 ## Phase 1 release audit
 
