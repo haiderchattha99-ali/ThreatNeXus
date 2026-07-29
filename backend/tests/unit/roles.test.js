@@ -113,7 +113,8 @@ describe("capability constants", () => {
       ])
     );
     // + P2-T1 ownership + P2-T2e-2 enrichment + P2-T3 risk recalculation
-    expect(CAPABILITY_VALUES).toHaveLength(10 + 2 + 2 + 1);
+    // + §2B Packet B vulnerability association/enrichment/batch
+    expect(CAPABILITY_VALUES).toHaveLength(10 + 2 + 2 + 1 + 3);
   });
 
   it("defines the P2-T1 ownership capability set", () => {

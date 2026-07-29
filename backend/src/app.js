@@ -19,6 +19,9 @@ const findingOwnershipRoutes = require("./routes/findingOwnershipRoutes");
 const findingEnrichmentRoutes = require("./routes/findingEnrichmentRoutes");
 const enrichmentBatchRoutes = require("./routes/enrichmentBatchRoutes");
 const findingRiskRoutes = require("./routes/findingRiskRoutes");
+const findingVulnerabilityRoutes = require("./routes/findingVulnerabilityRoutes");
+const vulnerabilityEnrichmentRoutes = require("./routes/vulnerabilityEnrichmentRoutes");
+const vulnerabilityEnrichmentBatchRoutes = require("./routes/vulnerabilityEnrichmentBatchRoutes");
 const app = express();
 
 const allowedOrigins = env.CORS_ORIGIN.split(",")
@@ -53,7 +56,10 @@ app.use("/api/ownership", ownershipRoutes);
 app.use("/api/findings", findingOwnershipRoutes);
 app.use("/api/findings", findingEnrichmentRoutes);
 app.use("/api/findings", findingRiskRoutes);
+app.use("/api/findings", findingVulnerabilityRoutes);
 app.use("/api/enrichment", enrichmentBatchRoutes);
+app.use("/api/vulnerabilities", vulnerabilityEnrichmentRoutes);
+app.use("/api/vulnerability-enrichment", vulnerabilityEnrichmentBatchRoutes);
 // Home Route
 app.get("/", (req, res) => {
   res.json({
