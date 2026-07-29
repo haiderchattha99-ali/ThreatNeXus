@@ -26,16 +26,105 @@ _Operational status / handoff note. Authoritative plan lives in
   immediately below is the versioned decision record for it. Findings are now scored automatically
   at ingestion, on enrichment completion and on ownership change, and analysts can read a score with
   its stored explanation or trigger a manual recalculation.
-- **Next task: BUILD_PLAN §2B — vulnerability enrichment (CISA KEV, FIRST EPSS, NVD/CVE).** This is
-  the last outstanding piece of Phase 2. It is a **separate path** from IOC reputation enrichment;
-  neither substitutes for the other. Risk scoring already reserves `cvePresence`, `kevStatus` and
-  `epssScore` (currently `NOT_APPLICABLE` for every finding, per architect resolution G4) and stores
-  a contribution row for each, so §2B populates an existing, versioned shape rather than
-  redesigning score history. **No CVE is ever inferred from an exposed RDP port.**
+- **BUILD_PLAN §2B — vulnerability enrichment (CISA KEV, FIRST EPSS, NVD/CVE): Packet A is
+  complete. §2B as a whole is NOT complete.** See "Phase 2 §2B Packet A complete" immediately below
+  for exactly what landed and what has not. It is a **separate path** from IOC reputation
+  enrichment; neither substitutes for the other. **No CVE is ever inferred from an exposed RDP
+  port** — the only source of a CVE association is an explicit analyst assertion.
 - **Phase 2 gate status:** the §2C half is met — the rendered explanation reconstructs exactly from
   stored factor rows (proven in `riskScoringConcurrency.test.js` case 13), and score ordering matches
   hand-recomputation on a 19-scenario manually authored sample (`npm run eval:risk`). The §2A half
-  was met in P2-T2c/P2-T2e-1. The gate cannot close until §2B ships.
+  was met in P2-T2c/P2-T2e-1. The gate **cannot close until §2B Packet B ships** — Packet A delivers
+  the core domain but no HTTP surface, RBAC or evaluator gate.
+
+## Phase 2 §2B Packet A complete — core vulnerability domain (2026-07-29)
+
+**Honest scope statement: this is an intermediate milestone, not §2B completion.**
+
+Previously landed (unchanged by this packet):
+
+- `c39e795` — additive vulnerability-intelligence schema and migration
+  `20260729111818_add_phase2_vulnerability_intelligence`.
+- `4555031` — provider-neutral contracts plus the NVD, CISA KEV and FIRST EPSS adapters and a
+  `MockVulnerabilityProvider`.
+
+Completed by Packet A:
+
+- **Analyst-verified CVE association domain** (`findingVulnerabilityService.js`). Append-only
+  `FindingVulnerability` history; exactly one current row per `(Finding, CVE)` pair enforced by the
+  `currentAssociationKey` unique column; attach/remove are SERIALIZABLE with bounded
+  exponential-backoff retry on P2002/P2034; a repeat request returns `UNCHANGED` and writes no
+  history. `sourceReference` is a stored note that is never fetched or dereferenced anywhere.
+- **Vulnerability enrichment queue** (`vulnerabilityQueueService.js`, `vulnerabilityRepository.js`).
+  Normal scheduling resolves `CACHE_HIT` / `ALREADY_PENDING` / `SCHEDULED`; the cache decision is
+  all-or-nothing across NVD + CISA KEV + FIRST EPSS at an explicit `asOf`. Forced scheduling bypasses
+  the cache but never active-job uniqueness, and preserves every completed and dead-lettered job.
+- **Queue repository primitives** — candidate listing, atomic claim with the attempt increment in the
+  same guarded statement, lease expiry and stale-token protection, release with `nextAttemptAt`,
+  cancellation refund, atomic completion, dead-letter and the exhausted-job sweep.
+- **Bounded runner** (`vulnerabilityRunner.js`). `runVulnerabilityEnrichmentBatch` processes 1–100
+  jobs sequentially, fetches the CISA KEV catalogue **at most once per executed batch** and shares
+  the immutable context, calls all three providers outside every transaction, and commits the
+  COMPLETED transition plus all three provider-result rows in one transaction. A failed catalogue
+  fetch produces controlled unavailable results and **never** `isKnownExploited: false`.
+- **Risk v1 vulnerability activation** (`vulnerabilityRiskContext.js` + `riskInputSnapshot.js`).
+  `loadVulnerabilityContext()` now reads real persisted evidence: current ACTIVE associations only,
+  and only fresh SUCCESS results attached to COMPLETED jobs. Aggregation is exactly as approved —
+  flat `cvePresence` 300; `kevStatus` 800 if ANY active CVE is listed, 0 only when EVERY active CVE
+  has fresh usable `false`, otherwise `NOT_AVAILABLE`; `epssScore` from the maximum fresh probability
+  with a canonical-cveId tie-break.
+- **`EPSS_NOT_AVAILABLE` explanation code.** The unavailable EPSS path previously reported
+  `EPSS_LOW`, which let "we could not check" read as "checked and negligible". A fresh score of 0
+  remains `APPLIED` / 0 / `EPSS_LOW`; no usable score is now `NOT_AVAILABLE` / 0 /
+  `EPSS_NOT_AVAILABLE`.
+
+Unchanged and verified: `algorithmVersion` `risk-additive-bucketed-v1`, `configurationVersion`
+`v1.0.0`, and `RISK_CONFIGURATION_FINGERPRINT` `660e7bbe…` — byte-identical before and after, because
+the fingerprint covers `RISK_CONFIGURATION`, which contains no explanation-code vocabulary. No
+weight, cap, bucket or band changed. **Migration count remains exactly 14**; `prisma/schema.prisma`
+and `prisma/migrations/` are byte-identical to `eaa0232`.
+
+`RiskScore.inputFingerprint` values DO change once, for every Finding, because the normalized input
+set gained `activeCveIds`, `kevListedCveId` and `epssSelectedCveId`. That is an honest input-schema
+change: the next rescore of an existing Finding appends one new snapshot with an identical score.
+
+### Still pending — NOT delivered by Packet A
+
+- HTTP controllers and routes for CVE association, scheduling and batch execution
+- RBAC capability additions
+- API serializers and read services
+- the full audit action surface (only the minimal hooks needed for failure isolation exist)
+- environment-variable composition and production HTTP wiring
+- the `eval:vulnerability` ground-truth gate
+- frontend
+
+### Accepted limitations (deliberate, recorded)
+
+- `RiskCalculationTrigger` is a PostgreSQL enum with no vulnerability-specific value, and this packet
+  adds no migration. Association-triggered rescoring therefore uses `SYSTEM_RECALCULATION` and
+  job-completion rescoring uses `ENRICHMENT_COMPLETED`. A dedicated trigger value is Packet B work.
+- `vulnerabilityRiskContext` issues one bounded provider-result lookup per active CVE (three index
+  hits each), inside the scoring transaction. `MAX_ACTIVE_CVES_PER_FINDING` (50) bounds the worst
+  case; realistic findings carry one to three CVEs.
+- The runner is invoked, never self-scheduling: there is no daemon, no cron and no internal loop
+  beyond the single bounded call.
+
+### Verification (all green, 2026-07-29)
+
+- Full backend suite **1974 passed / 2 skipped**, with `TEST_DATABASE_URL` set so every
+  real-PostgreSQL suite ran.
+- New focused real-PostgreSQL suite `tests/integration/vulnerabilityCoreConcurrency.test.js`
+  **19/19**, covering concurrent first attach, ordered history, concurrent opposing transitions,
+  concurrent normal and forced scheduling, the claim-race attempt increment, completion atomicity,
+  a forced provider-result insertion failure leaving no partial set, scheduling- and
+  risk-failure isolation, NVD `NOT_FOUND`, KEV false vs catalogue failure, EPSS 0 vs unavailable,
+  multi-CVE aggregation, final-CVE removal, append-only RiskScore history, and `onDelete: Restrict`.
+  Cleanup deletes only exact collected ids — never an IP, CVE or provider prefix.
+- `npm run eval:risk` **19/19**; `npm run eval:phase1` **9/9**.
+- `npx prisma validate` clean; 14 migrations; `git diff --check` clean.
+- No raw SQL, no network access from any new module, no committed key or `.env`.
+
+**Exact next task: §2B Packet B — APIs, RBAC, audits and production composition.**
 
 ## Locked Risk v1 numeric contract (P2-T3) — architect-approved 2026-07-29
 
