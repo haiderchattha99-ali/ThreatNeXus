@@ -343,6 +343,33 @@ async function attemptApplyOverride(tx, findingId, organizationId, justification
  * never deduplicated against the current outcome, even if it names the same
  * organization.
  */
+// P2-T3 — rescore one Finding after an ownership override apply/clear has
+// committed.
+//
+// Ownership contributes NO basis points to risk (DECISIONS.md D-003 stands),
+// but it decides whether sectorCriticality is attributable at all: an override
+// onto a healthcare organization can turn a NOT_AVAILABLE sector factor into
+// an APPLIED one, and clearing it can turn it back. So the score genuinely
+// needs recomputing even though ownership itself is unscored.
+//
+// Runs strictly after the ownership transaction has committed, and never
+// throws: a risk failure must not roll back ownership history. Mapping-registry
+// bulk changes are deliberately NOT hooked here — bounded re-resolution across
+// many findings remains deferred to its own packet.
+async function recalculateRiskAfterOwnershipSafely(client, auditContext, findingId, asOf) {
+  try {
+    // Required lazily to avoid a require-time cycle: the risk pipeline reads
+    // ownership state, and this module now triggers the risk pipeline.
+    // eslint-disable-next-line global-require
+    const { recalculateAfterOwnershipChange } = require("../risk/riskRecalculationService");
+    await recalculateAfterOwnershipChange({ findingId, asOf, client, auditContext });
+  } catch (error) {
+    console.error("Risk recalculation after ownership change failed", {
+      name: error && error.name,
+    });
+  }
+}
+
 async function applyOverride(findingId, organizationId, justification, options = {}) {
   if (!Number.isInteger(findingId) || findingId <= 0) {
     throw new FindingOwnershipValidationError(["findingId"]);
@@ -377,6 +404,8 @@ async function applyOverride(findingId, organizationId, justification, options =
       },
       reason: "Analyst override applied",
     });
+
+    await recalculateRiskAfterOwnershipSafely(client, auditContext, findingId, asOf);
 
     return outcome;
   } catch (error) {
@@ -460,6 +489,8 @@ async function clearOverride(findingId, options = {}) {
       after: findingOwnershipAuditSummary(outcome.current),
       reason: "Analyst override cleared; reverted to automatic resolution",
     });
+
+    await recalculateRiskAfterOwnershipSafely(client, auditContext, findingId, asOf);
 
     return outcome;
   } catch (error) {

@@ -21,10 +21,280 @@ _Operational status / handoff note. Authoritative plan lives in
   RBAC, audits)** is also **complete** — see "Completed — P2-T2e-2" below. The IOC enrichment workflow
   is now reachable end to end: ingestion → durable scheduling → analyst reads → manual/forced
   re-enrichment → administrator batch execution.
-- **Next task: P2-T3 — deterministic risk scoring.** Stored factor contributions, an explanation
-  rendered from those stored values (never AI-generated), rescoring triggers, and read/trigger APIs.
-  Ownership (P2-T1/P2-H1) and IOC enrichment (P2-T2a → P2-T2e-2) are both complete and reachable; risk
-  scoring is the next distinct pipeline stage, per `BUILD_PLAN.md`/`DECISIONS.md` D-002.
+- **P2-T3 (deterministic, explainable risk scoring) is complete** — see "Completed — P2-T3" below.
+  The numeric contract is **locked and architect-approved**; "Locked Risk v1 numeric contract"
+  immediately below is the versioned decision record for it. Findings are now scored automatically
+  at ingestion, on enrichment completion and on ownership change, and analysts can read a score with
+  its stored explanation or trigger a manual recalculation.
+- **Next task: BUILD_PLAN §2B — vulnerability enrichment (CISA KEV, FIRST EPSS, NVD/CVE).** This is
+  the last outstanding piece of Phase 2. It is a **separate path** from IOC reputation enrichment;
+  neither substitutes for the other. Risk scoring already reserves `cvePresence`, `kevStatus` and
+  `epssScore` (currently `NOT_APPLICABLE` for every finding, per architect resolution G4) and stores
+  a contribution row for each, so §2B populates an existing, versioned shape rather than
+  redesigning score history. **No CVE is ever inferred from an exposed RDP port.**
+- **Phase 2 gate status:** the §2C half is met — the rendered explanation reconstructs exactly from
+  stored factor rows (proven in `riskScoringConcurrency.test.js` case 13), and score ordering matches
+  hand-recomputation on a 19-scenario manually authored sample (`npm run eval:risk`). The §2A half
+  was met in P2-T2c/P2-T2e-1. The gate cannot close until §2B ships.
+
+## Locked Risk v1 numeric contract (P2-T3) — architect-approved 2026-07-29
+
+**Status: LOCKED.** Approved by the architect as "APPROVED WITH REQUIRED AMENDMENTS" and recorded
+here because `DECISIONS.md` lives in the read-only planning folder — this section is the versioned
+decision location inside the repository. Every number below is authoritative. Changing any of them
+requires bumping `RISK_CONFIGURATION_VERSION` and a new architect approval; it is never an
+implementation-time judgement call.
+
+The contract lives in **code**, not in the database and not in the environment:
+`backend/src/services/risk/riskConfiguration.js` is a deeply frozen module with a load-time
+coherence proof (`assertConfigurationCoherent`). This is the approved amendment to
+`BUILD_PLAN.md` §2C's "versioned config row" wording (**D-T3-b**). Historical truth is preserved not
+by keeping old config rows readable but by persisting `algorithmVersion`, `configurationVersion`,
+`configurationFingerprint` **and every factor's own contribution** on each snapshot, so an old
+explanation renders entirely from its own stored rows and never consults today's configuration.
+
+### Identity and scale
+
+| Item | Locked value |
+| --- | --- |
+| `algorithmVersion` | `risk-additive-bucketed-v1` |
+| `configurationVersion` | `v1.0.0` |
+| Score range | integer **0–10,000 basis points**; no floating point participates in scoring |
+| Aggregation | **additive**, capped at 10,000 |
+| `displayScore` | `floor(scoreBasisPoints / 100)` — derived at read time, never stored |
+
+### Bands (inclusive, contiguous, tiling 0–10,000)
+
+| Band | Basis points |
+| --- | --- |
+| `INFORMATIONAL` | 0 – 1,499 |
+| `LOW` | 1,500 – 3,499 |
+| `MEDIUM` | 3,500 – 5,999 |
+| `HIGH` | 6,000 – 7,999 |
+| `CRITICAL` | 8,000 – 10,000 |
+
+A band is derived **only** from the final integer score. It is never assigned directly and never
+AI-decided.
+
+### Final locked factor caps (sum = 10,000 exactly)
+
+| Factor | Cap |
+| --- | --- |
+| `sourceSeverity` | 800 |
+| `exposureCriticality` | 1,500 |
+| `persistence` | 1,200 |
+| `recurrence` | 1,300 |
+| `daysUnresolved` | 1,200 |
+| `iocReputationContext` | 1,200 |
+| `sectorCriticality` | 1,300 |
+| `cvePresence` | 300 |
+| `kevStatus` | 800 |
+| `epssScore` | 400 |
+| **Total** | **10,000** |
+
+**Ownership is contextual, not a scored factor.** `FindingOwnership.status`, `confidence` and
+`isIspAttribution` contribute **zero** basis points. Ownership only gates whether
+`sectorCriticality` is attributable at all (amendment 2 below). This preserves `DECISIONS.md` D-003.
+
+### Applicability vocabulary
+
+Three states, never collapsed into each other, all of which store a contribution row:
+
+- `APPLIED` — real evidence was scored. **May be a legitimate zero** (e.g. AbuseIPDB `SUCCESS` with
+  `abuseConfidenceScore` 0 means "the provider looked and found nothing"). Only `APPLIED` may be
+  non-zero.
+- `NOT_AVAILABLE` — the evidence could not be obtained (failed/stale/absent enrichment, ownership too
+  weak to attribute a sector). Must stay **visibly distinct** from clean evidence.
+- `NOT_APPLICABLE` — the factor cannot apply to this kind of finding at all (CVE/KEV/EPSS on an
+  exposure report that carries no CVE).
+
+### Required amendment 1 — AbuseIPDB `NOT_FOUND`
+
+A **fresh `NOT_FOUND`** is:
+
+- applicability `NOT_AVAILABLE`
+- contribution 0
+- `explanationCode` `IOC_REPUTATION_NOT_FOUND`
+- normalized input `null`
+
+`SUCCESS` with `abuseConfidenceScore` 0 remains `APPLIED` / 0 / `IOC_REPUTATION_NONE` / normalized
+input `0`. `NOT_FOUND` means no usable provider reputation record exists and must **not** share
+`APPLIED` semantics with a confirmed zero-score reputation. All other IOC reputation buckets are as
+drafted.
+
+### Required amendment 2 — sector applicability confidence gate
+
+`sectorCriticality` applies only when **either**:
+
+- **A.** `FindingOwnership.status = OVERRIDDEN`, `organizationId` present, `isIspAttribution = false`; or
+- **B.** `FindingOwnership.status = RESOLVED`, `organizationId` present, `isIspAttribution = false`,
+  and `confidence` is `HIGH` or `MEDIUM` (`CONFIRMED` is accepted a fortiori as a stronger grade).
+
+It does **not** apply when: no ownership row · `AMBIGUOUS` · `UNRESOLVED` · `organizationId` absent ·
+`isIspAttribution = true` · `RESOLVED` with `LOW` confidence · `Organization.sector = UNKNOWN`.
+
+`RESOLVED` + `LOW` confidence emits the closed outcome `NOT_AVAILABLE` / 0 /
+`SECTOR_NOT_AVAILABLE_LOW_CONFIDENCE`. This is an **applicability gate only** — ownership confidence
+is not itself a scored factor and contributes no basis points.
+
+### Required amendment 3 — current unresolved episode
+
+`daysUnresolved` is measured from the start of the **current** unresolved episode, never from the
+original `firstSeen` of a finding that was closed and later recurred:
+
+1. `Finding.status = CLOSED` → `NOT_APPLICABLE` / 0 / `DAYS_UNRESOLVED_NOT_APPLICABLE_CLOSED`.
+2. `OPEN` with no `RECURRED` occurrence at or before `asOf` → `unresolvedSince = firstSeen`.
+3. `OPEN` with one or more `RECURRED` occurrences at or before `asOf` → `unresolvedSince =` the
+   latest `RECURRED` `occurrence.observedAt` (the start of the current reopened episode).
+4. `daysUnresolved = floor((asOf - unresolvedSince) / 86,400,000)`.
+5. Normalized `daysUnresolved` is clamped to `[0, 3650]`.
+6. `unresolvedSince` absent, invalid or later than `asOf` → `NOT_AVAILABLE` / 0 /
+   `DAYS_UNRESOLVED_INVALID_TIMESTAMP`.
+
+Contribution buckets (unchanged): 0–6 days → 0 · 7–29 → 400 · 30–89 → 800 · 90+ → 1,200.
+**Time spent in `CLOSED` state is never counted as unresolved time after recurrence.**
+
+### Resolution of draft items G1–G7
+
+- **G1.** `sourceSeverity` 800 and `exposureCriticality` 1,500 both stand. The correlation is
+  intentional: `sourceSeverity` is the accepted report class/source assertion; `exposureCriticality`
+  is the technical value of the exposed TCP/3389 service.
+- **G2.** `INFORMATIONAL` is **intentionally unreachable** for `ACCESSIBLE_RDP`. The fixed baseline is
+  2,300 basis points (800 + 1,500), therefore `LOW`. An accessible RDP service must never be
+  classified as merely informational.
+- **G3.** Persistence remains **count-based**: the count of immutable `FindingOccurrence` rows with
+  `observedAt <= asOf`. Time is represented separately by `daysUnresolved`.
+- **G4.** For `ACCESSIBLE_RDP` without a CVE-bearing source, `cvePresence`, `kevStatus` and
+  `epssScore` are all `NOT_APPLICABLE` / 0, and **all three still emit stored contribution rows**.
+  The future CVE-bearing input model is explicitly deferred and was not invented here.
+- **G5.** `HISTORICAL` occurrences **are** included in the persistence count — each is a distinct
+  accepted report observation. Phase 1 already guarantees one occurrence per Finding/report, and
+  duplicate rows do not create additional occurrences.
+- **G6.** Uses the amended current-open-episode `daysUnresolved` rule above.
+- **G7.** The 3,650-day normalized-input clamp is approved. The scoring cap is already reached at 90
+  days; the clamp only bounds stored normalized evidence.
+
+### Standing prohibitions (restated from the approval)
+
+- Do **not** add ownership as a scored factor.
+- Do **not** infer CVEs from Accessible RDP.
+- Do **not** treat missing enrichment as confirmed score-zero reputation.
+- Do **not** count time spent `CLOSED` as unresolved time.
+
+## Completed — P2-T3 (deterministic, explainable, append-only risk scoring)
+
+Implements the locked contract recorded above. Every number comes from that section; nothing here
+re-decides any of it.
+
+**Migration:** `20260728123013_add_phase2_risk_scoring` — one additive migration (`CREATE TYPE` /
+`CREATE TABLE` / `CREATE INDEX` / `ADD FOREIGN KEY` only; no raw SQL, no partial index, no
+destructive change, no column altered on any existing model). Adds `RiskScore`,
+`RiskFactorContribution` and three enums (`RiskBand`, `RiskCalculationTrigger`,
+`RiskFactorApplicability`). Migration count 12 → 13.
+
+**D-T3-a — append-only with exactly one current row.** `RiskScore.currentForFindingId Int? @unique`
+is the same mechanism as `FindingOwnership` (D-006) and `IocEnrichment.activeCacheKey` (D-007):
+PostgreSQL treats multiple NULLs in a unique index as distinct, so any number of superseded rows
+coexist while at most one row per Finding carries the pointer. Supersession sets `supersededAt` and
+nulls the pointer; it never edits a score, a band, or any contribution.
+
+**D-T3-b — the contract lives in code, not in a config row.** `BUILD_PLAN.md` §2C says "weights live
+in a versioned config row, not code constants, so changing weights later does not retroactively
+falsify old explanations." The *goal* is honoured; the *mechanism* is amended, with architect
+approval. `riskConfiguration.js` is a deeply frozen module with a load-time coherence proof
+(`assertConfigurationCoherent`, which fails `require()` if the caps stop summing to 10,000, a bucket
+exceeds its cap, the bands stop tiling 0–10,000, or the vulnerability factors start to dominate).
+Historical truth is preserved by persisting `algorithmVersion`, `configurationVersion`,
+`configurationFingerprint` **and every factor's own contribution and cap** on each snapshot — so an
+old explanation renders entirely from its own stored rows and never consults today's configuration.
+A config *row* would have been strictly weaker: it is mutable at runtime with no code review, and it
+still would not have made an old explanation self-contained.
+
+**Pure engine** (`riskEngine.js`, no Prisma / filesystem / network / clock / randomness / AI):
+`calculateRisk({configuration, inputSnapshot})` → frozen result. One explicit named evaluator per
+factor rather than a generic rules interpreter. `finalizeFactor` is the structural choke point: a
+non-`APPLIED` factor contributes exactly 0 whatever its evaluator said, nothing may exceed its own
+cap or go negative, and every explanation code must be in the closed vocabulary. All ten factors
+emit a contribution row on every run, including `NOT_AVAILABLE` and `NOT_APPLICABLE` ones — that is
+what stops a stored explanation silently omitting missing context.
+
+**Normalized input snapshot** (`riskInputSnapshot.js`): reads persistence and recurrence from
+immutable `FindingOccurrence` evidence (never from the mutable `Finding.occurrenceCount` /
+`recurrenceCount` projections, never from `updatedAt`), applies the amendment-3 current-episode rule,
+applies the amendment-2 ownership gate, and resolves reputation freshness over the half-open window
+`[queriedAt, expiresAt)` — matching `iocEnrichmentRepository.findFreshCachedResult` exactly. The
+wall clock is never read: `asOf` is always supplied by the caller. Carries only bounded scalars — no
+indicator, no cache key, no claim token, no provider payload, no actor name.
+
+**Append-only persistence** (`riskScoringService.js`): the whole load → calculate → persist cycle runs
+in ONE Prisma interactive transaction at `Serializable`, with the same retry discipline copied from
+`findingOwnershipService.js` / `dedupService.js` — a recognised `P2002`/`P2034` re-runs the *entire*
+transaction from scratch (never a catch inside the transaction, which would leave PostgreSQL aborted
+at `25P02`). Idempotency: equal `inputFingerprint` + equal configuration/algorithm version returns
+`UNCHANGED` and appends nothing, so re-uploading an identical report cannot flood risk history.
+`asOf` is deliberately excluded from the fingerprint, but the elapsed-day *bucket* is inside it, so
+genuine time-driven change still registers.
+
+**Explanation** (`riskExplanation.js`): rendered exclusively from persisted rows. Never touches the
+database, never re-reads live Finding/ownership/enrichment state, never consults today's
+configuration, never calls a model. One fixed sentence per closed code, with only the row's own
+stored `normalizedInputValue` interpolated. An unrecognised code (from a future configuration
+version) degrades to a neutral sentence rather than throwing.
+
+**Automatic rescoring** (`riskRecalculationService.js`), at three committed state-change boundaries:
+ingestion (after all evidence commits), enrichment completion (after terminal results commit), and
+ownership override apply/clear (after the ownership transaction commits). Two guarantees: **failure
+isolation** — nothing here ever throws into its caller, failures come back as one of three closed
+codes (`FINDING_NOT_FOUND` / `VALIDATION_ERROR` / `PERSISTENCE_ERROR`) and an exception message never
+escapes; and **bounded audit** — one aggregate event per operation carrying counts only, never one
+per factor and never one per finding. Bounded at 100 findings per trigger, with the remainder
+reported as `skippedCount` rather than silently truncated. No daemon, no cron, no unbounded sweep.
+
+**APIs, RBAC and audits.** `GET /api/findings/:id/risk` (`read:findings` — every role that can see a
+finding can see why it was prioritised) and `POST /api/findings/:id/risk/recalculate`
+(`recalculate:finding-risk`, ADMIN + ANALYST only; justification required). The request can
+influence **when** a score is calculated and **why**, and nothing else: there is no way to supply a
+weight, score, band, configuration version, trigger or `asOf` — the controller captures `now` itself
+exactly once, the actor comes from the verified token, and the weights are frozen code constants.
+Proven by an explicit adversarial test that posts every score-shaped field at once and asserts the
+stored snapshot is unchanged.
+
+**Ownership stays unscored.** Ownership status, confidence and `isIspAttribution` contribute zero
+basis points (D-003 and `BUILD_PLAN.md` §2C both stand). Ownership only gates whether
+`sectorCriticality` is attributable. An ownership change still triggers a rescore, because flipping
+that gate genuinely changes the score.
+
+**Tests: 1,745 passing, 2 skipped** (was 1,417 at P2-T2e-2). New:
+- `riskConfiguration.test.js` (38) — the locked contract transcribed from the approval, not read back
+  from the module; fingerprint determinism; deep-freeze immutability.
+- `riskEngine.test.js` (83) — hand-derived scores; a `describe` block per amendment.
+- `riskInputSnapshot.test.js` (44) — episode rule, ownership gate matrix, enrichment priority and
+  freshness, fingerprint sensitivity.
+- `riskScoringService.test.js` (25) — CREATED/UNCHANGED, supersession, retry classification, bounding.
+- `riskExplanation.test.js` (19) — every closed code has a template and no template exists outside it.
+- `findingRiskReadService.test.js` (19) — serializer allow-list, pagination, evidence bounding.
+- `riskRecalculationService.test.js` (24) — never-throws, closed failure codes, aggregate-audit bounds.
+- `evalRiskGate.test.js` (33) — proves the evaluator gate can actually fail, by tampering with
+  in-memory copies of both the ground truth and the configuration.
+- `riskRouteAuthorization.test.js` (27) — full RBAC matrix plus the adversarial request-surface test.
+- `riskScoringConcurrency.test.js` (15, real PostgreSQL) — the `currentForFindingId` unique rule under
+  8 concurrent rescorings, `Restrict` refusing to orphan history, the per-factor unique constraint,
+  and all three amendments against actually stored rows.
+
+**Executable manually authored ground truth:** `data/synthetic/risk_ground_truth.yaml` +
+`eval/lib/riskGroundTruthLoader.js` + `eval/run_risk_v1_gate.js` (`npm run eval:risk`). 19 scenarios,
+every expected value derived by hand from the locked contract rather than read back from the engine.
+The gate checks three independent things: that the compiled configuration still matches a *second*,
+hand-transcribed copy of the approved weights; that every hand-derived score, band, display value and
+factor contribution matches; and that scoring is deterministic on replay. It needs no database, no
+network and no clock — risk scoring is a total function of the snapshot, which is exactly what is
+being pinned. The loader also rejects an internally incoherent expectation (a `displayScore` that
+does not follow from its score, a band that does not follow from its score, a non-`APPLIED` factor
+expecting basis points, a contribution above its declared cap).
+
+**Gates run:** full suite 1,745/1,745 against real PostgreSQL · Phase 1 gate 9/9 (still passing with
+risk scoring now wired into ingestion — direct evidence of failure isolation) · Risk v1 gate:
+contract + 19/19.
 
 ## Completed — P2-T1 (ownership mapping, deterministic resolution, analyst override)
 

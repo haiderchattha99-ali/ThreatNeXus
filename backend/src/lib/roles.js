@@ -42,6 +42,13 @@ const CAPABILITIES = Object.freeze({
   // which roles may cause work or provider spend, not which may see results.
   TRIGGER_FINDING_ENRICHMENT: "trigger:finding-enrichment",
   EXECUTE_ENRICHMENT_BATCH: "execute:enrichment-batch",
+
+  // Phase 2 (P2-T3) — deterministic risk scoring. Additive, non-hierarchical,
+  // same convention. Reading a risk score reuses READ_FINDINGS (a score is
+  // part of understanding a finding); only *causing* a recalculation needs
+  // this grant. Nothing here lets a caller influence the formula — weights
+  // are code constants and no endpoint accepts a weight, score or band.
+  RECALCULATE_FINDING_RISK: "recalculate:finding-risk",
 });
 
 const CAPABILITY_VALUES = Object.freeze(Object.values(CAPABILITIES));
@@ -76,6 +83,9 @@ const ROLE_CAPABILITIES = Object.freeze({
     // triage, but may not run the administrator bounded-batch worker (that
     // stays ADMIN-only below, via CAPABILITY_VALUES).
     CAPABILITIES.TRIGGER_FINDING_ENRICHMENT,
+    // P2-T3 — an analyst may recalculate risk on a Finding they triage.
+    // REVIEWER and VIEWER may read scores but never cause a recalculation.
+    CAPABILITIES.RECALCULATE_FINDING_RISK,
   ]),
   ADMIN: Object.freeze([...CAPABILITY_VALUES]),
 });

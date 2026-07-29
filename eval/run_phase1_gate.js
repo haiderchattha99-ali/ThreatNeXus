@@ -136,6 +136,17 @@ async function cleanupEvalState(prisma, identityIndex) {
   // — a Finding can no longer be deleted while it has ownership history.
   // Additive, same scoped-id-set discipline as every other deleteMany here.
   await prisma.findingOwnership.deleteMany({ where: { findingId: { in: findingIds } } });
+  // P2-T3: ingestion now also scores every Finding it touches. RiskScore
+  // -> Finding and RiskFactorContribution -> RiskScore are both
+  // onDelete: Restrict, so contributions must go before scores, and scores
+  // before Findings. Same scoped-id-set discipline, never a broad prefix.
+  const riskScores = await prisma.riskScore.findMany({
+    where: { findingId: { in: findingIds } },
+    select: { id: true },
+  });
+  const riskScoreIds = riskScores.map((r) => r.id);
+  await prisma.riskFactorContribution.deleteMany({ where: { riskScoreId: { in: riskScoreIds } } });
+  await prisma.riskScore.deleteMany({ where: { id: { in: riskScoreIds } } });
   await prisma.finding.deleteMany({ where: { id: { in: findingIds } } });
   await prisma.rawReport.deleteMany({ where: { id: { in: reportIds } } });
 }

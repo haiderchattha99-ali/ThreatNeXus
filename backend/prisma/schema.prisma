@@ -49,6 +49,10 @@ model User {
   assetMappingsCreated AssetMapping[]     @relation("AssetMappingCreatedBy")
   assetMappingsUpdated AssetMapping[]     @relation("AssetMappingUpdatedBy")
   ownershipOverrides   FindingOwnership[] @relation("OwnershipOverrideActor")
+
+  // Phase 2 (P2-T3) — same SetNull-actor-reference convention. Only a MANUAL
+  // recalculation carries an actor; automatic triggers leave actorUserId null.
+  riskCalculations RiskScore[] @relation("RiskScoreActor")
 }
 
 model Threat {
@@ -280,6 +284,11 @@ model Finding {
   // ownership history is evidence and must never be orphaned by deleting the
   // Finding it describes (Findings are never hard-deleted in this system).
   ownershipHistory FindingOwnership[]
+
+  // Phase 2 (P2-T3) — append-only deterministic risk history, same Restrict
+  // reasoning: a score and its factor contributions are the audit-grade
+  // record of why this Finding was prioritised and must never be orphaned.
+  riskScores RiskScore[]
 
   // The locked identity key. Its index also covers indicatorValue-prefixed
   // lookups, so no separate indicatorValue index is added.
@@ -686,4 +695,177 @@ model IocEnrichment {
   @@index([status, leaseExpiresAt])
   // Provider/indicator lookup history.
   @@index([provider, indicatorType, indicator, queriedAt])
+}
+
+// ===========================================================================
+// Phase 2 (P2-T3) — Deterministic, explainable, append-only risk scoring.
+//
+// Additive only. Introduces RiskScore + RiskFactorContribution and three
+// enums. No column on any existing model is altered; the only edits elsewhere
+// are two virtual back-relations (Finding.riskScores, User.riskCalculations).
+//
+// ---------------------------------------------------------------------------
+// The locked v1 numeric contract lives in CODE, not in this database
+// ---------------------------------------------------------------------------
+// Weights, caps, bucket boundaries and band edges are an immutable frozen
+// module (services/risk/riskConfiguration.js), NOT rows in a config table.
+// This is the approved amendment to BUILD_PLAN.md section 2C's "versioned
+// config row" wording — see STATUS.md D-T3-b. Historical truth is preserved
+// not by keeping old config rows readable, but by persisting algorithmVersion,
+// configurationVersion, configurationFingerprint AND every factor's own
+// contribution on each snapshot: an old explanation renders entirely from its
+// own stored rows and never consults today's configuration.
+//
+// ---------------------------------------------------------------------------
+// Append-only, with exactly one current row per Finding
+// ---------------------------------------------------------------------------
+// currentForFindingId Int? @unique is the same mechanism as FindingOwnership
+// (D-006) and IocEnrichment.activeCacheKey (D-007): PostgreSQL treats multiple
+// NULLs in a unique index as distinct, so any number of superseded history
+// rows may coexist while at most one row per Finding carries the pointer. No
+// raw SQL, no partial index. Supersession sets supersededAt and nulls the
+// pointer; it never edits the score, the band, or any contribution.
+// ===========================================================================
+
+// Final risk classification. Derived ONLY from the final integer score and
+// the versioned band table — never assigned directly, never AI-decided.
+enum RiskBand {
+  INFORMATIONAL
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+// What caused a calculation. MANUAL is the only trigger that carries an
+// actorUserId; the rest are system-initiated at a state-change boundary.
+enum RiskCalculationTrigger {
+  INGESTION
+  ENRICHMENT_COMPLETED
+  OWNERSHIP_CHANGED
+  MANUAL
+  SYSTEM_RECALCULATION
+}
+
+// Why a factor contributed what it did. The distinction is load-bearing and
+// is never collapsed: APPLIED means real evidence was scored (including a
+// legitimate zero, e.g. AbuseIPDB SUCCESS with confidence 0); NOT_AVAILABLE
+// means the evidence could not be obtained (failed/stale/absent enrichment,
+// ownership too weak to attribute a sector) and must stay visibly distinct
+// from clean evidence; NOT_APPLICABLE means the factor cannot apply to this
+// kind of finding at all (CVE/KEV/EPSS on an exposure report with no CVE).
+// All three store contributionBasisPoints, and only APPLIED may be non-zero.
+enum RiskFactorApplicability {
+  APPLIED
+  NOT_AVAILABLE
+  NOT_APPLICABLE
+}
+
+// One immutable scoring snapshot for one Finding. Never updated after
+// insertion except for the intentional supersession transition
+// (supersededAt + currentForFindingId -> null).
+model RiskScore {
+  id        Int     @id @default(autoincrement())
+  findingId Int
+  finding   Finding @relation(fields: [findingId], references: [id], onDelete: Restrict)
+
+  // Versioning: which algorithm, which numeric contract, and the fingerprint
+  // of that contract's canonical serialization. Stored per row so a score
+  // calculated under v1.0.0 stays explicable after a later version ships.
+  algorithmVersion         String
+  configurationVersion     String
+  configurationFingerprint String
+
+  // Deterministic hash of the normalized factor inputs (plus algorithm and
+  // configuration version). Equal fingerprint + equal configuration version
+  // means "same approved input state", which is what makes a rescore return
+  // UNCHANGED instead of flooding history with identical snapshots.
+  inputFingerprint String
+
+  // Integer basis points, 0-10000. No floating point anywhere in scoring;
+  // displayScore is derived as floor(scoreBasisPoints / 100) at read time and
+  // is deliberately NOT stored (it is a pure projection of this column).
+  scoreBasisPoints Int
+  riskBand         RiskBand
+
+  // asOf is the explicit evaluation instant every input was read against and
+  // every duration was measured from — never a wall-clock read inside the
+  // engine. calculatedAt is when the row was actually written.
+  asOf         DateTime
+  calculatedAt DateTime @default(now())
+
+  trigger RiskCalculationTrigger
+
+  // Populated only for MANUAL. SetNull: deleting a user must never destroy
+  // scoring history, only the actor attribution.
+  actorUserId Int?
+  actor       User? @relation("RiskScoreActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  // Bounded analyst justification for a MANUAL recalculation. Trimmed and
+  // length-capped at the service boundary; never free-form provider or
+  // exception text.
+  justification String?
+
+  currentForFindingId Int?      @unique
+  supersededAt        DateTime?
+
+  createdAt DateTime @default(now())
+
+  contributions RiskFactorContribution[]
+
+  // History reads for one Finding, newest first.
+  @@index([findingId, calculatedAt])
+  // Idempotency probe: does an existing snapshot already represent this exact
+  // input state under this exact contract?
+  @@index([findingId, inputFingerprint, configurationVersion])
+  @@index([riskBand])
+}
+
+// One immutable row per approved factor per score. Every factor in the locked
+// contract emits exactly one row on every snapshot, including NOT_AVAILABLE
+// and NOT_APPLICABLE ones — that is what stops an explanation from silently
+// omitting missing context. Never updated, never deleted outside test cleanup.
+model RiskFactorContribution {
+  id          Int       @id @default(autoincrement())
+  riskScoreId Int
+  riskScore   RiskScore @relation(fields: [riskScoreId], references: [id], onDelete: Restrict)
+
+  // Closed vocabulary from the locked contract (RISK_FACTOR_KEYS). Stored as
+  // a string rather than an enum so adding a factor in a future configuration
+  // version needs no migration on this evidence table.
+  factorKey     String
+  applicability RiskFactorApplicability
+
+  // Actual contribution and the cap it was drawn against. Storing the cap per
+  // row is what lets an old explanation state "300 of a possible 1200"
+  // truthfully after the cap changes in a later configuration version.
+  contributionBasisPoints        Int
+  maximumContributionBasisPoints Int
+
+  // The bounded, normalized input the bucket was selected by (e.g. "6" for an
+  // observation count, "88" for an abuse confidence score, "HEALTHCARE" for a
+  // sector). Null when the factor was NOT_AVAILABLE/NOT_APPLICABLE. Never a
+  // raw provider payload, never free text.
+  normalizedInputValue String?
+
+  // Closed RISK_EXPLANATION_CODES value. The rendered sentence is looked up
+  // from this code, so no explanation is ever generated from a provider
+  // response, an exception message, or a model.
+  explanationCode String
+
+  // Bounded allow-listed evidence for this factor only (small scalar keys,
+  // e.g. {"observationCount":6}). Never a database row dump, never a raw
+  // provider response, never headers or secrets.
+  evidenceSnapshot Json?
+
+  // Stable presentation order from the locked contract, so a rendered
+  // explanation reads identically on every machine and every replay.
+  displayOrder Int
+
+  createdAt DateTime @default(now())
+
+  // One contribution per factor per score.
+  @@unique([riskScoreId, factorKey])
+  // Deterministic ordered read of one score's contributions.
+  @@index([riskScoreId, displayOrder])
 }

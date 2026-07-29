@@ -41,6 +41,7 @@
 const { AUDIT_OUTCOMES, safeLogAuditEvent } = require("../auditService");
 const { runEnrichmentBatch } = require("./enrichmentRunner");
 const { buildEnrichmentRuntime } = require("./enrichmentRuntime");
+const { recalculateAfterEnrichment } = require("../risk/riskRecalculationService");
 const { MAX_PENDING_BATCH_SIZE } = require("./iocEnrichmentCacheRules");
 
 const AUDIT_ACTIONS = Object.freeze({
@@ -221,7 +222,55 @@ async function executeEnrichmentBatch(input = {}) {
       : "Bounded IOC enrichment batch completed",
   });
 
+  // P2-T3 — rescore the Findings whose reputation context this batch just
+  // changed. This is the safest integration boundary available: every terminal
+  // enrichment result is already durably committed by the time runEnrichmentBatch
+  // returns, so nothing here runs inside a provider call, a claim, or a
+  // completion transaction.
+  //
+  // Only genuinely COMPLETED jobs are considered — a released, dead-lettered
+  // or held job did not change reputation context, and a job is never matched
+  // on cache-key or claim metadata, only on its exact canonical indicator.
+  // recalculateRiskAfterEnrichmentSafely never throws, so a risk failure can
+  // never alter or invalidate the enrichment results this batch just wrote.
+  await recalculateRiskAfterEnrichmentSafely(prisma, auditContext, summary, now);
+
   return summary;
+}
+
+// Maps the batch's completed jobs back to affected Findings by exact canonical
+// indicator, then hands a bounded id set to the risk pipeline. Indicators are
+// used here purely as a join key and never reach an audit payload — the
+// aggregate risk event carries counts only.
+async function recalculateRiskAfterEnrichmentSafely(prisma, auditContext, summary, now) {
+  try {
+    const indicators = [
+      ...new Set(
+        (summary.results || [])
+          .filter((row) => row && row.outcome === "COMPLETED" && typeof row.indicator === "string")
+          .map((row) => row.indicator)
+      ),
+    ];
+    if (indicators.length === 0) return;
+
+    const findings = await prisma.finding.findMany({
+      where: { indicatorValue: { in: indicators } },
+      select: { id: true },
+    });
+    if (findings.length === 0) return;
+
+    await recalculateAfterEnrichment({
+      findingIds: findings.map((row) => row.id),
+      asOf: now,
+      client: prisma,
+      auditContext,
+    });
+  } catch (error) {
+    // Defensive only: recalculateAfterEnrichment already isolates its own
+    // failures. Reaching here means the join query itself failed, which must
+    // still not disturb the durable enrichment results.
+    console.error("Risk recalculation after enrichment failed", { name: error && error.name });
+  }
 }
 
 module.exports = {

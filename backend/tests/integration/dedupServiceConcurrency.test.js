@@ -72,6 +72,14 @@ async function cleanup() {
   await prisma.findingOccurrence.deleteMany({
     where: { rawReport: { sourceFileName: { startsWith: MARKER } } },
   });
+  // P2-T3: RiskFactorContribution -> RiskScore -> Finding, all Restrict.
+  const riskScores = await prisma.riskScore.findMany({
+    where: { finding: { indicatorValue: { in: ALL_IPS } } },
+    select: { id: true },
+  });
+  const riskScoreIds = riskScores.map((r) => r.id);
+  await prisma.riskFactorContribution.deleteMany({ where: { riskScoreId: { in: riskScoreIds } } });
+  await prisma.riskScore.deleteMany({ where: { id: { in: riskScoreIds } } });
   await prisma.finding.deleteMany({ where: { indicatorValue: { in: ALL_IPS } } });
   await prisma.rawReport.deleteMany({ where: { sourceFileName: { startsWith: MARKER } } });
 }

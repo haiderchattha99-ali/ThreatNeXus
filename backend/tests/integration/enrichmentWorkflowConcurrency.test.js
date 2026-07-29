@@ -107,6 +107,14 @@ async function cleanup() {
   await prisma.findingOccurrence.deleteMany({ where: { rawReportId: { in: rawReportIds } } });
   await prisma.rawReportRow.deleteMany({ where: { rawReportId: { in: rawReportIds } } });
   await prisma.findingOwnership.deleteMany({ where: { findingId: { in: findingIds } } });
+  // P2-T3: RiskFactorContribution -> RiskScore -> Finding, all Restrict.
+  const riskScores = await prisma.riskScore.findMany({
+    where: { findingId: { in: findingIds } },
+    select: { id: true },
+  });
+  const riskScoreIds = riskScores.map((r) => r.id);
+  await prisma.riskFactorContribution.deleteMany({ where: { riskScoreId: { in: riskScoreIds } } });
+  await prisma.riskScore.deleteMany({ where: { id: { in: riskScoreIds } } });
   await prisma.finding.deleteMany({ where: { id: { in: findingIds } } });
   await prisma.rawReport.deleteMany({ where: { id: { in: rawReportIds } } });
 }

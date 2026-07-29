@@ -57,6 +57,7 @@ const { resolveOneFinding } = require("../ownership/findingOwnershipService");
 const { scheduleEnrichment, SCHEDULE_OUTCOME } = require("../enrichment/enrichmentQueueService");
 const { INDICATOR_TYPES } = require("../enrichment/iocEnrichmentTypes");
 const { EnrichmentCacheKeyError } = require("../enrichment/enrichmentCacheKey");
+const { recalculateAfterIngestion } = require("../risk/riskRecalculationService");
 const { AUDIT_OUTCOMES, safeLogAuditEvent } = require("../auditService");
 const env = require("../../config/env");
 
@@ -563,6 +564,11 @@ async function ingestAccessibleRdpReport(input, options = {}) {
   const findingCounts = {};
   const reopenedFindings = [];
   const enrichmentCounts = {};
+  // P2-T3 — distinct Finding ids touched by this report, collected for one
+  // bounded risk-scoring pass after all evidence has committed. A Set because
+  // the same Finding identity can only appear once per report, but collecting
+  // defensively keeps the later rescore idempotent regardless.
+  const touchedFindingIds = new Set();
   // Set once the groups are computed inside the try block below; declared
   // here (not `const groups` inside the try) so the success-path audit after
   // the try/catch can still read the count.
@@ -657,6 +663,13 @@ async function ingestAccessibleRdpReport(input, options = {}) {
         enrichmentAsOf
       );
       enrichmentCounts[enrichmentOutcome] = (enrichmentCounts[enrichmentOutcome] || 0) + 1;
+
+      // P2-T3 — remember this Finding for the single bounded risk pass that
+      // runs after the whole report is processed. Scoring is deliberately NOT
+      // done here inside the per-group loop: it must see the ownership and
+      // enrichment state this report just produced, and it must never sit
+      // between a group's evidence write and the next group's.
+      touchedFindingIds.add(lifecycleResult.finding.id);
 
       // eslint-disable-next-line no-restricted-syntax
       for (const rowInGroup of group.rows) {
@@ -761,6 +774,31 @@ async function ingestAccessibleRdpReport(input, options = {}) {
       entityType: "RawReport",
       entityId: finishedReport.id,
       reason: "IOC enrichment scheduling summary could not be computed",
+    });
+  }
+
+  // 11c. P2-T3 — one bounded, sequential risk-scoring pass over the distinct
+  // Findings this report touched, emitting ONE aggregate audit event.
+  //
+  // Isolation contract, identical to ownership resolution and enrichment
+  // scheduling above: every RawReport / RawReportRow / Finding /
+  // FindingOccurrence write has already committed, recalculateAfterIngestion
+  // never throws (it classifies failures into closed codes internally), and
+  // scoring performs no network I/O. A total risk failure therefore leaves a
+  // fully valid ingested report with no risk snapshot — never a rolled-back
+  // or partially-invalidated one.
+  //
+  // Idempotent replay is handled by the scoring service itself: re-uploading
+  // the identical file produces the identical input fingerprint, which returns
+  // UNCHANGED and appends nothing, so duplicate ingestion cannot flood risk
+  // history.
+  if (touchedFindingIds.size > 0) {
+    await recalculateAfterIngestion({
+      findingIds: [...touchedFindingIds],
+      asOf: enrichmentAsOf,
+      client,
+      auditContext,
+      rawReportId: finishedReport.id,
     });
   }
 

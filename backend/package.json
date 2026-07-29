@@ -7,7 +7,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "seed:users": "node src/scripts/seedUsers.js",
-    "eval:phase1": "node ../eval/run_phase1_gate.js"
+    "eval:phase1": "node ../eval/run_phase1_gate.js",
+    "eval:risk": "node ../eval/run_risk_v1_gate.js"
   },
   "keywords": [],
   "author": "",

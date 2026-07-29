@@ -112,7 +112,8 @@ describe("capability constants", () => {
         "delete:records",
       ])
     );
-    expect(CAPABILITY_VALUES).toHaveLength(10 + 2 + 2); // + P2-T1 ownership + P2-T2e-2 enrichment
+    // + P2-T1 ownership + P2-T2e-2 enrichment + P2-T3 risk recalculation
+    expect(CAPABILITY_VALUES).toHaveLength(10 + 2 + 2 + 1);
   });
 
   it("defines the P2-T1 ownership capability set", () => {
@@ -249,6 +250,13 @@ describe("ANALYST capabilities", () => {
     expect(hasCapability("ANALYST", C.TRIGGER_FINDING_ENRICHMENT)).toBe(true);
     expect(hasCapability("ANALYST", C.EXECUTE_ENRICHMENT_BATCH)).toBe(false);
   });
+
+  // P2-T3: an analyst may recalculate risk on a Finding they triage. No role
+  // — including ADMIN — can influence the score itself: the weights are frozen
+  // code constants and no endpoint accepts a weight, score or band.
+  it("can recalculate finding risk", () => {
+    expect(hasCapability("ANALYST", C.RECALCULATE_FINDING_RISK)).toBe(true);
+  });
 });
 
 describe("P2-T1 ownership capability grants", () => {
@@ -280,6 +288,21 @@ describe("P2-T2e-2 enrichment capability grants", () => {
     expect(hasCapability("ANALYST", C.EXECUTE_ENRICHMENT_BATCH)).toBe(false);
     expect(hasCapability("REVIEWER", C.EXECUTE_ENRICHMENT_BATCH)).toBe(false);
     expect(hasCapability("VIEWER", C.EXECUTE_ENRICHMENT_BATCH)).toBe(false);
+  });
+});
+
+describe("P2-T3 risk capability grants", () => {
+  it("recalculate:finding-risk is ADMIN and ANALYST only", () => {
+    expect(hasCapability("ADMIN", C.RECALCULATE_FINDING_RISK)).toBe(true);
+    expect(hasCapability("ANALYST", C.RECALCULATE_FINDING_RISK)).toBe(true);
+    expect(hasCapability("REVIEWER", C.RECALCULATE_FINDING_RISK)).toBe(false);
+    expect(hasCapability("VIEWER", C.RECALCULATE_FINDING_RISK)).toBe(false);
+  });
+
+  it("reading a risk score needs only read:findings — every role that sees a finding sees why", () => {
+    ["ADMIN", "ANALYST", "REVIEWER", "VIEWER"].forEach((role) => {
+      expect(hasCapability(role, C.READ_FINDINGS)).toBe(true);
+    });
   });
 });
 
