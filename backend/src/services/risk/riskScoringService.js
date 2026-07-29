@@ -38,6 +38,19 @@ const RETRYABLE_ERROR_CODES = Object.freeze([PRISMA_UNIQUE_VIOLATION, PRISMA_TRA
 const MAX_TRANSACTION_ATTEMPTS = 5;
 const TRANSACTION_ISOLATION_LEVEL = "Serializable";
 
+// Bounded exponential backoff between retries.
+//
+// Retrying a SERIALIZABLE conflict IMMEDIATELY makes contention worse: every
+// loser re-enters the same window at the same instant and collides again, so
+// under N-way concurrency the attempt budget can be burnt without any racer
+// making progress. Measured directly: eight concurrent rescorings of one
+// Finding exhausted all five attempts and surfaced P2034 to the caller.
+//
+// Delays are 20ms, 40ms, 80ms, 160ms (capped), each with up to 100% jitter so
+// racers spread out instead of re-colliding in lockstep.
+const RETRY_BASE_DELAY_MS = 20;
+const RETRY_MAX_DELAY_MS = 160;
+
 const MAX_JUSTIFICATION_LENGTH = 1000;
 
 // Closed outcome vocabulary. Callers branch on these, never on a message.
@@ -73,6 +86,26 @@ function isRetryableConcurrencyError(error) {
   return Boolean(error && RETRYABLE_ERROR_CODES.includes(error.code));
 }
 
+/**
+ * Backoff delay before re-running a conflicted transaction.
+ *
+ * The jitter here is the ONE piece of randomness anywhere in risk scoring, and
+ * it deliberately sits outside the scored computation: it only decides WHEN a
+ * retry runs, never WHAT it computes. The engine stays a pure deterministic
+ * function of its input snapshot, and an identical snapshot still produces an
+ * identical score and fingerprint however many times a transaction conflicted.
+ */
+function retryDelayMs(attempt) {
+  const exponential = Math.min(RETRY_BASE_DELAY_MS * 2 ** (attempt - 1), RETRY_MAX_DELAY_MS);
+  return exponential + Math.floor(Math.random() * exponential);
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
 async function runInRetryableTransaction(client, fn) {
   let lastError = null;
   for (let attempt = 1; attempt <= MAX_TRANSACTION_ATTEMPTS; attempt += 1) {
@@ -82,6 +115,11 @@ async function runInRetryableTransaction(client, fn) {
     } catch (error) {
       if (!isRetryableConcurrencyError(error)) throw error;
       lastError = error;
+      // No delay after the final attempt — the caller is about to see the error.
+      if (attempt < MAX_TRANSACTION_ATTEMPTS) {
+        // eslint-disable-next-line no-await-in-loop
+        await sleep(retryDelayMs(attempt));
+      }
     }
   }
   throw lastError;
