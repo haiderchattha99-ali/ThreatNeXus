@@ -296,10 +296,10 @@ describe("amendment 1 — NOT_FOUND is an unavailable status, not a scored bucke
 });
 
 describe("amendment 2 — sector applicability confidence gate", () => {
-  it("accepts only HIGH/MEDIUM (plus the structurally stronger CONFIRMED) for RESOLVED ownership", () => {
-    expect(SECTOR_ATTRIBUTABLE_RESOLVED_CONFIDENCES).toContain("HIGH");
-    expect(SECTOR_ATTRIBUTABLE_RESOLVED_CONFIDENCES).toContain("MEDIUM");
+  it("accepts exactly HIGH/MEDIUM for RESOLVED ownership", () => {
+    expect(SECTOR_ATTRIBUTABLE_RESOLVED_CONFIDENCES).toEqual(["HIGH", "MEDIUM"]);
     expect(SECTOR_ATTRIBUTABLE_RESOLVED_CONFIDENCES).not.toContain("LOW");
+    expect(SECTOR_ATTRIBUTABLE_RESOLVED_CONFIDENCES).not.toContain("CONFIRMED");
   });
 
   it("has a dedicated low-confidence explanation code", () => {

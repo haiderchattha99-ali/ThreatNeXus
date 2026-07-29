@@ -408,14 +408,14 @@ const SECTOR_CONTRIBUTIONS = Object.freeze({
 });
 
 // Ownership confidences strong enough to attribute a sector when the status is
-// RESOLVED. The locked contract says HIGH or MEDIUM; CONFIRMED is listed only
-// as defence in depth, because it is a strictly stronger grade and refusing it
-// would be perverse. It is currently unreachable here — ownershipResolver.js
-// assigns CONFIRMED only to an OVERRIDDEN result, which takes path A and never
-// consults this list — so including it changes no score today.
+// RESOLVED. The locked contract says exactly HIGH or MEDIUM — CONFIRMED is
+// deliberately absent. OVERRIDDEN has its own unconditional applicability path
+// (path A) and never consults this list, so CONFIRMED could never be reached
+// through RESOLVED anyway; keeping it here would only be an unreachable extra
+// value and a future formula-expansion risk.
 // OVERRIDDEN is an explicit analyst decision and needs no confidence check.
 // LOW-confidence RESOLVED is explicitly excluded (architect amendment 2).
-const SECTOR_ATTRIBUTABLE_RESOLVED_CONFIDENCES = Object.freeze(["CONFIRMED", "HIGH", "MEDIUM"]);
+const SECTOR_ATTRIBUTABLE_RESOLVED_CONFIDENCES = Object.freeze(["HIGH", "MEDIUM"]);
 
 // --- Factors 8-10: vulnerability -------------------------------------------
 // No CVE-bearing source exists in the schema today, so all three are

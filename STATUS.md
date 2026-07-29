@@ -128,7 +128,10 @@ drafted.
 
 - **A.** `FindingOwnership.status = OVERRIDDEN`, `organizationId` present, `isIspAttribution = false`; or
 - **B.** `FindingOwnership.status = RESOLVED`, `organizationId` present, `isIspAttribution = false`,
-  and `confidence` is `HIGH` or `MEDIUM` (`CONFIRMED` is accepted a fortiori as a stronger grade).
+  and `confidence` is exactly `HIGH` or `MEDIUM`. `CONFIRMED` is excluded from path B: it is
+  unreachable there (`ownershipResolver.js` only assigns `CONFIRMED` to an `OVERRIDDEN` result, which
+  takes path A unconditionally), and keeping it as a "defensive" extra value in path B was itself an
+  unnecessary future formula-expansion risk.
 
 It does **not** apply when: no ownership row · `AMBIGUOUS` · `UNRESOLVED` · `organizationId` absent ·
 `isIspAttribution = true` · `RESOLVED` with `LOW` confidence · `Organization.sector = UNKNOWN`.

@@ -380,6 +380,19 @@ describe("amendment 2 — ownership as a sector applicability gate only", () => 
     expect(snapshot.inputs.ownershipConfidence).toBe("LOW");
   });
 
+  it("refuses a RESOLVED row at CONFIRMED confidence — path B only unlocks at HIGH/MEDIUM", async () => {
+    const fake = createFakeClient();
+    fake.seedFinding();
+    fake.seedOwnership({ status: "RESOLVED", confidence: "CONFIRMED" });
+    fake.seedOrganization({ sector: "FINANCE" });
+
+    const snapshot = await load(fake);
+    expect(snapshot.inputs.sectorAttributable).toBe(false);
+    expect(snapshot.inputs.sectorNonAttributableReason).toBe("LOW_CONFIDENCE");
+    expect(snapshot.inputs.sector).toBeNull();
+    expect(snapshot.inputs.ownershipConfidence).toBe("CONFIRMED");
+  });
+
   it.each(["AMBIGUOUS", "UNRESOLVED"])("refuses a %s row", async (status) => {
     const fake = createFakeClient();
     fake.seedFinding();

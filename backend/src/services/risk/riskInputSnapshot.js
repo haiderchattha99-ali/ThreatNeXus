@@ -145,7 +145,7 @@ async function loadOccurrenceEvidence(client, findingId, asOf) {
  *
  *   A. OVERRIDDEN + organizationId + not ISP            -> attributable
  *   B. RESOLVED   + organizationId + not ISP
- *                 + confidence CONFIRMED/HIGH/MEDIUM    -> attributable
+ *                 + confidence HIGH/MEDIUM              -> attributable
  *
  * Everything else — no row, AMBIGUOUS, UNRESOLVED, missing org, ISP
  * attribution, RESOLVED with LOW confidence — is not attributable, and the
