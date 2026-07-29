@@ -155,6 +155,15 @@ const RISK_EXPLANATION_CODES = Object.freeze({
   KEV_NOT_AVAILABLE: "KEV_NOT_AVAILABLE",
 
   EPSS_NOT_APPLICABLE_NO_CVE: "EPSS_NOT_APPLICABLE_NO_CVE",
+  // "A CVE is associated, but no fresh usable EPSS score could be read for
+  // any of its CVEs." Structurally distinct from EPSS_LOW: a genuine fresh
+  // score of 0 is APPLIED evidence ("FIRST looked and the probability is
+  // negligible"), whereas this is an absence of evidence. Collapsing the two
+  // would let "we could not check" read as "checked and negligible" — the
+  // exact mistake IOC_REPUTATION_NONE vs IOC_REPUTATION_ABSENT already avoids
+  // for reputation. Both contribute 0 basis points, so no weight, cap, bucket
+  // or band changes and RISK_CONFIGURATION_VERSION stays v1.0.0.
+  EPSS_NOT_AVAILABLE: "EPSS_NOT_AVAILABLE",
   EPSS_LOW: "EPSS_LOW",
   EPSS_MODERATE: "EPSS_MODERATE",
   EPSS_HIGH: "EPSS_HIGH",

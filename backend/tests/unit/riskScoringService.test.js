@@ -74,6 +74,20 @@ function createFakeClient() {
         return [];
       },
     },
+    // §2B Packet A: these cases exercise supersession, SERIALIZABLE retry and
+    // fingerprint identity, none of which involve CVE evidence — so no
+    // association exists and all three vulnerability factors stay
+    // NOT_APPLICABLE.
+    findingVulnerability: {
+      async findMany() {
+        return [];
+      },
+    },
+    vulnerabilityProviderResult: {
+      async findFirst() {
+        return null;
+      },
+    },
     riskScore: {
       async findUnique({ where }) {
         const row = state.riskScores.find((r) => r.currentForFindingId === where.currentForFindingId);

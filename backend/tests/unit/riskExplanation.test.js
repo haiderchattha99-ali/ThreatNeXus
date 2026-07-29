@@ -46,6 +46,143 @@ describe("closed vocabulary coverage", () => {
     expect(extra).toEqual([]);
   });
 
+  // Strengthened for §2B Packet A. The two checks above compare the template
+  // map against the declared VOCABULARY, which cannot catch a code the engine
+  // genuinely emits but that was never declared — nor prove that a declared
+  // code actually renders to a usable sentence. This drives the real engine
+  // over a matrix that reaches every vulnerability branch (and the other
+  // factors' unavailable paths), collects the codes ACTUALLY emitted, and
+  // renders each one.
+  it("renders a real sentence for every code the engine actually emits", () => {
+    // eslint-disable-next-line global-require
+    const { calculateRisk } = require("../../src/services/risk/riskEngine");
+
+    const base = {
+      reportType: "ACCESSIBLE_RDP",
+      protocol: "TCP",
+      port: 3389,
+      findingStatus: "OPEN",
+      observationCount: 1,
+      recurredCount: 0,
+      daysUnresolved: 0,
+      enrichmentPresent: false,
+      enrichmentStatus: null,
+      enrichmentFresh: false,
+      abuseConfidenceScore: null,
+      ownershipStatus: null,
+      ownershipConfidence: null,
+      ownershipIsIspAttribution: false,
+      sectorAttributable: false,
+      sectorNonAttributableReason: "NO_OWNERSHIP",
+      sector: null,
+      activeCveIds: [],
+      cvePresent: false,
+      kevListed: null,
+      kevLookupAvailable: false,
+      kevListedCveId: null,
+      epssBasisPoints: null,
+      epssSelectedCveId: null,
+    };
+
+    const CVE = "CVE-2019-0708";
+    const variations = [
+      {}, // every vulnerability factor NOT_APPLICABLE
+      // cvePresent with no usable KEV/EPSS context: the EPSS_NOT_AVAILABLE and
+      // KEV_NOT_AVAILABLE branches that §2B Packet A introduced.
+      { activeCveIds: [CVE], cvePresent: true },
+      // KEV listed / not listed.
+      { activeCveIds: [CVE], cvePresent: true, kevLookupAvailable: true, kevListed: true, kevListedCveId: CVE },
+      { activeCveIds: [CVE], cvePresent: true, kevLookupAvailable: true, kevListed: false },
+      // Every EPSS bucket, including a genuine score of 0.
+      ...[0, 999, 1000, 4999, 5000, 8999, 9000, 10000].map((epssBasisPoints) => ({
+        activeCveIds: [CVE],
+        cvePresent: true,
+        epssBasisPoints,
+        epssSelectedCveId: CVE,
+      })),
+      // Non-vulnerability unavailable/applicable paths, so the assertion covers
+      // the whole contract rather than only the new factors.
+      { findingStatus: "CLOSED", daysUnresolved: null },
+      { daysUnresolved: null },
+      { observationCount: 0 },
+      { observationCount: 5 },
+      { recurredCount: 3 },
+      { daysUnresolved: 400 },
+      { reportType: "UNKNOWN_TYPE" },
+      { port: 9999 },
+      { enrichmentPresent: true, enrichmentStatus: "SUCCESS", enrichmentFresh: true, abuseConfidenceScore: 0 },
+      { enrichmentPresent: true, enrichmentStatus: "SUCCESS", enrichmentFresh: true, abuseConfidenceScore: 95 },
+      { enrichmentPresent: true, enrichmentStatus: "SUCCESS", enrichmentFresh: false },
+      { enrichmentPresent: true, enrichmentStatus: "NOT_FOUND", enrichmentFresh: true },
+      { enrichmentPresent: true, enrichmentStatus: "RATE_LIMITED" },
+      { enrichmentPresent: true, enrichmentStatus: "DEAD_LETTER" },
+      { sectorAttributable: true, sector: "CNI" },
+      { sectorAttributable: false, sectorNonAttributableReason: "ISP_ATTRIBUTION" },
+      { sectorAttributable: false, sectorNonAttributableReason: "LOW_CONFIDENCE" },
+      { sectorAttributable: false, sectorNonAttributableReason: "UNKNOWN_SECTOR" },
+      { sectorAttributable: false, sectorNonAttributableReason: "AMBIGUOUS" },
+      { sectorAttributable: false, sectorNonAttributableReason: "UNRESOLVED" },
+    ];
+
+    const emitted = new Set();
+    variations.forEach((overrides) => {
+      const calculation = calculateRisk({
+        inputSnapshot: { inputs: { ...base, ...overrides }, inputFingerprint: "x" },
+      });
+      calculation.contributions.forEach((row) => {
+        emitted.add(row.explanationCode);
+        const sentence = renderContributionExplanation(row);
+        // A real sentence: never blank, never the unknown-code fallback, and
+        // never a leftover interpolation placeholder.
+        expect(typeof sentence).toBe("string");
+        expect(sentence.trim()).not.toBe("");
+        expect(sentence).not.toBe(UNKNOWN_CODE_SENTENCE);
+        expect(sentence).not.toContain("{value}");
+      });
+    });
+
+    // Every emitted code is in the declared vocabulary — the direction the
+    // vocabulary-only checks above cannot prove.
+    emitted.forEach((code) => expect(RISK_EXPLANATION_CODE_VALUES).toContain(code));
+
+    // And the specific §2B distinction is genuinely reachable: "no usable
+    // score" and "a real score of ~0" are different codes, not one collapsed
+    // into the other.
+    expect(emitted).toContain(RISK_EXPLANATION_CODES.EPSS_NOT_AVAILABLE);
+    expect(emitted).toContain(RISK_EXPLANATION_CODES.EPSS_LOW);
+    expect(emitted).toContain(RISK_EXPLANATION_CODES.KEV_NOT_AVAILABLE);
+    expect(emitted).toContain(RISK_EXPLANATION_CODES.KEV_NOT_LISTED);
+    expect(emitted).toContain(RISK_EXPLANATION_CODES.KEV_LISTED);
+    expect(emitted).toContain(RISK_EXPLANATION_CODES.CVE_PRESENT);
+    expect(emitted).toContain(RISK_EXPLANATION_CODES.CVE_NOT_APPLICABLE_NO_CVE_SOURCE);
+  });
+
+  it("renders EPSS_NOT_AVAILABLE and EPSS_LOW as materially different sentences", () => {
+    const unavailable = renderContributionExplanation(
+      contribution({
+        factorKey: "epssScore",
+        applicability: "NOT_AVAILABLE",
+        contributionBasisPoints: 0,
+        normalizedInputValue: null,
+        explanationCode: RISK_EXPLANATION_CODES.EPSS_NOT_AVAILABLE,
+      })
+    );
+    const low = renderContributionExplanation(
+      contribution({
+        factorKey: "epssScore",
+        applicability: "APPLIED",
+        contributionBasisPoints: 0,
+        normalizedInputValue: "0",
+        explanationCode: RISK_EXPLANATION_CODES.EPSS_LOW,
+      })
+    );
+
+    expect(unavailable).not.toBe(low);
+    // "We could not check" must never read as "checked and negligible".
+    expect(unavailable.toLowerCase()).toContain("unavailable");
+    expect(low.toLowerCase()).not.toContain("unavailable");
+  });
+
   it("never leaves a {value} placeholder unfilled for a factor that has no input", () => {
     // Codes that interpolate must only be reachable with a normalized input.
     const interpolating = Object.entries(EXPLANATION_TEMPLATES)

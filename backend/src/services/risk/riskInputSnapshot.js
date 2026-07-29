@@ -30,6 +30,10 @@ const {
   canonicalize,
 } = require("./riskConfiguration");
 
+const {
+  loadVulnerabilityRiskContext,
+} = require("../vulnerability/vulnerabilityRiskContext");
+
 const crypto = require("crypto");
 
 const DEFAULT_ENRICHMENT_PROVIDER = "abuseipdb";
@@ -278,23 +282,24 @@ async function loadEnrichmentContext(client, { indicator, asOf, provider, indica
 }
 
 /**
- * Vulnerability context.
+ * Vulnerability context (§2B Packet A).
  *
- * There is no CVE-bearing source in the schema today — no vulnerability
- * Enrichment model exists — so this is structurally absent for every current
- * finding, and cvePresence/kevStatus/epssScore are NOT_APPLICABLE. A CVE is
- * NEVER inferred from TCP/3389 or from an exposed RDP service.
+ * Delegated in full to vulnerabilityRiskContext.loadVulnerabilityRiskContext,
+ * which is the ONE place persisted CVE evidence becomes Risk v1 input. It reads
+ * only current ACTIVE analyst-verified associations and only fresh SUCCESS
+ * provider results attached to COMPLETED jobs.
  *
- * The shape is defined now so a future CVE-bearing report type can populate it
- * without redesigning existing score history.
+ * A CVE is NEVER inferred from TCP/3389, from an exposed RDP service, or from
+ * any provider search — the sole source is an explicit human assertion.
+ *
+ * Failure is not swallowed here: a broken vulnerability read is a genuine
+ * scoring failure, and silently substituting "no CVEs" would turn missing
+ * evidence into a clean answer — precisely the collapse this contract exists to
+ * prevent. The caller's failure isolation (riskRecalculationService) is what
+ * keeps such a failure from disturbing the evidence that triggered the score.
  */
-function loadVulnerabilityContext() {
-  return {
-    cveIdentifier: null,
-    kevListed: null,
-    kevLookupAvailable: false,
-    epssBasisPoints: null,
-  };
+async function loadVulnerabilityContext(client, findingId, asOf) {
+  return loadVulnerabilityRiskContext(findingId, { client, asOf });
 }
 
 /**
@@ -339,7 +344,7 @@ async function loadRiskInputSnapshot(findingId, options = {}) {
     provider,
     indicatorType,
   });
-  const vulnerability = loadVulnerabilityContext();
+  const vulnerability = await loadVulnerabilityContext(client, id, asOf);
 
   // The current unresolved episode starts at the latest RECURRED observation
   // when the finding has recurred, otherwise at firstSeen. Time spent CLOSED
@@ -374,10 +379,22 @@ async function loadRiskInputSnapshot(findingId, options = {}) {
     sectorNonAttributableReason: ownership.nonAttributableReason,
     sector: ownership.sectorAttributable ? ownership.sector : null,
 
-    cvePresent: vulnerability.cveIdentifier !== null,
+    // The canonical, deterministically sorted ACTIVE CVE list. Included in the
+    // fingerprint so attaching or removing a CVE is a genuine input change,
+    // and sorted canonically so the fingerprint never depends on row order.
+    activeCveIds: vulnerability.activeCveIds,
+    cvePresent: vulnerability.cvePresent,
     kevListed: vulnerability.kevListed,
     kevLookupAvailable: vulnerability.kevLookupAvailable,
+    // Bounded normalized evidence context: WHICH CVE supplied the listing and
+    // WHICH supplied the selected maximum probability. Both are canonical CVE
+    // strings, never a row id, a description, or provider error text. They are
+    // fingerprinted because they are stored as contribution evidence — if the
+    // naming changed but the fingerprint did not, an old explanation would keep
+    // citing a CVE that no longer supplies the number.
+    kevListedCveId: vulnerability.kevListedCveId,
     epssBasisPoints: vulnerability.epssBasisPoints,
+    epssSelectedCveId: vulnerability.epssSelectedCveId,
   };
 
   return Object.freeze({

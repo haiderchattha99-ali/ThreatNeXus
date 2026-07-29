@@ -57,6 +57,11 @@ function createFakeClient({ failOnFindingIds = [], throwFrom = null } = {}) {
     findingOwnership: { async findUnique() { return null; } },
     organization: { async findUnique() { return null; } },
     iocEnrichment: { async findMany() { return []; } },
+    // §2B Packet A: no analyst has asserted a CVE for these fixtures, so all
+    // three vulnerability factors stay NOT_APPLICABLE. These cases are about
+    // failure isolation and audit bounding, not about CVE evidence.
+    findingVulnerability: { async findMany() { return []; } },
+    vulnerabilityProviderResult: { async findFirst() { return null; } },
     riskScore: {
       async findUnique({ where }) {
         const row = state.riskScores.find(

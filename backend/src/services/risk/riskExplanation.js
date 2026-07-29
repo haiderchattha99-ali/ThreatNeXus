@@ -133,6 +133,8 @@ const EXPLANATION_TEMPLATES = Object.freeze({
 
   [RISK_EXPLANATION_CODES.EPSS_NOT_APPLICABLE_NO_CVE]:
     "Exploit prediction does not apply: no CVE is associated with this finding.",
+  [RISK_EXPLANATION_CODES.EPSS_NOT_AVAILABLE]:
+    "Exploit prediction unavailable: no current exploit-prediction score could be read for the associated CVEs.",
   [RISK_EXPLANATION_CODES.EPSS_LOW]: "Exploit prediction score is low.",
   [RISK_EXPLANATION_CODES.EPSS_MODERATE]: "Exploit prediction score is moderate.",
   [RISK_EXPLANATION_CODES.EPSS_HIGH]: "Exploit prediction score is high.",

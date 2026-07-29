@@ -356,11 +356,17 @@ function evaluateCvePresence(config, inputs) {
       normalizedInputValue: null,
     };
   }
+  const cveIds = Array.isArray(inputs.activeCveIds) ? inputs.activeCveIds : [];
   return {
     applicability: APPLIED,
     contributionBasisPoints: config.cvePresenceContributionBasisPoints,
     explanationCode: RISK_EXPLANATION_CODES.CVE_PRESENT,
     normalizedInputValue: "PRESENT",
+    // The canonical, already-bounded and already-sorted analyst-verified CVE
+    // list. Presence is not scaled by how many CVEs there are — the
+    // contribution is flat — but the stored evidence names them, so an old
+    // explanation stays truthful without re-reading live associations.
+    evidenceSnapshot: { cveCount: cveIds.length, cveIds },
   };
 }
 
@@ -381,11 +387,18 @@ function evaluateKevStatus(config, inputs) {
     };
   }
   if (inputs.kevListed === true) {
+    const evidenceSnapshot = {};
+    // Which associated CVE is the one on the catalogue. Bounded normalized
+    // context; absent when the loader could not name a single CVE.
+    if (typeof inputs.kevListedCveId === "string" && inputs.kevListedCveId !== "") {
+      evidenceSnapshot.cveId = inputs.kevListedCveId;
+    }
     return {
       applicability: APPLIED,
       contributionBasisPoints: config.kevListedContributionBasisPoints,
       explanationCode: RISK_EXPLANATION_CODES.KEV_LISTED,
       normalizedInputValue: "LISTED",
+      evidenceSnapshot: Object.keys(evidenceSnapshot).length > 0 ? evidenceSnapshot : null,
     };
   }
   return {
@@ -406,27 +419,40 @@ function evaluateEpssScore(config, inputs) {
     };
   }
   const basisPoints = inputs.epssBasisPoints;
+  // A CVE is associated but no fresh usable EPSS score exists for any of its
+  // CVEs. This is an ABSENCE of evidence and must never share a code with a
+  // real score of 0, which is APPLIED evidence that FIRST looked and found a
+  // negligible probability. Both contribute 0; only the code and the
+  // applicability tell the analyst which situation they are reading.
   if (!Number.isInteger(basisPoints)) {
     return {
       applicability: NOT_AVAILABLE,
-      explanationCode: RISK_EXPLANATION_CODES.EPSS_LOW,
+      explanationCode: RISK_EXPLANATION_CODES.EPSS_NOT_AVAILABLE,
       normalizedInputValue: null,
     };
   }
   const bucket = selectBucket(config.epssBuckets, basisPoints);
   if (!bucket) {
+    // Out of the 0..10000 range the buckets tile — a corrupt normalized value,
+    // not a low probability. Fails closed as unavailable.
     return {
       applicability: NOT_AVAILABLE,
-      explanationCode: RISK_EXPLANATION_CODES.EPSS_LOW,
+      explanationCode: RISK_EXPLANATION_CODES.EPSS_NOT_AVAILABLE,
       normalizedInputValue: null,
     };
+  }
+  const evidenceSnapshot = { epssBasisPoints: basisPoints };
+  // Which associated CVE supplied the selected (maximum) probability. Bounded
+  // normalized context only — never a provider payload or a row id.
+  if (typeof inputs.epssSelectedCveId === "string" && inputs.epssSelectedCveId !== "") {
+    evidenceSnapshot.cveId = inputs.epssSelectedCveId;
   }
   return {
     applicability: APPLIED,
     contributionBasisPoints: bucket.contributionBasisPoints,
     explanationCode: bucket.explanationCode,
     normalizedInputValue: basisPoints,
-    evidenceSnapshot: { epssBasisPoints: basisPoints },
+    evidenceSnapshot,
   };
 }
 

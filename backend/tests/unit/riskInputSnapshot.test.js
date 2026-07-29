@@ -31,6 +31,13 @@ function createFakeClient() {
   const ownerships = new Map(); // currentForFindingId -> row
   const organizations = new Map();
   const iocEnrichments = [];
+  // §2B Packet A: current ACTIVE CVE associations, and the provider evidence
+  // reachable from them. Modelled as two flat lists plus a job index, exactly
+  // as the real schema relates them, so the fake cannot accidentally make
+  // PENDING/DEAD_LETTER evidence reachable.
+  const associations = [];
+  const jobs = new Map(); // jobId -> {id, vulnerabilityId, status}
+  const providerResults = [];
 
   const client = {
     finding: {
@@ -85,10 +92,57 @@ function createFakeClient() {
         return rows.slice(0, take).map((row) => ({ ...row }));
       },
     },
+    findingVulnerability: {
+      async findMany({ where = {} } = {}) {
+        return associations
+          .filter((row) => row.findingId === where.findingId)
+          .filter((row) => (where.state ? row.state === where.state : true))
+          .filter((row) =>
+            // Mirrors `currentAssociationKey: { not: null }`: a superseded row
+            // may still carry state ACTIVE and must not be reachable.
+            where.currentAssociationKey && where.currentAssociationKey.not === null
+              ? row.currentAssociationKey !== null
+              : true
+          )
+          .map((row) => ({
+            vulnerabilityId: row.vulnerabilityId,
+            vulnerability: { cveId: row.cveId },
+          }));
+      },
+    },
+    vulnerabilityProviderResult: {
+      async findFirst({ where = {}, orderBy = [] } = {}) {
+        const jobFilter = where.job || {};
+        const rows = providerResults
+          .filter((row) => row.provider === where.provider)
+          .filter((row) => {
+            const job = jobs.get(row.jobId);
+            if (!job) return false;
+            if (jobFilter.vulnerabilityId !== undefined && job.vulnerabilityId !== jobFilter.vulnerabilityId) {
+              return false;
+            }
+            // The structural bar on PENDING/DEAD_LETTER evidence.
+            return jobFilter.status === undefined || job.status === jobFilter.status;
+          })
+          .sort((a, b) => {
+            for (const clause of orderBy) {
+              const [field, dir] = Object.entries(clause)[0];
+              const av = a[field] instanceof Date ? a[field].getTime() : a[field] ?? -Infinity;
+              const bv = b[field] instanceof Date ? b[field].getTime() : b[field] ?? -Infinity;
+              if (av !== bv) return dir === "desc" ? bv - av : av - bv;
+            }
+            return 0;
+          });
+        return rows.length > 0 ? { ...rows[0] } : null;
+      },
+    },
   };
 
   let nextOccurrenceId = 1;
   let nextEnrichmentId = 1;
+  let nextVulnerabilityId = 1;
+  let nextJobId = 1;
+  let nextResultId = 1;
 
   return {
     client,
@@ -151,6 +205,46 @@ function createFakeClient() {
         ...overrides,
       };
       iocEnrichments.push(row);
+      return row;
+    },
+    /**
+     * Seeds one CURRENT ACTIVE (or REMOVED, or superseded) association and
+     * returns its vulnerabilityId, for use when seeding provider evidence.
+     */
+    seedAssociation(cveId, overrides = {}) {
+      const vulnerabilityId = overrides.vulnerabilityId ?? nextVulnerabilityId++;
+      const row = {
+        findingId: 1,
+        vulnerabilityId,
+        cveId,
+        state: "ACTIVE",
+        currentAssociationKey: `1:${vulnerabilityId}`,
+        ...overrides,
+      };
+      associations.push(row);
+      return vulnerabilityId;
+    },
+    /**
+     * Seeds one provider result attached to a job with the given status.
+     * Defaults to a COMPLETED job — the only kind that can carry evidence.
+     */
+    seedProviderResult(vulnerabilityId, overrides = {}) {
+      const jobStatus = overrides.jobStatus || "COMPLETED";
+      const jobId = overrides.jobId ?? nextJobId++;
+      if (!jobs.has(jobId)) jobs.set(jobId, { id: jobId, vulnerabilityId, status: jobStatus });
+      const row = {
+        id: nextResultId++,
+        jobId,
+        provider: "CISA_KEV",
+        status: "SUCCESS",
+        queriedAt: daysBefore(ASOF, 1),
+        expiresAt: new Date(ASOF.getTime() + DAY),
+        isKnownExploited: null,
+        epssProbabilityBasisPoints: null,
+        ...overrides,
+      };
+      delete row.jobStatus;
+      providerResults.push(row);
       return row;
     },
   };
@@ -603,14 +697,20 @@ describe("snapshot shape and fingerprint", () => {
     expect(Object.keys(snapshot.inputs).sort()).toEqual(
       [
         "abuseConfidenceScore",
+        // §2B Packet A additions: the canonical CVE list plus the two bounded
+        // "which CVE supplied this" evidence pointers. All three are canonical
+        // CVE strings or an array of them — never a row id or free text.
+        "activeCveIds",
         "cvePresent",
         "daysUnresolved",
         "enrichmentFresh",
         "enrichmentPresent",
         "enrichmentStatus",
         "epssBasisPoints",
+        "epssSelectedCveId",
         "findingStatus",
         "kevListed",
+        "kevListedCveId",
         "kevLookupAvailable",
         "observationCount",
         "ownershipConfidence",

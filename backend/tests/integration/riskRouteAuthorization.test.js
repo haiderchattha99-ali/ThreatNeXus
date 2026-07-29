@@ -72,6 +72,15 @@ const prismaStub = {
   iocEnrichment: {
     findMany: async () => [],
   },
+  // §2B Packet A: the route surface is what is under test here, not CVE
+  // evidence. No association exists, so all three vulnerability factors are
+  // NOT_APPLICABLE — which is also what the response-surface assertions expect.
+  findingVulnerability: {
+    findMany: async () => [],
+  },
+  vulnerabilityProviderResult: {
+    findFirst: async () => null,
+  },
   riskScore: {
     findUnique: async ({ where }) =>
       store.riskScores.find((r) => r.currentForFindingId === where.currentForFindingId) || null,
