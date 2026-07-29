@@ -26,16 +26,102 @@ _Operational status / handoff note. Authoritative plan lives in
   immediately below is the versioned decision record for it. Findings are now scored automatically
   at ingestion, on enrichment completion and on ownership change, and analysts can read a score with
   its stored explanation or trigger a manual recalculation.
-- **BUILD_PLAN §2B — vulnerability enrichment (CISA KEV, FIRST EPSS, NVD/CVE): Packet A is
-  complete. §2B as a whole is NOT complete.** See "Phase 2 §2B Packet A complete" immediately below
-  for exactly what landed and what has not. It is a **separate path** from IOC reputation
-  enrichment; neither substitutes for the other. **No CVE is ever inferred from an exposed RDP
-  port** — the only source of a CVE association is an explicit analyst assertion.
+- **BUILD_PLAN §2B — vulnerability enrichment (CISA KEV, FIRST EPSS, NVD/CVE): Packet A and Packet B
+  are both complete. §2B as a whole is still NOT fully release-gated.** See "Phase 2 §2B Packet B
+  complete" and "Phase 2 §2B Packet A complete" immediately below for exactly what landed and what
+  has not. It is a **separate path** from IOC reputation enrichment; neither substitutes for the
+  other. **No CVE is ever inferred from an exposed RDP port, banner, hostname, CPE or OS guess** —
+  the only source of a CVE association is an explicit analyst assertion.
 - **Phase 2 gate status:** the §2C half is met — the rendered explanation reconstructs exactly from
   stored factor rows (proven in `riskScoringConcurrency.test.js` case 13), and score ordering matches
   hand-recomputation on a 19-scenario manually authored sample (`npm run eval:risk`). The §2A half
-  was met in P2-T2c/P2-T2e-1. The gate **cannot close until §2B Packet B ships** — Packet A delivers
-  the core domain but no HTTP surface, RBAC or evaluator gate.
+  was met in P2-T2c/P2-T2e-1. The gate **still cannot close**: Packet B ships the application/HTTP
+  surface, but `eval:vulnerability` (manually authored vulnerability ground truth), mutation checks
+  and the complete §2B release gate are Packet C work.
+
+## Phase 2 §2B Packet B complete — vulnerability application surface (2026-07-29)
+
+**Honest scope statement: this closes the HTTP/application gap Packet A left open. §2B is still NOT
+fully release-gated** — `eval:vulnerability`, mutation checks and the complete release verification
+are Packet C.
+
+Landed:
+
+- **Production vulnerability runtime** (`vulnerabilityRuntime.js`, mirrors `enrichmentRuntime.js`).
+  `buildVulnerabilityRuntime()` composes the real NVD/CISA_KEV/FIRST_EPSS providers from validated
+  environment configuration (`vulnerabilityConfig.js` + `config/env.js`): `NVD_API_KEY` optional,
+  `NVD_BASE_URL`/`NVD_TIMEOUT_MS`, `CISA_KEV_URL`/`CISA_KEV_TIMEOUT_MS`,
+  `FIRST_EPSS_BASE_URL`/`FIRST_EPSS_TIMEOUT_MS`, and
+  `VULNERABILITY_BATCH_SIZE`/`VULNERABILITY_LEASE_SECONDS`/`VULNERABILITY_MAX_ATTEMPTS`. Importing or
+  building the runtime makes zero network calls; there is no `MockProvider` fallback in production;
+  `describe()` exposes only `nvdApiKeyConfigured` (boolean), registered provider names, and safe
+  numeric bounds — never a URL, a timeout, a key, a prefix, or a header.
+- **Safe Finding-scoped vulnerability read service** (`findingVulnerabilityReadService.js`) —
+  `GET /api/findings/:id/vulnerabilities`. Current ACTIVE associations (canonical `cveId` ascending),
+  bounded paginated association history (`effectiveAt` desc, `id` desc), current enrichment context
+  (latest provider result + latest job) per active CVE, and bounded provider-result history on
+  request. Allow-list serializers structurally exclude `currentAssociationKey`, `claimToken`,
+  `activeJobKey`, `claimedAt` and `leaseExpiresAt` — those fields are never even read off a row.
+  `justificationPreview` is shown only when the caller holds `manage:finding-vulnerabilities`,
+  decided once by the controller via `hasCapability`, never a role-name check.
+- **Attach/remove HTTP surface** (`vulnerabilityAssociationService.js`,
+  `findingVulnerabilityController.js`) — `POST /api/findings/:id/vulnerabilities` and
+  `POST /api/findings/:id/vulnerabilities/:cveId/remove`. Wraps Packet A's `attachCve`/`removeCve`
+  with the application-level `vulnerability.association.requested` / `.failed` audit bookends;
+  Packet A's own `.attached` / `.removed` / `.unchanged` events are reused unchanged, never
+  duplicated. No provider call, no network, no caller-defined score/band/actor/asOf.
+- **Manual/forced enrichment scheduling** (`vulnerabilityEnrichmentScheduleService.js`,
+  `vulnerabilityEnrichmentController.js`) — `POST /api/vulnerabilities/:cveId/enrichment`. Requires
+  the canonical `Vulnerability` to already exist (attached/created) and returns a safe 404 rather
+  than letting this endpoint create an unattached row; normal scheduling reuses
+  `SCHEDULED`/`CACHE_HIT`/`ALREADY_PENDING`, forced requires a bounded justification and never
+  bypasses active-job uniqueness.
+- **Administrator bounded-batch execution** (`vulnerabilityBatchExecutionService.js`,
+  `vulnerabilityEnrichmentBatchController.js`) — `POST /api/vulnerability-enrichment/batches/run`,
+  ADMIN only. Server generates the `workerId`; caller-supplied `workerId`/claim token/provider
+  list/URL/API key/runtime override are never read. Derives
+  `claimedCount`/`releasedCount`/`deadLetteredCount`/`heldUnknownStateCount`/`staleCompletionCount`/
+  `internalFailureCount` deterministically from the runner's outcome histogram — a documented,
+  fixed mapping, not a re-run of runner logic.
+- **RBAC** (`lib/roles.js`) — three additive, non-hierarchical capabilities:
+  `manage:finding-vulnerabilities` and `trigger:vulnerability-enrichment` on ADMIN + ANALYST,
+  `execute:vulnerability-enrichment-batch` on ADMIN only. Reads reuse `read:findings`. No role-name
+  check exists in any controller or service; every guard runs before body processing or service
+  access (proven by the RBAC route matrix).
+
+### Accepted limitations (deliberate, recorded)
+
+- No live provider smoke test was performed — `NVD_API_KEY` is optional and unverified against the
+  real NVD API in this packet; CISA KEV/FIRST EPSS need no key at all.
+- `eval:vulnerability`, mutation checks, and the complete §2B release gate are explicitly Packet C.
+- Schema/migrations are untouched: **migration count remains exactly 14**; `prisma/schema.prisma`
+  and `prisma/migrations/` are byte-identical to Packet A's `5c1c242`.
+
+### Verification (2026-07-29)
+
+- New unit suites: production runtime (zero network, no mock fallback, bounds, secret-safe
+  `describe()`), read-service serializers/query logic, association-service audit bookends and
+  failure isolation, batch aggregate outcome-histogram mapping.
+- New integration suite (in-memory Prisma stub) `vulnerabilityPacketBRouteAuthorization.test.js`
+  **44/44** — full RBAC matrix across all five routes, response-surface secret checks, audit
+  sequencing.
+- New focused real-PostgreSQL suite `vulnerabilityPacketBApplication.test.js` **10/10** — attach/
+  remove persistence, repeated-attach idempotency, concurrent normal/forced scheduling, batch
+  execution with injected providers writing three normalized results, application- and batch-level
+  audit failure isolation (a broken audit write never rolls back a committed association, job, or
+  provider result), safe-serializer proof, and no-orphan-row-on-rejection proof.
+- Full backend suite **1960 passed / 111 skipped** (0 failed).
+- Every real-PostgreSQL suite together (`--no-file-parallelism`, avoiding cross-file
+  `SERIALIZABLE`-retry contention on the shared disposable database): **21 files, 533 passed / 2
+  skipped**.
+- `npm run eval:risk` **19/19**; `npm run eval:phase1` **9/9**.
+- `npx prisma validate` clean; migration count **14**; `schema.prisma`/`prisma/migrations/`
+  byte-identical to the starting `5c1c242`; `git diff --check` clean.
+- No raw SQL, no partial index, no network access from any new module, no committed API key or
+  `backend/.env`.
+
+**Exact next task: §2B Packet C — manually authored vulnerability ground truth, `eval:vulnerability`,
+mutation checks, complete §2B release verification, and final §2B documentation.**
 
 ## Phase 2 §2B Packet A complete — core vulnerability domain (2026-07-29)
 
@@ -90,13 +176,18 @@ change: the next rescore of an existing Finding appends one new snapshot with an
 
 ### Still pending — NOT delivered by Packet A
 
-- HTTP controllers and routes for CVE association, scheduling and batch execution
-- RBAC capability additions
-- API serializers and read services
-- the full audit action surface (only the minimal hooks needed for failure isolation exist)
-- environment-variable composition and production HTTP wiring
-- the `eval:vulnerability` ground-truth gate
-- frontend
+**Update (2026-07-29): everything below except the last two items was delivered by Packet B — see
+"Phase 2 §2B Packet B complete" above.**
+
+- ~~HTTP controllers and routes for CVE association, scheduling and batch execution~~ — Packet B
+- ~~RBAC capability additions~~ — Packet B
+- ~~API serializers and read services~~ — Packet B
+- ~~the full audit action surface~~ — Packet B (requested/attached/removed/unchanged/failed for
+  association; requested/completed/failed for scheduling; requested/completed/cancelled/failed for
+  batch)
+- ~~environment-variable composition and production HTTP wiring~~ — Packet B
+- the `eval:vulnerability` ground-truth gate — still Packet C
+- frontend — later phase
 
 ### Accepted limitations (deliberate, recorded)
 
@@ -124,7 +215,8 @@ change: the next rescore of an existing Finding appends one new snapshot with an
 - `npx prisma validate` clean; 14 migrations; `git diff --check` clean.
 - No raw SQL, no network access from any new module, no committed key or `.env`.
 
-**Exact next task: §2B Packet B — APIs, RBAC, audits and production composition.**
+**Superseded (2026-07-29): §2B Packet B has since shipped — see "Phase 2 §2B Packet B complete"
+above. Exact next task is now §2B Packet C.**
 
 ## Locked Risk v1 numeric contract (P2-T3) — architect-approved 2026-07-29
 
