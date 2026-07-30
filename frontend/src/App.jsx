@@ -15,6 +15,7 @@ import Notifications from "./pages/Notifications";
 import Analytics from "./pages/Analytics";
 import Organizations from "./pages/Organizations";
 import Settings from "./pages/Settings";
+import { PERMISSIONS } from './utils/permissions'
 import './App.css'
 
 function App() {
@@ -51,18 +52,93 @@ function App() {
                     backgroundColor: '#080c14',
                   }} className="app-content"
                 >
-                  <Routes>
-                    <Route path="/dashboard" element={<Dashboard />} />
-                    <Route path="/threats" element={<Threats />} />
-                    <Route path="/upload" element={<Upload />} />
-                    <Route path="/cases" element={<Cases />} />
-                    <Route path="/analytics" element={<Analytics />} />
-                    <Route path="/notifications" element={<Notifications />} />
-                    <Route path="/organizations" element={<Organizations />} />
-                    <Route path="/settings" element={<Settings />} />
-                    <Route path="/profile" element={<Profile />} />
-                    <Route path="/" element={<Navigate to="/dashboard" replace />} />
-                  </Routes>
+               <Routes>
+  <Route
+    path="/dashboard"
+    element={
+      <ProtectedRoute allowedRoles={PERMISSIONS.dashboard}>
+        <Dashboard />
+      </ProtectedRoute>
+    }
+  />
+
+  <Route
+    path="/threats"
+    element={
+      <ProtectedRoute allowedRoles={PERMISSIONS.threats}>
+        <Threats />
+      </ProtectedRoute>
+    }
+  />
+
+  <Route
+    path="/upload"
+    element={
+      <ProtectedRoute allowedRoles={PERMISSIONS.upload}>
+        <Upload />
+      </ProtectedRoute>
+    }
+  />
+
+  <Route
+    path="/cases"
+    element={
+      <ProtectedRoute allowedRoles={PERMISSIONS.cases}>
+        <Cases />
+      </ProtectedRoute>
+    }
+  />
+
+  <Route
+    path="/analytics"
+    element={
+      <ProtectedRoute allowedRoles={PERMISSIONS.analytics}>
+        <Analytics />
+      </ProtectedRoute>
+    }
+  />
+
+  <Route
+    path="/notifications"
+    element={
+      <ProtectedRoute allowedRoles={PERMISSIONS.notifications}>
+        <Notifications />
+      </ProtectedRoute>
+    }
+  />
+
+  <Route
+    path="/organizations"
+    element={
+      <ProtectedRoute allowedRoles={PERMISSIONS.organizations}>
+        <Organizations />
+      </ProtectedRoute>
+    }
+  />
+
+  <Route
+    path="/settings"
+    element={
+      <ProtectedRoute allowedRoles={PERMISSIONS.settings}>
+        <Settings />
+      </ProtectedRoute>
+    }
+  />
+
+  <Route
+    path="/profile"
+    element={
+      <ProtectedRoute allowedRoles={PERMISSIONS.profile}>
+        <Profile />
+      </ProtectedRoute>
+    }
+  />
+
+  <Route
+    path="/"
+    element={<Navigate to="/dashboard" replace />}
+  />
+</Routes>
                 </Box>
               </Box>
             </ProtectedRoute>

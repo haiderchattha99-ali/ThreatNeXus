@@ -9,8 +9,11 @@ import {
 } from '@mui/material'
 import { FiShield } from 'react-icons/fi'
 
-export const ProtectedRoute = ({ children }) => {
-  const { isAuthenticated, loading } = useAuth()
+export const ProtectedRoute = ({
+  children,
+  allowedRoles = [],
+}) => {
+  const { isAuthenticated, loading, user } = useAuth()
 
   if (loading) {
     return (
@@ -79,6 +82,31 @@ export const ProtectedRoute = ({ children }) => {
 
   if (!isAuthenticated) {
     return <Navigate to="/login" replace />
+  }
+
+  // RBAC Check
+  if (
+    allowedRoles.length > 0 &&
+    !allowedRoles.includes(user?.role)
+  ) {
+    return (
+      <Box
+        sx={{
+          minHeight: '100vh',
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          backgroundColor: '#0F172A',
+        }}
+      >
+        <Typography
+          variant="h4"
+          sx={{ color: '#EF4444', fontWeight: 700 }}
+        >
+          403 - Access Denied
+        </Typography>
+      </Box>
+    )
   }
 
   return children
