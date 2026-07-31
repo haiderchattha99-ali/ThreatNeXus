@@ -58,6 +58,9 @@ const { scheduleEnrichment, SCHEDULE_OUTCOME } = require("../enrichment/enrichme
 const { INDICATOR_TYPES } = require("../enrichment/iocEnrichmentTypes");
 const { EnrichmentCacheKeyError } = require("../enrichment/enrichmentCacheKey");
 const { recalculateAfterIngestion } = require("../risk/riskRecalculationService");
+const {
+  processRecurrenceReopensSafely,
+} = require("../workflow/caseRecurrenceReopenService");
 const { AUDIT_OUTCOMES, safeLogAuditEvent } = require("../auditService");
 const env = require("../../config/env");
 
@@ -562,6 +565,11 @@ async function ingestAccessibleRdpReport(input, options = {}) {
   });
 
   const findingCounts = {};
+  // Phase 3 — each entry is {finding, occurrence} rather than the bare Finding
+  // it used to hold. The occurrence is required: CaseRecurrenceReopen's
+  // idempotency key is (findingOccurrenceId, caseId), so the specific
+  // occurrence that caused a reopen is what makes re-processing this report a
+  // no-op instead of a second reopen.
   const reopenedFindings = [];
   const enrichmentCounts = {};
   // P2-T3 — distinct Finding ids touched by this report, collected for one
@@ -635,7 +643,10 @@ async function ingestAccessibleRdpReport(input, options = {}) {
 
       findingCounts[lifecycleResult.action] = (findingCounts[lifecycleResult.action] || 0) + 1;
       if (lifecycleResult.recurrence) {
-        reopenedFindings.push(lifecycleResult.finding);
+        reopenedFindings.push({
+          finding: lifecycleResult.finding,
+          occurrence: lifecycleResult.occurrence,
+        });
       }
 
       // P2-T1 — local ownership resolution for this Finding, sequential and
@@ -803,16 +814,44 @@ async function ingestAccessibleRdpReport(input, options = {}) {
   }
 
   // eslint-disable-next-line no-restricted-syntax
-  for (const finding of reopenedFindings) {
+  for (const entry of reopenedFindings) {
     // eslint-disable-next-line no-await-in-loop
     await audit(client, auditContext, {
       action: "finding.reopened",
       outcome: AUDIT_OUTCOMES.SUCCESS,
       entityType: "Finding",
-      entityId: finding.id,
-      after: findingSummary(finding),
+      entityId: entry.finding.id,
+      after: findingSummary(entry.finding),
       reason: "Finding reopened by a newer observation (recurrence)",
     });
+  }
+
+  // 11d. Phase 3 — recurrence-driven case reopening.
+  //
+  // Runs LAST, after every RawReport / RawReportRow / Finding /
+  // FindingOccurrence write has committed, after risk scoring, and outside
+  // every transaction this pipeline opened. Same isolation contract as
+  // ownership resolution, enrichment scheduling and risk scoring above:
+  // processRecurrenceReopensSafely never throws (it classifies every failure
+  // into closed outcome codes and audits the aggregate itself), performs no
+  // network I/O, and cannot roll back or invalidate the recurrence evidence
+  // that triggered it. A total reopen failure leaves a fully valid ingested
+  // report with fully valid recurrence evidence and simply no reopen.
+  //
+  // Idempotent replay: re-uploading the identical file produces the identical
+  // FindingOccurrence rows, and CaseRecurrenceReopen's (findingOccurrenceId,
+  // caseId) unique means the second pass records ALREADY_PROCESSED and reopens
+  // nothing — a closed case cannot be reopened twice by one recurrence.
+  if (reopenedFindings.length > 0) {
+    await processRecurrenceReopensSafely(
+      client,
+      reopenedFindings.map((entry) => ({
+        findingId: entry.finding.id,
+        findingOccurrenceId: entry.occurrence.id,
+        observedAt: entry.occurrence.observedAt,
+      })),
+      { processedAt: enrichmentAsOf, auditContext }
+    );
   }
 
   return {

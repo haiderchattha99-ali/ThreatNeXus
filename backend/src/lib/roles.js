@@ -59,13 +59,43 @@ const CAPABILITIES = Object.freeze({
   MANAGE_FINDING_VULNERABILITIES: "manage:finding-vulnerabilities",
   TRIGGER_VULNERABILITY_ENRICHMENT: "trigger:vulnerability-enrichment",
   EXECUTE_VULNERABILITY_ENRICHMENT_BATCH: "execute:vulnerability-enrichment-batch",
+
+  // Phase 3 — defensible analyst workflow. Three additive, non-hierarchical
+  // grants, same convention as every other capability in this table.
+  //
+  // READ_CASES exists because Phase 3 is the first time REVIEWER and VIEWER
+  // legitimately need to SEE a case: a reviewer cannot approve a closure they
+  // may not read, and read-only oversight is a stated Phase 3 requirement.
+  // Before this, the whole /api/cases router sat behind MANAGE_CASES, which
+  // gated reads and writes together. Splitting them is what lets REVIEWER read
+  // and decide closures while still being unable to triage, link evidence,
+  // record responses or perform any ordinary case mutation.
+  READ_CASES: "read:cases",
+
+  // The reviewer half of the separation of duties. Held by REVIEWER and ADMIN
+  // only — deliberately NOT by ANALYST, which is what makes it impossible for
+  // the role that requests closures to also grant them.
+  REVIEW_CASE_CLOSURE: "review:case-closure",
+
+  // Administrator-only escape hatch for the self-approval prohibition. A
+  // dedicated capability rather than a role-name comparison, so the closure
+  // service can enforce "the requester may not approve their own request
+  // unless they are an administrator" without ever knowing what a role is —
+  // see caseClosureService.assertNotSelfApproval.
+  OVERRIDE_CLOSURE_SELF_APPROVAL: "override:closure-self-approval",
 });
 
 const CAPABILITY_VALUES = Object.freeze(Object.values(CAPABILITIES));
 
+// Held by every role, VIEWER included. READ_CASES joins this set in Phase 3:
+// safe, serializer-filtered read-only access to cases and triage is an
+// explicit Phase 3 requirement for VIEWER, and the case read paths expose no
+// organization contact detail, no audit row and no internal key (see
+// services/workflow/caseWorkflowSerializers.js).
 const READ_ONLY_CAPABILITIES = [
   CAPABILITIES.READ_DASHBOARD,
   CAPABILITIES.READ_FINDINGS,
+  CAPABILITIES.READ_CASES,
 ];
 
 // Explicit grants per role — deliberately NOT a hierarchy. ANALYST does the
@@ -79,10 +109,25 @@ const ROLE_CAPABILITIES = Object.freeze({
     ...READ_ONLY_CAPABILITIES,
     CAPABILITIES.REVIEW_NOTIFICATIONS,
     CAPABILITIES.REVIEW_AI_SUGGESTIONS,
+    // Phase 3 — a reviewer may approve or reject a closure request and read
+    // the case to decide. They deliberately hold neither TRIAGE_FINDINGS nor
+    // MANAGE_CASES, so they cannot triage a Finding, link or unlink evidence,
+    // record an organization response, change OPEN/WAITING_FOR_ORG, request a
+    // closure, or reopen a case. Their only write in this phase is the review
+    // decision itself.
+    CAPABILITIES.REVIEW_CASE_CLOSURE,
   ]),
   ANALYST: Object.freeze([
     ...READ_ONLY_CAPABILITIES,
     CAPABILITIES.INGEST_REPORTS,
+    // Phase 3 reuses these two existing grants rather than inventing parallel
+    // ones: TRIAGE_FINDINGS gates the triage write path, MANAGE_CASES gates
+    // case creation, evidence linking/unlinking, OPEN <-> WAITING_FOR_ORG
+    // transitions, organization responses, closure REQUESTS and manual reopen.
+    // ANALYST is deliberately NOT granted REVIEW_CASE_CLOSURE or
+    // OVERRIDE_CLOSURE_SELF_APPROVAL, which is what makes it structurally
+    // impossible for the role that requests a closure to also approve one —
+    // their own or anybody else's.
     CAPABILITIES.TRIAGE_FINDINGS,
     CAPABILITIES.MANAGE_CASES,
     // P2-T1 — an analyst may correct ownership on a Finding they triage, but
