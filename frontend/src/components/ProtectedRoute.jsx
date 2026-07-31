@@ -1,6 +1,7 @@
 import React from 'react'
 import { Navigate } from 'react-router-dom'
 import { useAuth } from '../hooks/useAuth'
+import { hasCapability } from '../utils/permissions'
 import {
   Box,
   CircularProgress,
@@ -9,11 +10,23 @@ import {
 } from '@mui/material'
 import { FiShield } from 'react-icons/fi'
 
+// Frontend route protection is UX only — it decides what renders, not what is
+// permitted. The backend's requireCapability/requireRole middleware is the
+// sole authorization boundary and refuses every request independently of
+// whatever this component renders.
+//
+// Fails CLOSED: a protected application route with no `requiredCapability`
+// and no explicit `requireAuthOnly` opt-in is denied, never silently treated
+// as "any authenticated user may see this". `requireAuthOnly` is the one
+// deliberate escape hatch, reserved for routes that genuinely need nothing
+// beyond authentication (e.g. Profile) and have no backend capability of
+// their own to mirror.
 export const ProtectedRoute = ({
   children,
-  allowedRoles = [],
+  requiredCapability,
+  requireAuthOnly = false,
 }) => {
-  const { isAuthenticated, loading, user } = useAuth()
+  const { isAuthenticated, loading, capabilities } = useAuth()
 
   if (loading) {
     return (
@@ -84,11 +97,11 @@ export const ProtectedRoute = ({
     return <Navigate to="/login" replace />
   }
 
-  // RBAC Check
-  if (
-    allowedRoles.length > 0 &&
-    !allowedRoles.includes(user?.role)
-  ) {
+  const authorized = requireAuthOnly
+    ? true
+    : Boolean(requiredCapability) && hasCapability(capabilities, requiredCapability)
+
+  if (!authorized) {
     return (
       <Box
         sx={{

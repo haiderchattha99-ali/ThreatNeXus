@@ -42,6 +42,23 @@ model User {
   // or a finding — the actor reference is nulled instead.
   ingestedReports RawReport[] @relation("RawReportIngestedBy")
   closedFindings  Finding[]   @relation("FindingClosedBy")
+
+  // Phase 2 (P2-T1) — same SetNull-actor-reference convention: deleting a
+  // user must never destroy an AssetMapping or a FindingOwnership history
+  // row, only null the actor attribution.
+  assetMappingsCreated AssetMapping[]     @relation("AssetMappingCreatedBy")
+  assetMappingsUpdated AssetMapping[]     @relation("AssetMappingUpdatedBy")
+  ownershipOverrides   FindingOwnership[] @relation("OwnershipOverrideActor")
+
+  // Phase 2 (P2-T3) — same SetNull-actor-reference convention. Only a MANUAL
+  // recalculation carries an actor; automatic triggers leave actorUserId null.
+  riskCalculations RiskScore[] @relation("RiskScoreActor")
+
+  // Phase 2 (§2B) — same SetNull-actor convention. Every CVE association is
+  // an explicit human act and always carries an actor at write time; the
+  // column is nullable only so deleting a user cannot destroy the history.
+  vulnerabilityAssociations FindingVulnerability[]       @relation("FindingVulnerabilityActor")
+  vulnerabilityJobs         VulnerabilityEnrichmentJob[] @relation("VulnerabilityJobActor")
 }
 
 model Threat {
@@ -106,17 +123,24 @@ model Notification {
 }
 
 model Organization {
-  id            Int      @id @default(autoincrement())
+  id            Int                @id @default(autoincrement())
   name          String
   industry      String
   location      String
   contactPerson String
-  email         String   @unique
+  email         String             @unique
   phone         String?
-  securityScore Int      @default(100)
-  activeThreats Int      @default(0)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  securityScore Int                @default(100)
+  activeThreats Int                @default(0)
+  // P2-T1 — additive. Defaults to UNKNOWN so every pre-existing row stays
+  // valid without a data migration; a criticality signal for future risk
+  // scoring, never itself a risk score.
+  sector        OrganizationSector @default(UNKNOWN)
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+
+  assetMappings     AssetMapping[]
+  findingOwnerships FindingOwnership[]
 }
 
 // ===========================================================================
@@ -262,6 +286,21 @@ model Finding {
 
   occurrences FindingOccurrence[]
 
+  // Phase 2 (P2-T1) — append-only ownership-resolution history. Restrict:
+  // ownership history is evidence and must never be orphaned by deleting the
+  // Finding it describes (Findings are never hard-deleted in this system).
+  ownershipHistory FindingOwnership[]
+
+  // Phase 2 (P2-T3) — append-only deterministic risk history, same Restrict
+  // reasoning: a score and its factor contributions are the audit-grade
+  // record of why this Finding was prioritised and must never be orphaned.
+  riskScores RiskScore[]
+
+  // Phase 2 (§2B) — append-only analyst-verified CVE association history.
+  // Restrict, same reasoning: "an analyst asserted this host is affected by
+  // CVE-X, and why" is evidence, not a cache.
+  vulnerabilityAssociations FindingVulnerability[]
+
   // The locked identity key. Its index also covers indicatorValue-prefixed
   // lookups, so no separate indicatorValue index is added.
   @@unique([indicatorValue, port, protocol, reportType], name: "finding_identity")
@@ -288,4 +327,831 @@ model FindingOccurrence {
   // findingId-prefixed lookups; rawReportId needs its own index.
   @@unique([findingId, rawReportId])
   @@index([rawReportId])
+}
+
+// ===========================================================================
+// Phase 2 (P2-T1) — Ownership mapping foundation.
+//
+// Additive only. Extends Organization with `sector` (default UNKNOWN, no
+// existing row invalidated) and introduces AssetMapping (the registry of
+// IP/CIDR/ASN -> Organization claims) and FindingOwnership (append-only
+// resolution history for each Finding). No column on any Phase 0/1 model is
+// altered or removed; no Threat/Case/Notification model is touched.
+//
+// Out of scope here (later Phase 2 tasks): IOC/vulnerability enrichment, risk
+// scoring. This packet is ownership mapping and resolution only.
+// ===========================================================================
+
+// Sector/criticality classification of an Organization. A controlled enum
+// rather than a separate Sector entity/table — the approved Phase 2 decision
+// (DECISIONS.md) is that sector is a bounded, code-owned classification, not
+// an open registry an analyst can grow arbitrarily. UNKNOWN is the safe
+// default for every organization that predates this column.
+enum OrganizationSector {
+  CRITICAL_NATIONAL_INFRASTRUCTURE
+  GOVERNMENT
+  HEALTHCARE
+  FINANCE
+  ENERGY
+  TELECOM
+  EDUCATION
+  GENERAL
+  UNKNOWN
+}
+
+// What kind of indicator an AssetMapping row claims ownership over. Exactly
+// one of exactIp / (cidr + prefixLength + ipStart/ipEnd) / asn is populated,
+// matching this value — enforced at the service boundary, not by the
+// database (Prisma/Postgres cannot express a portable partial-field CHECK
+// here without raw SQL, which is out of scope for this task).
+enum AssetMappingType {
+  EXACT_IP
+  CIDR
+  ASN
+}
+
+// Provenance of an AssetMapping row. ANALYST_OVERRIDE is used where an
+// override materializes as a mapping-shaped record in listings; the
+// authoritative override state itself lives on FindingOwnership, not here.
+enum AssetMappingSource {
+  MANUAL
+  IMPORTED_RIR
+  ANALYST_OVERRIDE
+}
+
+// Honesty label on how sure an ownership resolution is. ASN attribution is
+// always LOW (it identifies an ISP/upstream, not the constituent) — never
+// upgraded regardless of how the ASN mapping itself was sourced.
+enum OwnershipConfidence {
+  CONFIRMED
+  HIGH
+  MEDIUM
+  LOW
+}
+
+// Outcome of one ownership resolution attempt for a Finding.
+enum OwnershipResolutionStatus {
+  RESOLVED
+  AMBIGUOUS
+  UNRESOLVED
+  OVERRIDDEN
+}
+
+// The registry of ownership claims: IP-exact, CIDR-range or ASN rows, each
+// pointing at one Organization. Never hard-deleted — disable via `enabled`
+// instead, so history that already resolved against a mapping stays
+// explicable (`matchedMappingId` on FindingOwnership keeps meaning even after
+// the mapping is later disabled).
+model AssetMapping {
+  id             Int              @id @default(autoincrement())
+  organizationId Int
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  mappingType    AssetMappingType
+
+  // Populated only for mappingType EXACT_IP — canonical dotted-quad display
+  // value. Service-layer-enforced, not a DB CHECK (see AssetMappingType).
+  exactIp String?
+
+  // Populated only for mappingType CIDR — canonical "a.b.c.d/n" display
+  // value plus its decomposed prefix length.
+  cidr         String?
+  prefixLength Int?
+
+  // Populated for EXACT_IP (ipStart == ipEnd) and CIDR (the full range).
+  // Unsigned-IPv4-as-BigInt so range containment is a plain numeric
+  // comparison — never a signed 32-bit trap, never parsed per lookup.
+  // Serialized back to dotted-quad/CIDR strings at the API boundary; never
+  // returned as a raw BigInt (see ipv4Cidr.js / ownership API responses).
+  ipStart BigInt?
+  ipEnd   BigInt?
+
+  // Populated only for mappingType ASN.
+  asn Int?
+
+  confidence OwnershipConfidence
+  source     AssetMappingSource
+
+  // Bounded at the service layer (see assetMappingService.js) — analyst free
+  // text, never evidence, never echoed into a log/audit unbounded.
+  provenanceNote String?
+
+  mappingConfirmed Boolean @default(false)
+  enabled          Boolean @default(true)
+
+  // Optional validity window. A mapping with both null is valid indefinitely
+  // once enabled. validUntil must not precede validFrom (service-enforced).
+  validFrom  DateTime?
+  validUntil DateTime?
+
+  createdByUserId Int?
+  createdBy       User? @relation("AssetMappingCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  updatedByUserId Int?
+  updatedBy       User? @relation("AssetMappingUpdatedBy", fields: [updatedByUserId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  ownershipMatches FindingOwnership[] @relation("MatchedMapping")
+
+  @@index([organizationId])
+  @@index([mappingType, enabled])
+  @@index([asn])
+  @@index([ipStart, ipEnd])
+}
+
+// Append-only ownership-resolution history for a Finding. Every resolution
+// attempt — automatic (ingestion/mapping-change re-resolution) or an analyst
+// override apply/clear — inserts a new row; existing rows are NEVER updated
+// or deleted (only `supersededAt`/`currentForFindingId` change on the row
+// being superseded, in the same transaction that inserts its replacement).
+//
+// Current-row invariant: at most one row per Finding is "current". A current
+// row has currentForFindingId == findingId; every superseded row has it set
+// back to null. Because Prisma/Postgres treat multiple NULLs in a unique
+// column as distinct, a plain `@unique` column expresses "at most one current
+// row per Finding" with no raw SQL and no partial index — see
+// findingOwnershipService.js for the transactional supersede-then-insert.
+model FindingOwnership {
+  id        Int     @id @default(autoincrement())
+  findingId Int
+  finding   Finding @relation(fields: [findingId], references: [id], onDelete: Restrict)
+
+  // Null only for UNRESOLVED (and, transiently, an AMBIGUOUS result with more
+  // than one candidate organization).
+  organizationId Int?
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  status OwnershipResolutionStatus
+
+  // Null for UNRESOLVED/AMBIGUOUS (there is no single confidence to report).
+  confidence OwnershipConfidence?
+
+  matchedMappingId    Int?
+  matchedMapping      AssetMapping? @relation("MatchedMapping", fields: [matchedMappingId], references: [id], onDelete: Restrict)
+  matchedPrefixLength Int?
+
+  // How many distinct-organization candidates were found at the winning
+  // tier. 0 for UNRESOLVED, 1 for RESOLVED/OVERRIDDEN, >1 for AMBIGUOUS.
+  candidateCount Int @default(0)
+
+  // True only when this result came from an ASN mapping — the "this is only
+  // an ISP, not the constituent" honesty flag from BUILD_PLAN.md.
+  isIspAttribution Boolean @default(false)
+
+  // Stable machine-readable reason (OWNERSHIP_UNSUPPORTED_INDICATOR,
+  // OWNERSHIP_NO_MATCH, OWNERSHIP_AMBIGUOUS_EXACT_IP, etc.) — see
+  // ownershipResolver.js REASON_CODES. Never free text.
+  reasonCode String
+
+  resolvedAt DateTime @default(now())
+  // The point in time resolution was evaluated against mapping validity
+  // windows — normally resolvedAt, but kept distinct so a future replay can
+  // resolve "as of" an arbitrary time without conflating the two concepts.
+  asOf       DateTime
+
+  supersededAt        DateTime?
+  currentForFindingId Int?      @unique
+
+  // Analyst-override provenance. Populated only when status == OVERRIDDEN
+  // (apply) or when this row records an override being cleared.
+  overrideActorUserId   Int?
+  overrideActor         User?   @relation("OwnershipOverrideActor", fields: [overrideActorUserId], references: [id], onDelete: SetNull)
+  overrideJustification String?
+
+  createdAt DateTime @default(now())
+
+  @@index([findingId])
+  @@index([status])
+  @@index([organizationId])
+}
+
+// ===========================================================================
+// Phase 2 (P2-T2b) — IOC reputation enrichment: durable cache + work queue.
+//
+// Additive only. Introduces IocEnrichment plus two enums. No column on any
+// Phase 0/1/P2-T1 model is altered, and this model deliberately has NO
+// relation to Finding (see "Cache identity" below) — nothing in the existing
+// evidence chain gains a new foreign key, so no existing real-database
+// cleanup path changes.
+//
+// Out of scope here (P2-T2c and later): the AbuseIPDBProvider HTTP client,
+// TTL policy defaults, ingestion wiring, routes/controllers, audit events.
+// This packet is the persistence layer only.
+//
+// ---------------------------------------------------------------------------
+// Cache identity is indicator-level, never Finding-level or report-level
+// ---------------------------------------------------------------------------
+// One reputation lookup answers a question about an *address*, not about a
+// Finding. Ten Findings on the same IP must share one lookup and one TTL, so
+// identity is (provider, indicatorType, indicator, normalized queryParams),
+// collapsed into the deterministic `cacheKey` (see enrichmentCacheKey.js). A
+// `findingId` FK would silently force one cache row per Finding, re-querying
+// the provider once per Finding and burning quota — so it is deliberately
+// absent. Whichever Finding motivated a lookup is a caller-side concern that
+// belongs to the P2-T2c orchestration layer, not to cache identity.
+//
+// ---------------------------------------------------------------------------
+// No raw provider response bodies, ever
+// ---------------------------------------------------------------------------
+// There is no `rawResponse` column and no credential column of any kind. Only
+// the normalized, allow-listed P2-T2a result fields are persisted (see
+// iocEnrichmentCacheRules.buildTerminalFields). `errorMessage` is re-derived
+// from the closed PROVIDER_ERROR_MESSAGES map at write time — a caught
+// Error's own `.message`, a response-body fragment, or a URL carrying an API
+// key can never reach this table. This is BUILD_PLAN.md §2A's "or a safely
+// stored normalized subset" branch, chosen deliberately over `rawResponse`.
+// ===========================================================================
+
+// Indicator types this cache can key on. IPV4 only for the MVP — matching
+// iocEnrichmentTypes.INDICATOR_TYPES exactly. Adding a type later is additive.
+enum IocIndicatorType {
+  IPV4
+}
+
+// One-to-one with iocEnrichmentTypes.ENRICHMENT_STATUS. PENDING is the single
+// non-terminal state (durable queued work); every other value is terminal and
+// may carry an explicit `expiresAt`. A terminal row is never mutated again.
+enum IocEnrichmentStatus {
+  PENDING
+  SUCCESS
+  NOT_FOUND
+  RATE_LIMITED
+  INVALID_KEY
+  TIMEOUT
+  FAILED
+  UNSUPPORTED_INDICATOR
+  SKIPPED_DISABLED
+  // Queue-lifecycle terminal state (P2-T2e-1), NOT a provider reputation
+  // outcome. A job reaches DEAD_LETTER when a repeatable local failure
+  // (a provider contract bug, an unregistered provider name, a rejected
+  // completion payload) has exhausted `maxAttempts` — the provider never
+  // produced this status and never can: createEnrichmentResult's taxonomy
+  // (iocEnrichmentTypes.js ENRICHMENT_STATUS) deliberately does not contain
+  // it, so `buildTerminalFields`/`findFreshCachedResult` can never treat a
+  // dead-lettered row as reputation evidence. "We gave up processing this
+  // job" is not "the address is clean".
+  DEAD_LETTER
+}
+
+// One durable enrichment attempt: queued (PENDING), leased by a consumer, then
+// completed once into exactly one terminal status. Terminal rows are retained
+// as lookup history — a later attempt for the same cacheKey inserts a NEW row
+// rather than overwriting the previous result.
+model IocEnrichment {
+  id Int @id @default(autoincrement())
+
+  // --- Cache identity -----------------------------------------------------
+  // Stable lowercase provider identifier ("mock", "abuseipdb") — a string,
+  // not an enum, so adding a provider needs no migration (D-007).
+  provider        String
+  indicatorType   IocIndicatorType
+  // Canonical indicator (strict dotted-quad IPv4 for IPV4).
+  indicator       String
+  // The allow-listed, normalized query parameters actually used — never a
+  // passthrough of caller input (unknown keys, including an accidental
+  // credential, are dropped before they get here).
+  queryParams     Json
+  queryParamsHash String
+  // sha256 over the canonical (provider, indicatorType, indicator,
+  // queryParams) serialization. THE cache identity; see enrichmentCacheKey.js.
+  cacheKey        String
+
+  // --- Queue ownership ----------------------------------------------------
+  status      IocEnrichmentStatus @default(PENDING)
+  requestedAt DateTime            @default(now())
+
+  // Lease metadata. A live lease is (claimToken != null AND leaseExpiresAt >
+  // now); an expired lease is reclaimable by another consumer. `claimToken`
+  // is the ONLY completion credential — `updatedAt` is never used as a
+  // concurrency version token (that mistake is already recorded and withdrawn
+  // in STATUS.md for P1-T4).
+  claimedAt      DateTime?
+  leaseExpiresAt DateTime?
+  claimToken     String?
+
+  // "At most one active PENDING job per cacheKey", expressed as a plain
+  // Prisma unique column — the same mechanism as FindingOwnership's
+  // `currentForFindingId` (D-006). A PENDING row carries activeCacheKey ==
+  // cacheKey; completion sets it back to null. PostgreSQL treats multiple
+  // NULLs in a unique index as distinct, so any number of terminal history
+  // rows may coexist for one cacheKey while at most one is active. No raw
+  // SQL, no partial index.
+  activeCacheKey String? @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // --- Terminal result (all null while PENDING) ---------------------------
+  // queriedAt/expiresAt are always supplied explicitly by the caller — no
+  // wall-clock default. A null or already-past expiresAt means "not fresh",
+  // for a success and a failure alike: a failed lookup is never readable as a
+  // clean address.
+  queriedAt DateTime?
+  expiresAt DateTime?
+
+  // Normalized SUCCESS payload only — populated for SUCCESS, null for every
+  // other status (no partial/best-effort data on a failure).
+  abuseConfidenceScore Int?
+  totalReports         Int?
+  countryCode          String?
+  isp                  String?
+  domain               String?
+  usageType            String?
+  isWhitelisted        Boolean?
+  lastReportedAt       DateTime?
+
+  // Transport/diagnostic context. errorCode is a closed PROVIDER_ERROR_CODES
+  // value; errorMessage is re-derived from it, never caller-supplied text.
+  // retryAfterSeconds is stored as whole seconds, rounded up (never shorter
+  // than the provider asked for).
+  httpStatus        Int?
+  errorCode         String?
+  errorMessage      String?
+  retryAfterSeconds Int?
+
+  // --- Retry / dead-letter bookkeeping (P2-T2e-1) -------------------------
+  // Bounds how often a repeatably-failing job may be re-attempted, so a
+  // "poison" job (e.g. persisted queryParams a provider's contract check
+  // rejects on every call) cannot occupy a batch slot forever once scheduled
+  // execution exists.
+  //
+  // attemptCount is incremented by the SAME guarded updateMany that
+  // establishes a lease, so it counts genuine processing attempts only: a
+  // consumer that loses the claim race never increments it.
+  attemptCount  Int       @default(0)
+  // Persisted per job (not read from config at claim time) so a job's budget
+  // cannot silently change under it between attempts. Bounded on write by
+  // iocEnrichmentCacheRules.assertValidMaxAttempts.
+  maxAttempts   Int       @default(3)
+  // Retry eligibility gate. null means "eligible now"; a future value hides
+  // the row from listPendingCandidates until then. Always supplied
+  // explicitly by the caller's policy — never a wall-clock default.
+  nextAttemptAt DateTime?
+  lastAttemptAt DateTime?
+
+  // Set only on the DEAD_LETTER transition. terminalReasonCode is a closed
+  // ENRICHMENT_TERMINAL_REASON value — never a caught Error's message, a
+  // provider payload, or any free-form text.
+  deadLetteredAt     DateTime?
+  terminalReasonCode String?
+
+  // Fresh-cache lookup: newest unexpired terminal row for one cacheKey.
+  @@index([cacheKey, status, expiresAt])
+  // Pending-work lookup, in deterministic requestedAt order.
+  @@index([status, requestedAt])
+  // Retry-eligible pending-work lookup: status + nextAttemptAt gate, then the
+  // deterministic requestedAt ordering the listing returns.
+  @@index([status, nextAttemptAt, requestedAt])
+  // Expired-lease recovery.
+  @@index([status, leaseExpiresAt])
+  // Provider/indicator lookup history.
+  @@index([provider, indicatorType, indicator, queriedAt])
+}
+
+// ===========================================================================
+// Phase 2 (P2-T3) — Deterministic, explainable, append-only risk scoring.
+//
+// Additive only. Introduces RiskScore + RiskFactorContribution and three
+// enums. No column on any existing model is altered; the only edits elsewhere
+// are two virtual back-relations (Finding.riskScores, User.riskCalculations).
+//
+// ---------------------------------------------------------------------------
+// The locked v1 numeric contract lives in CODE, not in this database
+// ---------------------------------------------------------------------------
+// Weights, caps, bucket boundaries and band edges are an immutable frozen
+// module (services/risk/riskConfiguration.js), NOT rows in a config table.
+// This is the approved amendment to BUILD_PLAN.md section 2C's "versioned
+// config row" wording — see STATUS.md D-T3-b. Historical truth is preserved
+// not by keeping old config rows readable, but by persisting algorithmVersion,
+// configurationVersion, configurationFingerprint AND every factor's own
+// contribution on each snapshot: an old explanation renders entirely from its
+// own stored rows and never consults today's configuration.
+//
+// ---------------------------------------------------------------------------
+// Append-only, with exactly one current row per Finding
+// ---------------------------------------------------------------------------
+// currentForFindingId Int? @unique is the same mechanism as FindingOwnership
+// (D-006) and IocEnrichment.activeCacheKey (D-007): PostgreSQL treats multiple
+// NULLs in a unique index as distinct, so any number of superseded history
+// rows may coexist while at most one row per Finding carries the pointer. No
+// raw SQL, no partial index. Supersession sets supersededAt and nulls the
+// pointer; it never edits the score, the band, or any contribution.
+// ===========================================================================
+
+// Final risk classification. Derived ONLY from the final integer score and
+// the versioned band table — never assigned directly, never AI-decided.
+enum RiskBand {
+  INFORMATIONAL
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+// What caused a calculation. MANUAL is the only trigger that carries an
+// actorUserId; the rest are system-initiated at a state-change boundary.
+enum RiskCalculationTrigger {
+  INGESTION
+  ENRICHMENT_COMPLETED
+  OWNERSHIP_CHANGED
+  MANUAL
+  SYSTEM_RECALCULATION
+}
+
+// Why a factor contributed what it did. The distinction is load-bearing and
+// is never collapsed: APPLIED means real evidence was scored (including a
+// legitimate zero, e.g. AbuseIPDB SUCCESS with confidence 0); NOT_AVAILABLE
+// means the evidence could not be obtained (failed/stale/absent enrichment,
+// ownership too weak to attribute a sector) and must stay visibly distinct
+// from clean evidence; NOT_APPLICABLE means the factor cannot apply to this
+// kind of finding at all (CVE/KEV/EPSS on an exposure report with no CVE).
+// All three store contributionBasisPoints, and only APPLIED may be non-zero.
+enum RiskFactorApplicability {
+  APPLIED
+  NOT_AVAILABLE
+  NOT_APPLICABLE
+}
+
+// One immutable scoring snapshot for one Finding. Never updated after
+// insertion except for the intentional supersession transition
+// (supersededAt + currentForFindingId -> null).
+model RiskScore {
+  id        Int     @id @default(autoincrement())
+  findingId Int
+  finding   Finding @relation(fields: [findingId], references: [id], onDelete: Restrict)
+
+  // Versioning: which algorithm, which numeric contract, and the fingerprint
+  // of that contract's canonical serialization. Stored per row so a score
+  // calculated under v1.0.0 stays explicable after a later version ships.
+  algorithmVersion         String
+  configurationVersion     String
+  configurationFingerprint String
+
+  // Deterministic hash of the normalized factor inputs (plus algorithm and
+  // configuration version). Equal fingerprint + equal configuration version
+  // means "same approved input state", which is what makes a rescore return
+  // UNCHANGED instead of flooding history with identical snapshots.
+  inputFingerprint String
+
+  // Integer basis points, 0-10000. No floating point anywhere in scoring;
+  // displayScore is derived as floor(scoreBasisPoints / 100) at read time and
+  // is deliberately NOT stored (it is a pure projection of this column).
+  scoreBasisPoints Int
+  riskBand         RiskBand
+
+  // asOf is the explicit evaluation instant every input was read against and
+  // every duration was measured from — never a wall-clock read inside the
+  // engine. calculatedAt is when the row was actually written.
+  asOf         DateTime
+  calculatedAt DateTime @default(now())
+
+  trigger RiskCalculationTrigger
+
+  // Populated only for MANUAL. SetNull: deleting a user must never destroy
+  // scoring history, only the actor attribution.
+  actorUserId Int?
+  actor       User? @relation("RiskScoreActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  // Bounded analyst justification for a MANUAL recalculation. Trimmed and
+  // length-capped at the service boundary; never free-form provider or
+  // exception text.
+  justification String?
+
+  currentForFindingId Int?      @unique
+  supersededAt        DateTime?
+
+  createdAt DateTime @default(now())
+
+  contributions RiskFactorContribution[]
+
+  // History reads for one Finding, newest first.
+  @@index([findingId, calculatedAt])
+  // Idempotency probe: does an existing snapshot already represent this exact
+  // input state under this exact contract?
+  @@index([findingId, inputFingerprint, configurationVersion])
+  @@index([riskBand])
+}
+
+// One immutable row per approved factor per score. Every factor in the locked
+// contract emits exactly one row on every snapshot, including NOT_AVAILABLE
+// and NOT_APPLICABLE ones — that is what stops an explanation from silently
+// omitting missing context. Never updated, never deleted outside test cleanup.
+model RiskFactorContribution {
+  id          Int       @id @default(autoincrement())
+  riskScoreId Int
+  riskScore   RiskScore @relation(fields: [riskScoreId], references: [id], onDelete: Restrict)
+
+  // Closed vocabulary from the locked contract (RISK_FACTOR_KEYS). Stored as
+  // a string rather than an enum so adding a factor in a future configuration
+  // version needs no migration on this evidence table.
+  factorKey     String
+  applicability RiskFactorApplicability
+
+  // Actual contribution and the cap it was drawn against. Storing the cap per
+  // row is what lets an old explanation state "300 of a possible 1200"
+  // truthfully after the cap changes in a later configuration version.
+  contributionBasisPoints        Int
+  maximumContributionBasisPoints Int
+
+  // The bounded, normalized input the bucket was selected by (e.g. "6" for an
+  // observation count, "88" for an abuse confidence score, "HEALTHCARE" for a
+  // sector). Null when the factor was NOT_AVAILABLE/NOT_APPLICABLE. Never a
+  // raw provider payload, never free text.
+  normalizedInputValue String?
+
+  // Closed RISK_EXPLANATION_CODES value. The rendered sentence is looked up
+  // from this code, so no explanation is ever generated from a provider
+  // response, an exception message, or a model.
+  explanationCode String
+
+  // Bounded allow-listed evidence for this factor only (small scalar keys,
+  // e.g. {"observationCount":6}). Never a database row dump, never a raw
+  // provider response, never headers or secrets.
+  evidenceSnapshot Json?
+
+  // Stable presentation order from the locked contract, so a rendered
+  // explanation reads identically on every machine and every replay.
+  displayOrder Int
+
+  createdAt DateTime @default(now())
+
+  // One contribution per factor per score.
+  @@unique([riskScoreId, factorKey])
+  // Deterministic ordered read of one score's contributions.
+  @@index([riskScoreId, displayOrder])
+}
+
+// ===========================================================================
+// Phase 2 (§2B) — Vulnerability intelligence: analyst-verified CVE
+// associations plus durable NVD / CISA KEV / FIRST EPSS evidence.
+//
+// Additive only. Four new models and six new enums. No column on any existing
+// model is altered; the only edits elsewhere are three virtual back-relations
+// (Finding.vulnerabilityAssociations, User.vulnerabilityAssociations,
+// User.vulnerabilityJobs).
+//
+// ---------------------------------------------------------------------------
+// A CVE is NEVER inferred. It is asserted by a human.
+// ---------------------------------------------------------------------------
+// Nothing in this system derives a CVE from an exposed port, an RDP banner, a
+// hostname, an operating-system guess, a CPE search, or an NVD keyword query.
+// The ONLY way a Finding gains a CVE is an explicit ADMIN/ANALYST association
+// carrying a justification (evidenceSource ANALYST_VERIFIED). NVD supplies
+// metadata ABOUT a CVE an analyst already asserted; it never creates, confirms
+// or revokes the assertion — an NVD NOT_FOUND leaves the association fully
+// active and cvePresence still APPLIED.
+//
+// ---------------------------------------------------------------------------
+// Why this is a job/result model, not another IocEnrichment-style cache row
+// ---------------------------------------------------------------------------
+// One CVE needs THREE independent provider answers (NVD metadata, KEV
+// exploitation status, EPSS probability) that are fetched together and must
+// commit together. A VulnerabilityEnrichmentJob is that unit of work; its
+// VulnerabilityProviderResult rows are the evidence. This is the approved
+// amendment to BUILD_PLAN §2B's three-table (enrichment_kev / enrichment_epss
+// / enrichment_cve) wording — see STATUS.md D-2B-a. The KEV catalogue is NOT
+// persisted: it is fetched at most once per executed batch and shared
+// in-memory, because storing a full catalogue snapshot would be a raw provider
+// payload, which this system does not keep.
+// ===========================================================================
+
+// Whether an analyst's CVE assertion currently stands. REMOVED is a
+// retraction, never a delete: the history row survives so "who attached this,
+// who took it off, and why" stays answerable.
+enum VulnerabilityAssociationState {
+  ACTIVE
+  REMOVED
+}
+
+// How a Finding came to be associated with a CVE. Deliberately a single-value
+// enum in this milestone: there is exactly one supported path, and making it
+// an enum (rather than an implicit assumption) means a future automated path
+// must declare itself explicitly rather than silently blending into
+// analyst-verified evidence.
+enum VulnerabilityEvidenceSource {
+  ANALYST_VERIFIED
+}
+
+// Queue lifecycle for one CVE's enrichment work. DEAD_LETTER is a PROCESSING
+// failure, never vulnerability evidence — a dead-lettered job can never be
+// read as "this CVE is not exploited".
+enum VulnerabilityJobStatus {
+  PENDING
+  COMPLETED
+  DEAD_LETTER
+}
+
+// What caused a job to be scheduled.
+enum VulnerabilityJobTrigger {
+  ASSOCIATION_CREATED
+  MANUAL
+  FORCED_REFRESH
+}
+
+// The three vulnerability sources. An enum (unlike the IOC provider string)
+// because each has bespoke normalized columns on VulnerabilityProviderResult,
+// so adding a fourth genuinely requires a migration anyway.
+enum VulnerabilityProvider {
+  NVD
+  CISA_KEV
+  FIRST_EPSS
+}
+
+// Closed provider outcome taxonomy. Only SUCCESS may carry normalized data.
+// NOT_FOUND means the provider answered "no record"; every other non-SUCCESS
+// value means we could not obtain an answer at all, and none of them may ever
+// be read as a negative finding.
+enum VulnerabilityProviderStatus {
+  SUCCESS
+  NOT_FOUND
+  RATE_LIMITED
+  TIMEOUT
+  INVALID_KEY
+  FAILED
+  SKIPPED_DISABLED
+  UNSUPPORTED
+}
+
+// One canonical row per CVE ID. Created on demand when an analyst first
+// references the CVE, and never deleted just because no association currently
+// points at it — the provider evidence hanging off it stays valuable.
+model Vulnerability {
+  id    Int    @id @default(autoincrement())
+  // Canonical uppercase CVE-YYYY-NNNN+ form, validated by cveIdentifier.js.
+  cveId String @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  findingAssociations FindingVulnerability[]
+  enrichmentJobs      VulnerabilityEnrichmentJob[]
+}
+
+// Append-only association state between one Finding and one CVE.
+//
+// currentAssociationKey is the same distinct-NULLs mechanism as
+// FindingOwnership.currentForFindingId (D-006) and IocEnrichment.activeCacheKey
+// (D-007), but keyed on a PAIR, so it holds the string "<findingId>:<vulnId>"
+// while current and null once superseded. PostgreSQL treats multiple NULLs in
+// a unique index as distinct, so unlimited history rows coexist while at most
+// one row per (Finding, CVE) pair is current. No raw SQL, no partial index.
+model FindingVulnerability {
+  id        Int     @id @default(autoincrement())
+  findingId Int
+  finding   Finding @relation(fields: [findingId], references: [id], onDelete: Restrict)
+
+  vulnerabilityId Int
+  vulnerability   Vulnerability @relation(fields: [vulnerabilityId], references: [id], onDelete: Restrict)
+
+  state          VulnerabilityAssociationState
+  evidenceSource VulnerabilityEvidenceSource   @default(ANALYST_VERIFIED)
+
+  // Bounded analyst-supplied text. sourceReference is a note ONLY: ThreatNeXus
+  // never fetches, follows or dereferences it, so it can never become an SSRF
+  // or automatic-evidence-discovery path.
+  sourceReference String?
+  justification   String
+
+  // Always populated at write time (every transition is a human act); nullable
+  // only so deleting a User nulls attribution instead of destroying history.
+  actorUserId Int?
+  actor       User? @relation("FindingVulnerabilityActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  effectiveAt  DateTime
+  supersededAt DateTime?
+
+  // "<findingId>:<vulnerabilityId>" while current, null once superseded.
+  currentAssociationKey String? @unique
+
+  createdAt DateTime @default(now())
+
+  // Ordered history for one Finding, and the risk snapshot's ACTIVE lookup.
+  @@index([findingId, effectiveAt])
+  @@index([findingId, state])
+  // Reverse lookup: which Findings does this CVE currently affect (used to
+  // rescore after a job completes).
+  @@index([vulnerabilityId, state])
+}
+
+// One bounded unit of enrichment work for one canonical CVE. All three
+// providers are answered by a single job so their results commit together.
+model VulnerabilityEnrichmentJob {
+  id              Int           @id @default(autoincrement())
+  vulnerabilityId Int
+  vulnerability   Vulnerability @relation(fields: [vulnerabilityId], references: [id], onDelete: Restrict)
+
+  status      VulnerabilityJobStatus @default(PENDING)
+  requestedAt DateTime               @default(now())
+  completedAt DateTime?
+
+  // Carries the vulnerabilityId as text while PENDING, null once terminal —
+  // "at most one active job per CVE", same mechanism as activeCacheKey.
+  activeJobKey String? @unique
+
+  // Bounded attempt budget. attemptCount is incremented by the SAME guarded
+  // update that establishes the lease, so a consumer that loses the claim race
+  // never consumes budget.
+  attemptCount  Int       @default(0)
+  maxAttempts   Int       @default(3)
+  nextAttemptAt DateTime?
+  lastAttemptAt DateTime?
+
+  // claimToken is the ONLY completion credential; updatedAt is never used as a
+  // concurrency version token.
+  claimedAt      DateTime?
+  leaseExpiresAt DateTime?
+  claimToken     String?
+
+  // Set only on the DEAD_LETTER transition. terminalReasonCode is a closed
+  // vocabulary value — never a caught Error's message or a provider payload.
+  deadLetteredAt     DateTime?
+  terminalReasonCode String?
+
+  trigger     VulnerabilityJobTrigger
+  actorUserId Int?
+  actor       User?                   @relation("VulnerabilityJobActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  providerResults VulnerabilityProviderResult[]
+
+  // Retry-eligible pending work, in deterministic requestedAt order.
+  @@index([status, nextAttemptAt, requestedAt])
+  // Expired-lease recovery.
+  @@index([status, leaseExpiresAt])
+  // Job history for one CVE.
+  @@index([vulnerabilityId, requestedAt])
+}
+
+// One immutable normalized outcome per provider per job. Never updated after
+// the job completes.
+//
+// There is deliberately NO rawResponse column, no headers column and no
+// credential column: only allow-listed, individually validated, bounded fields
+// survive normalization. Free-text fields (englishDescription, requiredAction)
+// are length-capped at the service boundary.
+model VulnerabilityProviderResult {
+  id    Int                        @id @default(autoincrement())
+  jobId Int
+  job   VulnerabilityEnrichmentJob @relation(fields: [jobId], references: [id], onDelete: Restrict)
+
+  provider VulnerabilityProvider
+  status   VulnerabilityProviderStatus
+
+  // Always explicit, never a wall-clock default. Freshness is the half-open
+  // window [queriedAt, expiresAt) evaluated at the risk snapshot's asOf —
+  // identical to the IOC enrichment rule.
+  queriedAt DateTime
+  expiresAt DateTime
+
+  // Transport/diagnostic context. errorCode is a closed vocabulary value;
+  // there is no errorMessage column at all, so provider or exception text has
+  // nowhere to land.
+  httpStatus        Int?
+  errorCode         String?
+  retryAfterSeconds Int?
+
+  // --- NVD normalized metadata (SUCCESS only) -----------------------------
+  // CVSS is stored as integer TENTHS (9.8 -> 98) so no floating-point value
+  // is ever persisted or compared. It is displayed as context and is
+  // deliberately NOT a Risk v1 factor.
+  nvdCveStatus        String?
+  publishedAt         DateTime?
+  lastModifiedAt      DateTime?
+  englishDescription  String?
+  cvssVersion         String?
+  cvssBaseScoreTenths Int?
+  cvssSeverity        String?
+  // Bounded, validated array of CWE identifiers (e.g. ["CWE-416"]).
+  primaryCweIds       Json?
+  sourceIdentifier    String?
+
+  // --- CISA KEV normalized fields (SUCCESS only) --------------------------
+  // isKnownExploited false is USABLE NEGATIVE EVIDENCE, but only because the
+  // catalogue was successfully fetched and this CVE was absent from it. A
+  // catalogue that could not be fetched produces a non-SUCCESS status and
+  // leaves isKnownExploited null — never false.
+  isKnownExploited           Boolean?
+  dateAdded                  DateTime?
+  dueDate                    DateTime?
+  knownRansomwareCampaignUse String?
+  requiredAction             String?
+  catalogVersion             String?
+  catalogReleasedAt          DateTime?
+
+  // --- FIRST EPSS normalized fields (SUCCESS only) ------------------------
+  // Probability and percentile are integer basis points (0-10000), converted
+  // from the provider's decimal STRING by a strict parser — never parseFloat,
+  // never Number(x) * 10000.
+  epssProbabilityBasisPoints Int?
+  epssPercentileBasisPoints  Int?
+  modelDate                  DateTime?
+
+  createdAt DateTime @default(now())
+
+  // Exactly one result per provider per job.
+  @@unique([jobId, provider])
+  // Freshness lookup for the risk snapshot.
+  @@index([provider, status, expiresAt])
 }

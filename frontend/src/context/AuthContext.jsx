@@ -6,60 +6,129 @@ import React, {
 } from 'react'
 
 import axios from 'axios'
+import { authService } from '../services/api'
 
 export const AuthContext = createContext()
 
+// Everything this context stores (user, capabilities) is client-side UX
+// state only, used to decide what to render. It is never an authorization
+// boundary: every backend route enforces its own requireCapability/
+// requireRole middleware independently, and a caller cannot gain backend
+// permission by editing localStorage or this context's state.
+function clearStoredSession() {
+  localStorage.removeItem('token')
+  localStorage.removeItem('user')
+  localStorage.removeItem('capabilities')
+  delete axios.defaults.headers.common['Authorization']
+}
+
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null)
+  const [capabilities, setCapabilities] = useState([])
   const [token, setToken] = useState(null)
   const [loading, setLoading] = useState(true)
 
+  // On mount, a stored token is re-validated against the backend's
+  // GET /api/profile session-validation endpoint rather than trusted as-is.
+  // A rejected/expired/tampered token clears all stored state instead of
+  // leaving stale user/capability data behind.
   useEffect(() => {
-    const storedToken = localStorage.getItem('token')
-    const storedUser = localStorage.getItem('user')
+    let cancelled = false
 
-    if (storedToken) {
-      setToken(storedToken)
-      axios.defaults.headers.common[
-        'Authorization'
-      ] = `Bearer ${storedToken}`
+    async function initialize() {
+      const storedToken = localStorage.getItem('token')
+
+      if (!storedToken) {
+        setLoading(false)
+        return
+      }
+
+      axios.defaults.headers.common['Authorization'] = `Bearer ${storedToken}`
+
+      try {
+        const response = await authService.getCurrentUser()
+        if (cancelled) return
+
+        if (!response.data || !response.data.loggedInUser) {
+          clearStoredSession()
+          setToken(null)
+          setUser(null)
+          setCapabilities([])
+          setLoading(false)
+          return
+        }
+
+        const validatedUser = response.data.loggedInUser
+        const validatedCapabilities = Array.isArray(response.data.capabilities)
+          ? response.data.capabilities
+          : []
+
+        // Reconcile display fields (name) from any previously stored user
+        // record, but role/capabilities always come from this fresh backend
+        // response — never from the pre-existing localStorage copy.
+        const storedRaw = localStorage.getItem('user')
+        let mergedUser = validatedUser
+        if (storedRaw) {
+          try {
+            const storedUser = JSON.parse(storedRaw)
+            mergedUser = { ...storedUser, ...validatedUser }
+          } catch {
+            mergedUser = validatedUser
+          }
+        }
+
+        localStorage.setItem('user', JSON.stringify(mergedUser))
+        localStorage.setItem('capabilities', JSON.stringify(validatedCapabilities))
+
+        setToken(storedToken)
+        setUser(mergedUser)
+        setCapabilities(validatedCapabilities)
+      } catch {
+        // Any failure (401, network error, malformed response) is treated as
+        // an invalid session: stale state must not survive a failed check.
+        if (!cancelled) {
+          clearStoredSession()
+          setToken(null)
+          setUser(null)
+          setCapabilities([])
+        }
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
     }
 
-    if (storedUser) {
-      setUser(JSON.parse(storedUser))
-    }
+    initialize()
 
-    setLoading(false)
+    return () => {
+      cancelled = true
+    }
   }, [])
 
-  const login = useCallback((jwtToken, userData) => {
+  const login = useCallback((jwtToken, userData, userCapabilities = []) => {
+    const safeCapabilities = Array.isArray(userCapabilities) ? userCapabilities : []
+
     localStorage.setItem('token', jwtToken)
     localStorage.setItem('user', JSON.stringify(userData))
+    localStorage.setItem('capabilities', JSON.stringify(safeCapabilities))
 
-    axios.defaults.headers.common[
-      'Authorization'
-    ] = `Bearer ${jwtToken}`
+    axios.defaults.headers.common['Authorization'] = `Bearer ${jwtToken}`
 
     setToken(jwtToken)
     setUser(userData)
+    setCapabilities(safeCapabilities)
   }, [])
 
   const logout = useCallback(() => {
-    localStorage.removeItem('token')
-    localStorage.removeItem('user')
-
-    delete axios.defaults.headers.common['Authorization']
+    clearStoredSession()
 
     setToken(null)
     setUser(null)
+    setCapabilities([])
   }, [])
 
   const updateUser = useCallback((updatedUser) => {
     setUser(updatedUser)
-    localStorage.setItem(
-      'user',
-      JSON.stringify(updatedUser)
-    )
+    localStorage.setItem('user', JSON.stringify(updatedUser))
   }, [])
 
   const isAuthenticated = Boolean(token)
@@ -68,6 +137,7 @@ export const AuthProvider = ({ children }) => {
     <AuthContext.Provider
       value={{
         user,
+        capabilities,
         token,
         loading,
         login,

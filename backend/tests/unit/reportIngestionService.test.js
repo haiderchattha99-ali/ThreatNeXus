@@ -12,6 +12,7 @@ import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
 // validates its required variables at require time — same pattern as
 // authMiddleware.test.js: stage process.env, evict the cache, then require.
 const { REPORT_SOURCES } = require("../../src/services/ingestion/reportSourceRegistry");
+const { buildEnrichmentCacheIdentity } = require("../../src/services/enrichment/enrichmentCacheKey");
 
 let originalEnv;
 let INGESTION_OUTCOMES;
@@ -78,12 +79,14 @@ function createFakeClient() {
   let nextFindingId = 1;
   let nextOccurrenceId = 1;
   let nextAuditId = 1;
+  let nextIocEnrichmentId = 1;
 
   const rawReports = new Map();
   const rawReportRows = new Map();
   const findings = new Map();
   const occurrences = new Map();
   const auditLogs = [];
+  const iocEnrichments = new Map();
 
   const findRawReportBySha = (sha) =>
     [...rawReports.values()].find((r) => r.sourceFileSha256 === sha) || null;
@@ -185,10 +188,54 @@ function createFakeClient() {
         return row;
       }),
     },
+    // P2-T2e-2 — minimal fake covering exactly the calls
+    // enrichmentQueueService.scheduleEnrichment issues: findFreshCachedResult
+    // (findFirst), findActiveJobByCacheKey (findUnique by activeCacheKey),
+    // createPendingJob (create, P2002 on a duplicate activeCacheKey). Real
+    // Postgres concurrency semantics are out of scope here — see
+    // backend/tests/integration/enrichmentIngestionScheduling.test.js.
+    iocEnrichment: {
+      findFirst: vi.fn(async ({ where }) => {
+        let rows = [...iocEnrichments.values()];
+        if (where.cacheKey !== undefined) rows = rows.filter((r) => r.cacheKey === where.cacheKey);
+        if (where.status && Array.isArray(where.status.in)) {
+          rows = rows.filter((r) => where.status.in.includes(r.status));
+        }
+        if (where.queriedAt && where.queriedAt.not === null) {
+          rows = rows.filter((r) => r.queriedAt !== null && r.queriedAt !== undefined);
+        }
+        if (where.expiresAt && where.expiresAt.gt !== undefined) {
+          rows = rows.filter((r) => r.expiresAt && r.expiresAt.getTime() > where.expiresAt.gt.getTime());
+        }
+        rows.sort((a, b) => {
+          const aq = a.queriedAt ? a.queriedAt.getTime() : -Infinity;
+          const bq = b.queriedAt ? b.queriedAt.getTime() : -Infinity;
+          if (aq !== bq) return bq - aq;
+          return b.id - a.id;
+        });
+        return rows[0] || null;
+      }),
+      findUnique: vi.fn(async ({ where }) => {
+        if (where.activeCacheKey !== undefined) {
+          return [...iocEnrichments.values()].find((r) => r.activeCacheKey === where.activeCacheKey) || null;
+        }
+        if (where.id !== undefined) return iocEnrichments.get(where.id) || null;
+        return null;
+      }),
+      create: vi.fn(async ({ data }) => {
+        if (data.activeCacheKey !== null && data.activeCacheKey !== undefined) {
+          const exists = [...iocEnrichments.values()].some((r) => r.activeCacheKey === data.activeCacheKey);
+          if (exists) throw prismaError("P2002", "Unique constraint failed on activeCacheKey");
+        }
+        const row = { id: nextIocEnrichmentId++, createdAt: new Date(), updatedAt: new Date(), ...data };
+        iocEnrichments.set(row.id, row);
+        return { ...row };
+      }),
+    },
     $transaction: vi.fn(async (fn) => fn(client)),
   };
 
-  return { client, rawReports, rawReportRows, findings, occurrences, auditLogs };
+  return { client, rawReports, rawReportRows, findings, occurrences, auditLogs, iocEnrichments };
 }
 
 const HEADER = "timestamp,ip,port,protocol,hostname,asn,as_name,country_code";
@@ -810,6 +857,288 @@ describe("ingestAccessibleRdpReport — input validation", () => {
     await expect(
       ingestAccessibleRdpReport({ fileBytes: Buffer.alloc(0), sourceFileName: "" }, { client })
     ).rejects.toThrow(TypeError);
+  });
+});
+
+describe("ingestAccessibleRdpReport — ownership-resolution failure isolation (P2-H1)", () => {
+  // findingOwnershipService.resolveOneFinding opens its own transaction AFTER
+  // recordFindingObservation's own transaction has already committed (see
+  // reportIngestionService.js's module-level note above
+  // resolveOwnershipSafely). These tests inject a failure at that later,
+  // already-committed point and prove it is fully isolated: ingestion still
+  // succeeds, every already-written row survives untouched, no partial
+  // FindingOwnership row is created, and the failure is auditable without
+  // leaking the raw underlying error text.
+  const RAW_DB_ERROR_TEXT = "FATAL: connection to ownership replica 10.99.0.1 terminated unexpectedly";
+
+  function withFailingOwnershipStore(client) {
+    client.findingOwnership = {
+      findUnique: vi.fn(async () => {
+        throw new Error(RAW_DB_ERROR_TEXT);
+      }),
+      findMany: vi.fn(async () => []),
+      create: vi.fn(),
+      update: vi.fn(),
+      groupBy: vi.fn(async () => []),
+    };
+    return client;
+  }
+
+  it("a fully valid report still completes and links its row when ownership resolution fails after the lifecycle transaction commits", async () => {
+    const { client, rawReports, rawReportRows, findings, occurrences, auditLogs } = createFakeClient();
+    withFailingOwnershipStore(client);
+    const fileBytes = buildCsv([
+      { timestamp: "2026-01-01T00:00:00Z", ip: "203.0.113.80", port: "3389", protocol: "tcp" },
+    ]);
+
+    const result = await ingestAccessibleRdpReport({ fileBytes, ...baseUpload() }, { client });
+
+    expect(result.outcome).toBe(INGESTION_OUTCOMES.PROCESSED);
+    expect(result.report.status).toBe("COMPLETED");
+
+    expect(rawReports.size).toBe(1);
+    expect(findings.size).toBe(1);
+    expect(occurrences.size).toBe(1);
+
+    const [row] = [...rawReportRows.values()];
+    expect(row.status).toBe("VALID");
+    expect(row.findingOccurrenceId).not.toBeNull();
+
+    // No FindingOwnership history was partially written.
+    expect(client.findingOwnership.create).not.toHaveBeenCalled();
+
+    // The failure is auditable via the designed safe path...
+    const ownershipFailures = auditLogs.filter((e) => e.action === "ownership.resolution.failed");
+    expect(ownershipFailures).toHaveLength(1);
+    expect(ownershipFailures[0].outcome).toBe("FAILURE");
+
+    // ...but never carries the raw underlying database error text.
+    const serialized = JSON.stringify(auditLogs);
+    expect(serialized).not.toContain(RAW_DB_ERROR_TEXT);
+
+    // The report-level outcome is unaffected: ingestion still reports its own
+    // success terminal event, not a report-level failure.
+    expect(auditLogs.filter((e) => e.action === "report.ingestion.completed")).toHaveLength(1);
+    expect(auditLogs.filter((e) => e.action === "report.ingestion.failed")).toHaveLength(0);
+  });
+
+  it("a partially valid report still reaches PARTIALLY_VALID (not FAILED) when ownership resolution fails on the valid row's group", async () => {
+    const { client, rawReports, rawReportRows, findings, auditLogs } = createFakeClient();
+    withFailingOwnershipStore(client);
+    const fileBytes = buildCsv([
+      { timestamp: "2026-01-01T00:00:00Z", ip: "203.0.113.81", port: "3389", protocol: "tcp" },
+      { timestamp: "2026-01-01T00:05:00Z", ip: "not-an-ip", port: "3389", protocol: "tcp" },
+    ]);
+
+    const result = await ingestAccessibleRdpReport({ fileBytes, ...baseUpload() }, { client });
+
+    expect(result.outcome).toBe(INGESTION_OUTCOMES.PROCESSED);
+    expect(result.report.status).toBe("PARTIALLY_VALID");
+    expect(result.report.validRows).toBe(1);
+    expect(result.report.invalidRows).toBe(1);
+
+    expect(rawReports.get(1).status).toBe("PARTIALLY_VALID");
+    expect(findings.size).toBe(1);
+
+    // The ownership failure never reclassifies the valid row as INVALID.
+    const validRow = [...rawReportRows.values()].find((r) => r.status === "VALID");
+    expect(validRow).toBeDefined();
+    expect(validRow.findingOccurrenceId).not.toBeNull();
+    const invalidRow = [...rawReportRows.values()].find((r) => r.status === "INVALID");
+    expect(invalidRow).toBeDefined();
+
+    expect(client.findingOwnership.create).not.toHaveBeenCalled();
+    expect(auditLogs.filter((e) => e.action === "ownership.resolution.failed")).toHaveLength(1);
+    const serialized = JSON.stringify(auditLogs);
+    expect(serialized).not.toContain(RAW_DB_ERROR_TEXT);
+  });
+});
+
+describe("ingestAccessibleRdpReport — IOC enrichment scheduling (P2-T2e-2)", () => {
+  const MAX_AGE_IN_DAYS = 90; // env.ABUSEIPDB_MAX_AGE_DAYS default (abuseIpdbConfig.js)
+
+  function cacheKeyFor(indicator) {
+    return buildEnrichmentCacheIdentity({
+      provider: "abuseipdb",
+      indicatorType: "IPV4",
+      indicator,
+      queryParams: { maxAgeInDays: MAX_AGE_IN_DAYS },
+    }).cacheKey;
+  }
+
+  it("schedules exactly one job for one distinct Finding, never once per duplicate CSV row", async () => {
+    const { client, iocEnrichments, auditLogs } = createFakeClient();
+    const fileBytes = buildCsv([
+      { timestamp: "2026-01-01T00:00:00Z", ip: "203.0.113.90", port: "3389", protocol: "tcp" },
+      { timestamp: "2026-01-01T00:05:00Z", ip: "203.0.113.90", port: "3389", protocol: "tcp" },
+    ]);
+
+    const result = await ingestAccessibleRdpReport({ fileBytes, ...baseUpload() }, { client });
+
+    expect(result.outcome).toBe(INGESTION_OUTCOMES.PROCESSED);
+    expect(iocEnrichments.size).toBe(1);
+    const [job] = [...iocEnrichments.values()];
+    expect(job.provider).toBe("abuseipdb");
+    expect(job.indicator).toBe("203.0.113.90");
+    expect(job.status).toBe("PENDING");
+
+    const completed = auditLogs.filter((e) => e.action === "enrichment.ingestion.schedule.completed");
+    expect(completed).toHaveLength(1);
+    expect(completed[0].after.distinctFindingCount).toBe(1);
+    expect(completed[0].after.scheduledCount).toBe(1);
+    expect(completed[0].after.provider).toBe("abuseipdb");
+  });
+
+  it("schedules two jobs for two distinct Findings in one report", async () => {
+    const { client, iocEnrichments } = createFakeClient();
+    const fileBytes = buildCsv([
+      { timestamp: "2026-01-01T00:00:00Z", ip: "203.0.113.91", port: "3389", protocol: "tcp" },
+      { timestamp: "2026-01-01T00:05:00Z", ip: "203.0.113.92", port: "3389", protocol: "tcp" },
+    ]);
+
+    await ingestAccessibleRdpReport({ fileBytes, ...baseUpload() }, { client });
+
+    expect(iocEnrichments.size).toBe(2);
+  });
+
+  it("counts a fresh cached terminal result as CACHE_HIT and creates no new job", async () => {
+    const { client, iocEnrichments, auditLogs } = createFakeClient();
+    const indicator = "203.0.113.93";
+    iocEnrichments.set(1, {
+      id: 1,
+      provider: "abuseipdb",
+      indicatorType: "IPV4",
+      indicator,
+      cacheKey: cacheKeyFor(indicator),
+      status: "SUCCESS",
+      queriedAt: new Date(Date.now() - 60 * 60 * 1000),
+      expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+      activeCacheKey: null,
+    });
+    const fileBytes = buildCsv([
+      { timestamp: "2026-01-01T00:00:00Z", ip: indicator, port: "3389", protocol: "tcp" },
+    ]);
+
+    await ingestAccessibleRdpReport({ fileBytes, ...baseUpload() }, { client });
+
+    expect(iocEnrichments.size).toBe(1);
+    const completed = auditLogs.filter((e) => e.action === "enrichment.ingestion.schedule.completed");
+    expect(completed[0].after.cacheHitCount).toBe(1);
+    expect(completed[0].after.scheduledCount).toBe(0);
+  });
+
+  it("counts an existing active PENDING job as ALREADY_PENDING and creates no second job", async () => {
+    const { client, iocEnrichments, auditLogs } = createFakeClient();
+    const indicator = "203.0.113.94";
+    const cacheKey = cacheKeyFor(indicator);
+    iocEnrichments.set(1, {
+      id: 1,
+      provider: "abuseipdb",
+      indicatorType: "IPV4",
+      indicator,
+      cacheKey,
+      status: "PENDING",
+      queriedAt: null,
+      expiresAt: null,
+      activeCacheKey: cacheKey,
+    });
+    const fileBytes = buildCsv([
+      { timestamp: "2026-01-01T00:00:00Z", ip: indicator, port: "3389", protocol: "tcp" },
+    ]);
+
+    await ingestAccessibleRdpReport({ fileBytes, ...baseUpload() }, { client });
+
+    expect(iocEnrichments.size).toBe(1);
+    const completed = auditLogs.filter((e) => e.action === "enrichment.ingestion.schedule.completed");
+    expect(completed[0].after.alreadyPendingCount).toBe(1);
+    expect(completed[0].after.scheduledCount).toBe(0);
+  });
+
+  it("swallows a scheduling failure safely: the report still completes and no external call is made", async () => {
+    const { client, rawReports, findings, auditLogs } = createFakeClient();
+    const RAW_DB_ERROR_TEXT = "FATAL: connection to enrichment replica 10.99.0.2 terminated unexpectedly";
+    client.iocEnrichment.create = vi.fn(async () => {
+      throw new Error(RAW_DB_ERROR_TEXT);
+    });
+    const fileBytes = buildCsv([
+      { timestamp: "2026-01-01T00:00:00Z", ip: "203.0.113.95", port: "3389", protocol: "tcp" },
+    ]);
+
+    const result = await ingestAccessibleRdpReport({ fileBytes, ...baseUpload() }, { client });
+
+    expect(result.outcome).toBe(INGESTION_OUTCOMES.PROCESSED);
+    expect(result.report.status).toBe("COMPLETED");
+    expect(rawReports.size).toBe(1);
+    expect(findings.size).toBe(1);
+
+    const completed = auditLogs.filter((e) => e.action === "enrichment.ingestion.schedule.completed");
+    expect(completed[0].after.failedCount).toBe(1);
+    expect(completed[0].after.scheduledCount).toBe(0);
+
+    const serialized = JSON.stringify(auditLogs);
+    expect(serialized).not.toContain(RAW_DB_ERROR_TEXT);
+  });
+
+  it("a fully idempotent duplicate-file upload creates no new enrichment work", async () => {
+    const { client, iocEnrichments } = createFakeClient();
+    const fileBytes = buildCsv([
+      { timestamp: "2026-01-01T00:00:00Z", ip: "203.0.113.96", port: "3389", protocol: "tcp" },
+    ]);
+
+    const first = await ingestAccessibleRdpReport({ fileBytes, ...baseUpload() }, { client });
+    expect(first.outcome).toBe(INGESTION_OUTCOMES.PROCESSED);
+    expect(iocEnrichments.size).toBe(1);
+
+    const second = await ingestAccessibleRdpReport({ fileBytes, ...baseUpload() }, { client });
+    expect(second.outcome).toBe(INGESTION_OUTCOMES.DUPLICATE_COMPLETED);
+    expect(iocEnrichments.size).toBe(1);
+  });
+
+  it("the aggregate audit payload never carries an indicator, cache key or claim token", async () => {
+    const { client, auditLogs } = createFakeClient();
+    const fileBytes = buildCsv([
+      { timestamp: "2026-01-01T00:00:00Z", ip: "203.0.113.97", port: "3389", protocol: "tcp" },
+    ]);
+
+    await ingestAccessibleRdpReport({ fileBytes, ...baseUpload() }, { client });
+
+    const completed = auditLogs.filter((e) => e.action === "enrichment.ingestion.schedule.completed");
+    expect(completed).toHaveLength(1);
+    expect(Object.keys(completed[0].after).sort()).toEqual(
+      [
+        "alreadyPendingCount",
+        "cacheHitCount",
+        "distinctFindingCount",
+        "failedCount",
+        "provider",
+        "scheduledCount",
+        "unsupportedCount",
+      ].sort()
+    );
+    const serialized = JSON.stringify(completed[0]);
+    expect(serialized).not.toContain("203.0.113.97");
+    expect(serialized).not.toContain("cacheKey");
+    expect(serialized).not.toContain("claimToken");
+  });
+
+  it("an enrichment audit-write failure does not alter the report result", async () => {
+    const { client, rawReports } = createFakeClient();
+    const originalCreate = client.auditLog.create;
+    client.auditLog.create = vi.fn(async (args) => {
+      if (args.data.action === "enrichment.ingestion.schedule.completed") {
+        throw new Error("audit sink unreachable");
+      }
+      return originalCreate(args);
+    });
+    const fileBytes = buildCsv([
+      { timestamp: "2026-01-01T00:00:00Z", ip: "203.0.113.98", port: "3389", protocol: "tcp" },
+    ]);
+
+    const result = await ingestAccessibleRdpReport({ fileBytes, ...baseUpload() }, { client });
+
+    expect(result.outcome).toBe(INGESTION_OUTCOMES.PROCESSED);
+    expect(result.report.status).toBe("COMPLETED");
+    expect(rawReports.size).toBe(1);
   });
 });
 

@@ -94,6 +94,18 @@ async function cleanup() {
 
   await prisma.findingOccurrence.deleteMany({ where: { rawReportId: { in: reportIds } } });
   await prisma.rawReportRow.deleteMany({ where: { rawReportId: { in: reportIds } } });
+  // P2-T1: ingestAccessibleRdpReport now also resolves ownership for every
+  // Finding it touches, and FindingOwnership.findingId is onDelete: Restrict
+  // — a Finding can no longer be deleted while it has ownership history.
+  await prisma.findingOwnership.deleteMany({ where: { findingId: { in: findingIds } } });
+  // P2-T3: RiskFactorContribution -> RiskScore -> Finding, all Restrict.
+  const riskScores = await prisma.riskScore.findMany({
+    where: { findingId: { in: findingIds } },
+    select: { id: true },
+  });
+  const riskScoreIds = riskScores.map((r) => r.id);
+  await prisma.riskFactorContribution.deleteMany({ where: { riskScoreId: { in: riskScoreIds } } });
+  await prisma.riskScore.deleteMany({ where: { id: { in: riskScoreIds } } });
   await prisma.finding.deleteMany({ where: { id: { in: findingIds } } });
   await prisma.rawReport.deleteMany({ where: { id: { in: reportIds } } });
 }

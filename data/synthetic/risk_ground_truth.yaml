@@ -1,0 +1,772 @@
+# Risk v1 gate ground truth — manually authored expected results.
+#
+# Every number below was derived BY HAND from the locked, architect-approved
+# Risk v1 numeric contract (STATUS.md, "Locked Risk v1 numeric contract") —
+# never by running the engine and copying its output back in. If a gate run
+# disagrees with this file, that is either a genuine defect to report, or a
+# hand-derivation mistake to fix here with the reasoning shown — never a value
+# to silently adjust to make the gate pass.
+#
+# Each scenario is a normalized input snapshot (exactly the shape
+# backend/src/services/risk/riskInputSnapshot.js produces) plus the expected
+# score, band, and per-factor applicability/contribution/explanation code. The
+# evaluator feeds these straight into the PURE engine, so the gate needs no
+# database, no network and no clock: risk scoring is a total function of the
+# snapshot, and that is precisely what is being pinned here.
+#
+# Database-level behaviour (append-only history, supersession, the
+# currentForFindingId unique rule, FK Restrict) is proven separately against
+# real PostgreSQL in backend/tests/integration/riskScoringConcurrency.test.js.
+#
+# The `contract:` block below is a second, independent transcription of the
+# approved weights. It exists so that changing a weight in riskConfiguration.js
+# without a new architect approval fails this gate loudly, rather than silently
+# rescoring every finding in the system.
+
+version: 1
+schemaVersion: "risk-v1-gate-ground-truth.v1"
+
+datasetDisclaimer: >
+  Synthetic development/evaluation fixtures only. Expected values were manually
+  derived from the locked Risk v1 contract. Never operational threat
+  intelligence, and never a real victim address.
+
+# ---------------------------------------------------------------------------
+# The locked contract, transcribed by hand from the architect's approval.
+# ---------------------------------------------------------------------------
+contract:
+  algorithmVersion: "risk-additive-bucketed-v1"
+  configurationVersion: "v1.0.0"
+  scoreMinBasisPoints: 0
+  scoreMaxBasisPoints: 10000
+  displayScoreDivisor: 100
+  maxNormalizedDays: 3650
+
+  factorMaximums:
+    sourceSeverity: 800
+    exposureCriticality: 1500
+    persistence: 1200
+    recurrence: 1300
+    daysUnresolved: 1200
+    iocReputationContext: 1200
+    sectorCriticality: 1300
+    cvePresence: 300
+    kevStatus: 800
+    epssScore: 400
+
+  bands:
+    - band: "INFORMATIONAL"
+      minBasisPoints: 0
+      maxBasisPoints: 1499
+    - band: "LOW"
+      minBasisPoints: 1500
+      maxBasisPoints: 3499
+    - band: "MEDIUM"
+      minBasisPoints: 3500
+      maxBasisPoints: 5999
+    - band: "HIGH"
+      minBasisPoints: 6000
+      maxBasisPoints: 7999
+    - band: "CRITICAL"
+      minBasisPoints: 8000
+      maxBasisPoints: 10000
+
+# ---------------------------------------------------------------------------
+# Scenarios.
+#
+# Shared baseline for an ACCESSIBLE_RDP finding on TCP/3389:
+#   sourceSeverity       800   (report class assertion)
+#   exposureCriticality 1500   (technical value of exposed RDP)
+#   -------------------------
+#   fixed baseline      2300   -> LOW (G2: never INFORMATIONAL for RDP)
+#
+# Each scenario states only the arithmetic that differs from that baseline.
+# ---------------------------------------------------------------------------
+scenarios:
+  # 1. The fixed baseline itself. One observation, never recurred, open three
+  # days, no enrichment ever attempted, no ownership resolved, no CVE source.
+  # 800 + 1500 = 2300. Band LOW, display floor(2300/100) = 23.
+  - id: "01_baseline_open_rdp"
+    order: 1
+    description: "Newly observed accessible RDP exposure with no other context"
+    inputs:
+      reportType: "ACCESSIBLE_RDP"
+      protocol: "TCP"
+      port: 3389
+      findingStatus: "OPEN"
+      observationCount: 1
+      recurredCount: 0
+      daysUnresolved: 3
+      enrichmentPresent: false
+      enrichmentStatus: null
+      enrichmentFresh: false
+      abuseConfidenceScore: null
+      ownershipStatus: null
+      ownershipConfidence: null
+      ownershipIsIspAttribution: false
+      sectorAttributable: false
+      sectorNonAttributableReason: "NO_OWNERSHIP"
+      sector: null
+      cvePresent: false
+      kevListed: null
+      kevLookupAvailable: false
+      epssBasisPoints: null
+    expected:
+      scoreBasisPoints: 2300
+      displayScore: 23
+      riskBand: "LOW"
+      factors:
+        sourceSeverity: { applicability: "APPLIED", contributionBasisPoints: 800, explanationCode: "SOURCE_SEVERITY_ACCESSIBLE_RDP" }
+        exposureCriticality: { applicability: "APPLIED", contributionBasisPoints: 1500, explanationCode: "EXPOSURE_CRITICALITY_REMOTE_ACCESS_RDP" }
+        persistence: { applicability: "APPLIED", contributionBasisPoints: 0, explanationCode: "PERSISTENCE_SINGLE_OBSERVATION" }
+        recurrence: { applicability: "APPLIED", contributionBasisPoints: 0, explanationCode: "RECURRENCE_NONE" }
+        daysUnresolved: { applicability: "APPLIED", contributionBasisPoints: 0, explanationCode: "DAYS_UNRESOLVED_UNDER_7" }
+        iocReputationContext: { applicability: "NOT_AVAILABLE", contributionBasisPoints: 0, explanationCode: "IOC_REPUTATION_ABSENT" }
+        sectorCriticality: { applicability: "NOT_AVAILABLE", contributionBasisPoints: 0, explanationCode: "SECTOR_NOT_AVAILABLE_NO_OWNERSHIP" }
+        cvePresence: { applicability: "NOT_APPLICABLE", contributionBasisPoints: 0, explanationCode: "CVE_NOT_APPLICABLE_NO_CVE_SOURCE" }
+        kevStatus: { applicability: "NOT_APPLICABLE", contributionBasisPoints: 0, explanationCode: "KEV_NOT_APPLICABLE_NO_CVE" }
+        epssScore: { applicability: "NOT_APPLICABLE", contributionBasisPoints: 0, explanationCode: "EPSS_NOT_APPLICABLE_NO_CVE" }
+
+  # 2. AMENDMENT 1, positive half. A fresh SUCCESS whose abuseConfidenceScore
+  # is 0 is confirmed, usable, zero-score reputation: the provider looked and
+  # found nothing. APPLIED with 0 basis points. Total unchanged at 2300.
+  - id: "02_reputation_checked_clean"
+    order: 2
+    description: "Fresh AbuseIPDB SUCCESS with confidence 0 — checked and clean"
+    inputs:
+      reportType: "ACCESSIBLE_RDP"
+      protocol: "TCP"
+      port: 3389
+      findingStatus: "OPEN"
+      observationCount: 1
+      recurredCount: 0
+      daysUnresolved: 0
+      enrichmentPresent: true
+      enrichmentStatus: "SUCCESS"
+      enrichmentFresh: true
+      abuseConfidenceScore: 0
+      ownershipStatus: null
+      ownershipConfidence: null
+      ownershipIsIspAttribution: false
+      sectorAttributable: false
+      sectorNonAttributableReason: "NO_OWNERSHIP"
+      sector: null
+      cvePresent: false
+      kevListed: null
+      kevLookupAvailable: false
+      epssBasisPoints: null
+    expected:
+      scoreBasisPoints: 2300
+      displayScore: 23
+      riskBand: "LOW"
+      factors:
+        iocReputationContext: { applicability: "APPLIED", contributionBasisPoints: 0, explanationCode: "IOC_REPUTATION_NONE", normalizedInputValue: "0" }
+
+  # 3. AMENDMENT 1, negative half. A fresh NOT_FOUND means no usable provider
+  # reputation record exists. It scores the same 0 basis points as scenario 2,
+  # but must remain visibly NOT_AVAILABLE — "we could not check" is never
+  # readable as "the address is clean".
+  - id: "03_reputation_not_found"
+    order: 3
+    description: "Fresh AbuseIPDB NOT_FOUND — unavailable, not clean (amendment 1)"
+    inputs:
+      reportType: "ACCESSIBLE_RDP"
+      protocol: "TCP"
+      port: 3389
+      findingStatus: "OPEN"
+      observationCount: 1
+      recurredCount: 0
+      daysUnresolved: 0
+      enrichmentPresent: true
+      enrichmentStatus: "NOT_FOUND"
+      enrichmentFresh: true
+      abuseConfidenceScore: null
+      ownershipStatus: null
+      ownershipConfidence: null
+      ownershipIsIspAttribution: false
+      sectorAttributable: false
+      sectorNonAttributableReason: "NO_OWNERSHIP"
+      sector: null
+      cvePresent: false
+      kevListed: null
+      kevLookupAvailable: false
+      epssBasisPoints: null
+    expected:
+      scoreBasisPoints: 2300
+      displayScore: 23
+      riskBand: "LOW"
+      factors:
+        iocReputationContext: { applicability: "NOT_AVAILABLE", contributionBasisPoints: 0, explanationCode: "IOC_REPUTATION_NOT_FOUND", normalizedInputValue: null }
+
+  # 4. Reputation at the top bucket. 2300 + 1200 = 3500, which is exactly the
+  # MEDIUM floor — a deliberate boundary case.
+  - id: "04_reputation_very_high"
+    order: 4
+    description: "Fresh SUCCESS at abuse confidence 95 — top reputation bucket"
+    inputs:
+      reportType: "ACCESSIBLE_RDP"
+      protocol: "TCP"
+      port: 3389
+      findingStatus: "OPEN"
+      observationCount: 1
+      recurredCount: 0
+      daysUnresolved: 0
+      enrichmentPresent: true
+      enrichmentStatus: "SUCCESS"
+      enrichmentFresh: true
+      abuseConfidenceScore: 95
+      ownershipStatus: null
+      ownershipConfidence: null
+      ownershipIsIspAttribution: false
+      sectorAttributable: false
+      sectorNonAttributableReason: "NO_OWNERSHIP"
+      sector: null
+      cvePresent: false
+      kevListed: null
+      kevLookupAvailable: false
+      epssBasisPoints: null
+    expected:
+      scoreBasisPoints: 3500
+      displayScore: 35
+      riskBand: "MEDIUM"
+      factors:
+        iocReputationContext: { applicability: "APPLIED", contributionBasisPoints: 1200, explanationCode: "IOC_REPUTATION_VERY_HIGH", normalizedInputValue: "95" }
+
+  # 5. An expired reputation row is stale context, not clean context. Even a
+  # previously high confidence score contributes nothing once it has aged out.
+  - id: "05_reputation_stale"
+    order: 5
+    description: "Expired reputation row — stale, never clean"
+    inputs:
+      reportType: "ACCESSIBLE_RDP"
+      protocol: "TCP"
+      port: 3389
+      findingStatus: "OPEN"
+      observationCount: 1
+      recurredCount: 0
+      daysUnresolved: 0
+      enrichmentPresent: true
+      enrichmentStatus: "SUCCESS"
+      enrichmentFresh: false
+      abuseConfidenceScore: null
+      ownershipStatus: null
+      ownershipConfidence: null
+      ownershipIsIspAttribution: false
+      sectorAttributable: false
+      sectorNonAttributableReason: "NO_OWNERSHIP"
+      sector: null
+      cvePresent: false
+      kevListed: null
+      kevLookupAvailable: false
+      epssBasisPoints: null
+    expected:
+      scoreBasisPoints: 2300
+      displayScore: 23
+      riskBand: "LOW"
+      factors:
+        iocReputationContext: { applicability: "NOT_AVAILABLE", contributionBasisPoints: 0, explanationCode: "IOC_REPUTATION_STALE" }
+
+  # 6. An abandoned lookup names its own failure exactly, rather than
+  # collapsing into a generic absence.
+  - id: "06_reputation_dead_letter"
+    order: 6
+    description: "Lookup abandoned after repeated failures — named honestly"
+    inputs:
+      reportType: "ACCESSIBLE_RDP"
+      protocol: "TCP"
+      port: 3389
+      findingStatus: "OPEN"
+      observationCount: 1
+      recurredCount: 0
+      daysUnresolved: 0
+      enrichmentPresent: true
+      enrichmentStatus: "DEAD_LETTER"
+      enrichmentFresh: false
+      abuseConfidenceScore: null
+      ownershipStatus: null
+      ownershipConfidence: null
+      ownershipIsIspAttribution: false
+      sectorAttributable: false
+      sectorNonAttributableReason: "NO_OWNERSHIP"
+      sector: null
+      cvePresent: false
+      kevListed: null
+      kevLookupAvailable: false
+      epssBasisPoints: null
+    expected:
+      scoreBasisPoints: 2300
+      displayScore: 23
+      riskBand: "LOW"
+      factors:
+        iocReputationContext: { applicability: "NOT_AVAILABLE", contributionBasisPoints: 0, explanationCode: "IOC_REPUTATION_DEAD_LETTER" }
+
+  # 7. AMENDMENT 2. A RESOLVED ownership row at LOW confidence is not strong
+  # enough to attribute a sector, even though an organization was named. The
+  # confidence itself contributes nothing — it only gates applicability.
+  - id: "07_sector_low_confidence"
+    order: 7
+    description: "RESOLVED ownership at LOW confidence — sector not attributable (amendment 2)"
+    inputs:
+      reportType: "ACCESSIBLE_RDP"
+      protocol: "TCP"
+      port: 3389
+      findingStatus: "OPEN"
+      observationCount: 1
+      recurredCount: 0
+      daysUnresolved: 0
+      enrichmentPresent: false
+      enrichmentStatus: null
+      enrichmentFresh: false
+      abuseConfidenceScore: null
+      ownershipStatus: "RESOLVED"
+      ownershipConfidence: "LOW"
+      ownershipIsIspAttribution: false
+      sectorAttributable: false
+      sectorNonAttributableReason: "LOW_CONFIDENCE"
+      sector: null
+      cvePresent: false
+      kevListed: null
+      kevLookupAvailable: false
+      epssBasisPoints: null
+    expected:
+      scoreBasisPoints: 2300
+      displayScore: 23
+      riskBand: "LOW"
+      factors:
+        sectorCriticality: { applicability: "NOT_AVAILABLE", contributionBasisPoints: 0, explanationCode: "SECTOR_NOT_AVAILABLE_LOW_CONFIDENCE" }
+
+  # 8. An ASN match identifies an ISP, not the victim. Never attributable,
+  # whatever the ISP's own sector happens to be.
+  - id: "08_sector_isp_attribution"
+    order: 8
+    description: "ASN/ISP attribution — never confirmed victim ownership"
+    inputs:
+      reportType: "ACCESSIBLE_RDP"
+      protocol: "TCP"
+      port: 3389
+      findingStatus: "OPEN"
+      observationCount: 1
+      recurredCount: 0
+      daysUnresolved: 0
+      enrichmentPresent: false
+      enrichmentStatus: null
+      enrichmentFresh: false
+      abuseConfidenceScore: null
+      ownershipStatus: "RESOLVED"
+      ownershipConfidence: "LOW"
+      ownershipIsIspAttribution: true
+      sectorAttributable: false
+      sectorNonAttributableReason: "ISP_ATTRIBUTION"
+      sector: null
+      cvePresent: false
+      kevListed: null
+      kevLookupAvailable: false
+      epssBasisPoints: null
+    expected:
+      scoreBasisPoints: 2300
+      displayScore: 23
+      riskBand: "LOW"
+      factors:
+        sectorCriticality: { applicability: "NOT_AVAILABLE", contributionBasisPoints: 0, explanationCode: "SECTOR_NOT_AVAILABLE_ISP_ATTRIBUTION" }
+
+  # 9. AMENDMENT 2, path B. RESOLVED at MEDIUM confidence IS attributable.
+  # Healthcare contributes 1000: 2300 + 1000 = 3300, still LOW — a healthcare
+  # owner alone does not lift an otherwise fresh exposure into MEDIUM.
+  - id: "09_sector_resolved_medium_healthcare"
+    order: 9
+    description: "RESOLVED ownership at MEDIUM confidence onto a healthcare organization"
+    inputs:
+      reportType: "ACCESSIBLE_RDP"
+      protocol: "TCP"
+      port: 3389
+      findingStatus: "OPEN"
+      observationCount: 1
+      recurredCount: 0
+      daysUnresolved: 0
+      enrichmentPresent: false
+      enrichmentStatus: null
+      enrichmentFresh: false
+      abuseConfidenceScore: null
+      ownershipStatus: "RESOLVED"
+      ownershipConfidence: "MEDIUM"
+      ownershipIsIspAttribution: false
+      sectorAttributable: true
+      sectorNonAttributableReason: null
+      sector: "HEALTHCARE"
+      cvePresent: false
+      kevListed: null
+      kevLookupAvailable: false
+      epssBasisPoints: null
+    expected:
+      scoreBasisPoints: 3300
+      displayScore: 33
+      riskBand: "LOW"
+      factors:
+        sectorCriticality: { applicability: "APPLIED", contributionBasisPoints: 1000, explanationCode: "SECTOR_HEALTHCARE", normalizedInputValue: "HEALTHCARE" }
+
+  # 10. AMENDMENT 2, path A. An analyst override onto a CNI organization needs
+  # no confidence check. 2300 + 1300 = 3600 -> MEDIUM.
+  - id: "10_sector_overridden_cni"
+    order: 10
+    description: "Analyst override onto critical national infrastructure"
+    inputs:
+      reportType: "ACCESSIBLE_RDP"
+      protocol: "TCP"
+      port: 3389
+      findingStatus: "OPEN"
+      observationCount: 1
+      recurredCount: 0
+      daysUnresolved: 0
+      enrichmentPresent: false
+      enrichmentStatus: null
+      enrichmentFresh: false
+      abuseConfidenceScore: null
+      ownershipStatus: "OVERRIDDEN"
+      ownershipConfidence: "CONFIRMED"
+      ownershipIsIspAttribution: false
+      sectorAttributable: true
+      sectorNonAttributableReason: null
+      sector: "CRITICAL_NATIONAL_INFRASTRUCTURE"
+      cvePresent: false
+      kevListed: null
+      kevLookupAvailable: false
+      epssBasisPoints: null
+    expected:
+      scoreBasisPoints: 3600
+      displayScore: 36
+      riskBand: "MEDIUM"
+      factors:
+        sectorCriticality: { applicability: "APPLIED", contributionBasisPoints: 1300, explanationCode: "SECTOR_CNI", normalizedInputValue: "CRITICAL_NATIONAL_INFRASTRUCTURE" }
+
+  # 11. AMENDMENT 3. A CLOSED finding cannot have an unresolved duration at
+  # all. NOT_APPLICABLE, distinct from "we could not compute it". The finding
+  # was open for 300 days before closure and none of that time is scored.
+  - id: "11_closed_finding"
+    order: 11
+    description: "Closed finding — unresolved duration does not apply (amendment 3)"
+    inputs:
+      reportType: "ACCESSIBLE_RDP"
+      protocol: "TCP"
+      port: 3389
+      findingStatus: "CLOSED"
+      observationCount: 1
+      recurredCount: 0
+      daysUnresolved: null
+      enrichmentPresent: false
+      enrichmentStatus: null
+      enrichmentFresh: false
+      abuseConfidenceScore: null
+      ownershipStatus: null
+      ownershipConfidence: null
+      ownershipIsIspAttribution: false
+      sectorAttributable: false
+      sectorNonAttributableReason: "NO_OWNERSHIP"
+      sector: null
+      cvePresent: false
+      kevListed: null
+      kevLookupAvailable: false
+      epssBasisPoints: null
+    expected:
+      scoreBasisPoints: 2300
+      displayScore: 23
+      riskBand: "LOW"
+      factors:
+        daysUnresolved: { applicability: "NOT_APPLICABLE", contributionBasisPoints: 0, explanationCode: "DAYS_UNRESOLVED_NOT_APPLICABLE_CLOSED", normalizedInputValue: null }
+
+  # 12. AMENDMENT 3, the case it exists for. This finding was first seen 400
+  # days ago, was closed, and recurred twice — most recently 10 days ago. The
+  # unresolved clock therefore reads 10 days, NOT 400: time spent CLOSED is
+  # never counted as unresolved time.
+  #   800 + 1500 + 800 (5 observations) + 1050 (2 recurrences) + 400 (10 days)
+  #   = 4550 -> MEDIUM
+  - id: "12_recurrence_restarts_episode"
+    order: 12
+    description: "Recurred twice; the current episode began 10 days ago, not 400 (amendment 3)"
+    inputs:
+      reportType: "ACCESSIBLE_RDP"
+      protocol: "TCP"
+      port: 3389
+      findingStatus: "OPEN"
+      observationCount: 5
+      recurredCount: 2
+      daysUnresolved: 10
+      enrichmentPresent: false
+      enrichmentStatus: null
+      enrichmentFresh: false
+      abuseConfidenceScore: null
+      ownershipStatus: null
+      ownershipConfidence: null
+      ownershipIsIspAttribution: false
+      sectorAttributable: false
+      sectorNonAttributableReason: "NO_OWNERSHIP"
+      sector: null
+      cvePresent: false
+      kevListed: null
+      kevLookupAvailable: false
+      epssBasisPoints: null
+    expected:
+      scoreBasisPoints: 4550
+      displayScore: 45
+      riskBand: "MEDIUM"
+      factors:
+        persistence: { applicability: "APPLIED", contributionBasisPoints: 800, explanationCode: "PERSISTENCE_SUSTAINED", normalizedInputValue: "5" }
+        recurrence: { applicability: "APPLIED", contributionBasisPoints: 1050, explanationCode: "RECURRENCE_REPEATED_AFTER_CLOSURE", normalizedInputValue: "2" }
+        daysUnresolved: { applicability: "APPLIED", contributionBasisPoints: 400, explanationCode: "DAYS_UNRESOLVED_7_TO_29", normalizedInputValue: "10" }
+
+  # 13. Entrenched but never closed: 12 observations, no recurrence, open 200
+  # days. 800 + 1500 + 1200 + 0 + 1200 = 4700 -> MEDIUM. Demonstrates G3: a
+  # long-lived exposure is scored through persistence AND duration separately.
+  - id: "13_long_unresolved_entrenched"
+    order: 13
+    description: "Entrenched exposure, open 200 days, never closed"
+    inputs:
+      reportType: "ACCESSIBLE_RDP"
+      protocol: "TCP"
+      port: 3389
+      findingStatus: "OPEN"
+      observationCount: 12
+      recurredCount: 0
+      daysUnresolved: 200
+      enrichmentPresent: false
+      enrichmentStatus: null
+      enrichmentFresh: false
+      abuseConfidenceScore: null
+      ownershipStatus: null
+      ownershipConfidence: null
+      ownershipIsIspAttribution: false
+      sectorAttributable: false
+      sectorNonAttributableReason: "NO_OWNERSHIP"
+      sector: null
+      cvePresent: false
+      kevListed: null
+      kevLookupAvailable: false
+      epssBasisPoints: null
+    expected:
+      scoreBasisPoints: 4700
+      displayScore: 47
+      riskBand: "MEDIUM"
+      factors:
+        persistence: { applicability: "APPLIED", contributionBasisPoints: 1200, explanationCode: "PERSISTENCE_ENTRENCHED", normalizedInputValue: "12" }
+        recurrence: { applicability: "APPLIED", contributionBasisPoints: 0, explanationCode: "RECURRENCE_NONE" }
+        daysUnresolved: { applicability: "APPLIED", contributionBasisPoints: 1200, explanationCode: "DAYS_UNRESOLVED_90_PLUS", normalizedInputValue: "200" }
+
+  # 14. G4/G2 proof: a finding with NO CVE-bearing source at all still reaches
+  # CRITICAL on the seven non-vulnerability factors alone.
+  #   800 + 1500 + 1200 + 1300 + 1200 + 1200 + 1300 = 8500 -> CRITICAL
+  # All three vulnerability factors remain NOT_APPLICABLE and still emit rows.
+  - id: "14_critical_without_any_cve"
+    order: 14
+    description: "Worst-case exposure with no CVE input — CRITICAL on seven factors alone"
+    inputs:
+      reportType: "ACCESSIBLE_RDP"
+      protocol: "TCP"
+      port: 3389
+      findingStatus: "OPEN"
+      observationCount: 20
+      recurredCount: 4
+      daysUnresolved: 365
+      enrichmentPresent: true
+      enrichmentStatus: "SUCCESS"
+      enrichmentFresh: true
+      abuseConfidenceScore: 100
+      ownershipStatus: "OVERRIDDEN"
+      ownershipConfidence: "CONFIRMED"
+      ownershipIsIspAttribution: false
+      sectorAttributable: true
+      sectorNonAttributableReason: null
+      sector: "CRITICAL_NATIONAL_INFRASTRUCTURE"
+      cvePresent: false
+      kevListed: null
+      kevLookupAvailable: false
+      epssBasisPoints: null
+    expected:
+      scoreBasisPoints: 8500
+      displayScore: 85
+      riskBand: "CRITICAL"
+      factors:
+        persistence: { applicability: "APPLIED", contributionBasisPoints: 1200, explanationCode: "PERSISTENCE_ENTRENCHED" }
+        recurrence: { applicability: "APPLIED", contributionBasisPoints: 1300, explanationCode: "RECURRENCE_CHRONIC_AFTER_CLOSURE" }
+        daysUnresolved: { applicability: "APPLIED", contributionBasisPoints: 1200, explanationCode: "DAYS_UNRESOLVED_90_PLUS" }
+        iocReputationContext: { applicability: "APPLIED", contributionBasisPoints: 1200, explanationCode: "IOC_REPUTATION_VERY_HIGH" }
+        sectorCriticality: { applicability: "APPLIED", contributionBasisPoints: 1300, explanationCode: "SECTOR_CNI" }
+        cvePresence: { applicability: "NOT_APPLICABLE", contributionBasisPoints: 0, explanationCode: "CVE_NOT_APPLICABLE_NO_CVE_SOURCE" }
+        kevStatus: { applicability: "NOT_APPLICABLE", contributionBasisPoints: 0, explanationCode: "KEV_NOT_APPLICABLE_NO_CVE" }
+        epssScore: { applicability: "NOT_APPLICABLE", contributionBasisPoints: 0, explanationCode: "EPSS_NOT_APPLICABLE_NO_CVE" }
+
+  # 15. An unmapped service is NOT_AVAILABLE, never a fallback score. Only the
+  # 800-point report-class assertion survives, so this is the one shape that
+  # can legitimately land in INFORMATIONAL — an exposed RDP service never can
+  # (G2).
+  - id: "15_unmapped_service_port"
+    order: 15
+    description: "Report type known, service/port unmapped — no guessed exposure value"
+    inputs:
+      reportType: "ACCESSIBLE_RDP"
+      protocol: "TCP"
+      port: 22
+      findingStatus: "OPEN"
+      observationCount: 1
+      recurredCount: 0
+      daysUnresolved: 0
+      enrichmentPresent: false
+      enrichmentStatus: null
+      enrichmentFresh: false
+      abuseConfidenceScore: null
+      ownershipStatus: null
+      ownershipConfidence: null
+      ownershipIsIspAttribution: false
+      sectorAttributable: false
+      sectorNonAttributableReason: "NO_OWNERSHIP"
+      sector: null
+      cvePresent: false
+      kevListed: null
+      kevLookupAvailable: false
+      epssBasisPoints: null
+    expected:
+      scoreBasisPoints: 800
+      displayScore: 8
+      riskBand: "INFORMATIONAL"
+      factors:
+        exposureCriticality: { applicability: "NOT_AVAILABLE", contributionBasisPoints: 0, explanationCode: "EXPOSURE_CRITICALITY_NOT_AVAILABLE", normalizedInputValue: "TCP/22" }
+
+  # 16. AMENDMENT 3, step 6. An open finding whose episode start is missing,
+  # malformed or in the future fails closed as NOT_AVAILABLE — never as
+  # "0 days", which would read as a brand-new exposure.
+  - id: "16_invalid_episode_timestamp"
+    order: 16
+    description: "Open finding with an unusable episode start — fails closed (amendment 3)"
+    inputs:
+      reportType: "ACCESSIBLE_RDP"
+      protocol: "TCP"
+      port: 3389
+      findingStatus: "OPEN"
+      observationCount: 1
+      recurredCount: 0
+      daysUnresolved: null
+      enrichmentPresent: false
+      enrichmentStatus: null
+      enrichmentFresh: false
+      abuseConfidenceScore: null
+      ownershipStatus: null
+      ownershipConfidence: null
+      ownershipIsIspAttribution: false
+      sectorAttributable: false
+      sectorNonAttributableReason: "NO_OWNERSHIP"
+      sector: null
+      cvePresent: false
+      kevListed: null
+      kevLookupAvailable: false
+      epssBasisPoints: null
+    expected:
+      scoreBasisPoints: 2300
+      displayScore: 23
+      riskBand: "LOW"
+      factors:
+        daysUnresolved: { applicability: "NOT_AVAILABLE", contributionBasisPoints: 0, explanationCode: "DAYS_UNRESOLVED_INVALID_TIMESTAMP", normalizedInputValue: null }
+
+  # 17. No immutable occurrence evidence at asOf. Fails closed as missing
+  # context rather than assuming a single observation.
+  - id: "17_no_occurrence_evidence"
+    order: 17
+    description: "No occurrence evidence at the evaluation time — never assumed to be one"
+    inputs:
+      reportType: "ACCESSIBLE_RDP"
+      protocol: "TCP"
+      port: 3389
+      findingStatus: "OPEN"
+      observationCount: 0
+      recurredCount: 0
+      daysUnresolved: 0
+      enrichmentPresent: false
+      enrichmentStatus: null
+      enrichmentFresh: false
+      abuseConfidenceScore: null
+      ownershipStatus: null
+      ownershipConfidence: null
+      ownershipIsIspAttribution: false
+      sectorAttributable: false
+      sectorNonAttributableReason: "NO_OWNERSHIP"
+      sector: null
+      cvePresent: false
+      kevListed: null
+      kevLookupAvailable: false
+      epssBasisPoints: null
+    expected:
+      scoreBasisPoints: 2300
+      displayScore: 23
+      riskBand: "LOW"
+      factors:
+        persistence: { applicability: "NOT_AVAILABLE", contributionBasisPoints: 0, explanationCode: "PERSISTENCE_NO_EVIDENCE" }
+
+  # 18. An organization with an explicitly UNKNOWN sector is missing context,
+  # not the least risky sector. It scores 0 as NOT_AVAILABLE, never 300 as
+  # GENERAL.
+  - id: "18_unknown_sector"
+    order: 18
+    description: "Owning organization has no recorded sector — unavailable, not GENERAL"
+    inputs:
+      reportType: "ACCESSIBLE_RDP"
+      protocol: "TCP"
+      port: 3389
+      findingStatus: "OPEN"
+      observationCount: 1
+      recurredCount: 0
+      daysUnresolved: 0
+      enrichmentPresent: false
+      enrichmentStatus: null
+      enrichmentFresh: false
+      abuseConfidenceScore: null
+      ownershipStatus: "RESOLVED"
+      ownershipConfidence: "HIGH"
+      ownershipIsIspAttribution: false
+      sectorAttributable: false
+      sectorNonAttributableReason: "UNKNOWN_SECTOR"
+      sector: null
+      cvePresent: false
+      kevListed: null
+      kevLookupAvailable: false
+      epssBasisPoints: null
+    expected:
+      scoreBasisPoints: 2300
+      displayScore: 23
+      riskBand: "LOW"
+      factors:
+        sectorCriticality: { applicability: "NOT_AVAILABLE", contributionBasisPoints: 0, explanationCode: "SECTOR_NOT_AVAILABLE_UNKNOWN_SECTOR" }
+
+  # 19. Every factor at its cap simultaneously, including the deferred
+  # CVE-bearing shape. Proves the additive total lands on exactly 10000 and
+  # that the scale cannot be exceeded.
+  #   800+1500+1200+1300+1200+1200+1300+300+800+400 = 10000
+  - id: "19_all_factors_at_cap"
+    order: 19
+    description: "Every factor at its cap — the additive total is exactly 10000"
+    inputs:
+      reportType: "ACCESSIBLE_RDP"
+      protocol: "TCP"
+      port: 3389
+      findingStatus: "OPEN"
+      observationCount: 40
+      recurredCount: 9
+      daysUnresolved: 3650
+      enrichmentPresent: true
+      enrichmentStatus: "SUCCESS"
+      enrichmentFresh: true
+      abuseConfidenceScore: 100
+      ownershipStatus: "OVERRIDDEN"
+      ownershipConfidence: "CONFIRMED"
+      ownershipIsIspAttribution: false
+      sectorAttributable: true
+      sectorNonAttributableReason: null
+      sector: "CRITICAL_NATIONAL_INFRASTRUCTURE"
+      cvePresent: true
+      kevListed: true
+      kevLookupAvailable: true
+      epssBasisPoints: 9800
+    expected:
+      scoreBasisPoints: 10000
+      displayScore: 100
+      riskBand: "CRITICAL"
+      factors:
+        cvePresence: { applicability: "APPLIED", contributionBasisPoints: 300, explanationCode: "CVE_PRESENT" }
+        kevStatus: { applicability: "APPLIED", contributionBasisPoints: 800, explanationCode: "KEV_LISTED" }
+        epssScore: { applicability: "APPLIED", contributionBasisPoints: 400, explanationCode: "EPSS_VERY_HIGH" }

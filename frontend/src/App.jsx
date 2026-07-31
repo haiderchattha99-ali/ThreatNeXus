@@ -15,7 +15,7 @@ import Notifications from "./pages/Notifications";
 import Analytics from "./pages/Analytics";
 import Organizations from "./pages/Organizations";
 import Settings from "./pages/Settings";
-import { PERMISSIONS } from './utils/permissions'
+import { PAGE_CAPABILITIES } from './utils/permissions'
 import './App.css'
 
 function App() {
@@ -39,7 +39,7 @@ function App() {
         <Route
           path="/*"
           element={
-            <ProtectedRoute>
+            <ProtectedRoute requireAuthOnly>
               <Box sx={{ display: 'flex' }}>
                 <Navbar />
                 <Sidebar />
@@ -56,7 +56,7 @@ function App() {
   <Route
     path="/dashboard"
     element={
-      <ProtectedRoute allowedRoles={PERMISSIONS.dashboard}>
+      <ProtectedRoute requiredCapability={PAGE_CAPABILITIES.dashboard}>
         <Dashboard />
       </ProtectedRoute>
     }
@@ -65,7 +65,7 @@ function App() {
   <Route
     path="/threats"
     element={
-      <ProtectedRoute allowedRoles={PERMISSIONS.threats}>
+      <ProtectedRoute requiredCapability={PAGE_CAPABILITIES.threats}>
         <Threats />
       </ProtectedRoute>
     }
@@ -74,7 +74,7 @@ function App() {
   <Route
     path="/upload"
     element={
-      <ProtectedRoute allowedRoles={PERMISSIONS.upload}>
+      <ProtectedRoute requiredCapability={PAGE_CAPABILITIES.upload}>
         <Upload />
       </ProtectedRoute>
     }
@@ -83,7 +83,7 @@ function App() {
   <Route
     path="/cases"
     element={
-      <ProtectedRoute allowedRoles={PERMISSIONS.cases}>
+      <ProtectedRoute requiredCapability={PAGE_CAPABILITIES.cases}>
         <Cases />
       </ProtectedRoute>
     }
@@ -92,7 +92,7 @@ function App() {
   <Route
     path="/analytics"
     element={
-      <ProtectedRoute allowedRoles={PERMISSIONS.analytics}>
+      <ProtectedRoute requiredCapability={PAGE_CAPABILITIES.analytics}>
         <Analytics />
       </ProtectedRoute>
     }
@@ -101,7 +101,7 @@ function App() {
   <Route
     path="/notifications"
     element={
-      <ProtectedRoute allowedRoles={PERMISSIONS.notifications}>
+      <ProtectedRoute requiredCapability={PAGE_CAPABILITIES.notifications}>
         <Notifications />
       </ProtectedRoute>
     }
@@ -110,7 +110,7 @@ function App() {
   <Route
     path="/organizations"
     element={
-      <ProtectedRoute allowedRoles={PERMISSIONS.organizations}>
+      <ProtectedRoute requiredCapability={PAGE_CAPABILITIES.organizations}>
         <Organizations />
       </ProtectedRoute>
     }
@@ -119,7 +119,7 @@ function App() {
   <Route
     path="/settings"
     element={
-      <ProtectedRoute allowedRoles={PERMISSIONS.settings}>
+      <ProtectedRoute requiredCapability={PAGE_CAPABILITIES.settings}>
         <Settings />
       </ProtectedRoute>
     }
@@ -128,7 +128,7 @@ function App() {
   <Route
     path="/profile"
     element={
-      <ProtectedRoute allowedRoles={PERMISSIONS.profile}>
+      <ProtectedRoute requireAuthOnly>
         <Profile />
       </ProtectedRoute>
     }

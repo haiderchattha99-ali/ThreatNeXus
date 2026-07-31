@@ -23,7 +23,7 @@ import {
 } from 'react-icons/fi'
 
 import { useAuth } from '../hooks/useAuth'
-import { hasPermission } from '../utils/permissions'
+import { hasCapability, PAGE_CAPABILITIES } from '../utils/permissions'
 
 export const DRAWER_WIDTH = 252
 
@@ -81,10 +81,14 @@ const menuItems = [
 export const Sidebar = () => {
   const location = useLocation()
   const navigate = useNavigate()
-  const { user } = useAuth()
+  const { capabilities } = useAuth()
 
+  // Same decision source as route protection (App.jsx's ProtectedRoute):
+  // PAGE_CAPABILITIES + the capabilities array from the validated session.
+  // A page never appears in the sidebar unless the matching route would also
+  // render for this user.
   const visibleMenu = menuItems.filter((item) =>
-    hasPermission(user?.role, item.permission)
+    hasCapability(capabilities, PAGE_CAPABILITIES[item.permission])
   )
 
   return (

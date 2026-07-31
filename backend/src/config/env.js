@@ -1,6 +1,36 @@
 "use strict";
 
 const dotenv = require("dotenv");
+const {
+  AbuseIpdbConfigError,
+  DEFAULT_BASE_URL: ABUSEIPDB_DEFAULT_BASE_URL,
+  DEFAULT_TIMEOUT_MS: ABUSEIPDB_DEFAULT_TIMEOUT_MS,
+  DEFAULT_MAX_AGE_DAYS: ABUSEIPDB_DEFAULT_MAX_AGE_DAYS,
+  validateBaseUrl: validateAbuseIpdbBaseUrl,
+  validateTimeoutMs: validateAbuseIpdbTimeoutMs,
+  validateMaxAgeDays: validateAbuseIpdbMaxAgeDays,
+} = require("../services/enrichment/abuseIpdbConfig");
+const {
+  VulnerabilityConfigError,
+  NVD_DEFAULT_BASE_URL,
+  NVD_DEFAULT_TIMEOUT_MS,
+  validateNvdBaseUrl,
+  validateNvdTimeoutMs,
+  CISA_KEV_DEFAULT_URL,
+  CISA_KEV_DEFAULT_TIMEOUT_MS,
+  validateCisaKevUrl,
+  validateCisaKevTimeoutMs,
+  FIRST_EPSS_DEFAULT_BASE_URL,
+  FIRST_EPSS_DEFAULT_TIMEOUT_MS,
+  validateFirstEpssBaseUrl,
+  validateFirstEpssTimeoutMs,
+  DEFAULT_BATCH_SIZE: VULNERABILITY_DEFAULT_BATCH_SIZE,
+  validateBatchSize: validateVulnerabilityBatchSize,
+  DEFAULT_LEASE_SECONDS: VULNERABILITY_DEFAULT_LEASE_SECONDS,
+  validateLeaseSeconds: validateVulnerabilityLeaseSeconds,
+  DEFAULT_MAX_ATTEMPTS: VULNERABILITY_DEFAULT_MAX_ATTEMPTS,
+  validateMaxAttempts: validateVulnerabilityMaxAttempts,
+} = require("../services/vulnerability/vulnerabilityConfig");
 
 dotenv.config();
 
@@ -114,14 +144,115 @@ function buildConfig() {
     { strict: true }
   );
 
-  // Phase 2 values: optional in Phase 0, never required, invalid input falls
-  // back to the default rather than blocking startup.
-  const abuseIpdbTimeoutMs = parseOptionalInt(
-    "ABUSEIPDB_TIMEOUT_MS",
-    process.env.ABUSEIPDB_TIMEOUT_MS,
-    5000,
-    { strict: false }
-  );
+  // Phase 2 (P2-T2c) — the API key stays optional at startup (a missing key
+  // only disables the provider at lookup time, never blocks the app from
+  // starting), but base URL/timeout/max-age are now real request parameters
+  // sent to a live third party, so an invalid value fails configuration
+  // validation loudly rather than silently substituting a default. Bounds
+  // and defaults are shared with abuseIpdbProvider.js via abuseIpdbConfig.js
+  // so the two can never drift apart.
+  let abuseIpdbBaseUrl;
+  let abuseIpdbTimeoutMs;
+  let abuseIpdbMaxAgeDays;
+  try {
+    abuseIpdbBaseUrl = validateAbuseIpdbBaseUrl(
+      requireString(process.env.ABUSEIPDB_BASE_URL) || ABUSEIPDB_DEFAULT_BASE_URL
+    );
+    abuseIpdbTimeoutMs = validateAbuseIpdbTimeoutMs(
+      parseOptionalInt("ABUSEIPDB_TIMEOUT_MS", process.env.ABUSEIPDB_TIMEOUT_MS, ABUSEIPDB_DEFAULT_TIMEOUT_MS, {
+        strict: true,
+      })
+    );
+    abuseIpdbMaxAgeDays = validateAbuseIpdbMaxAgeDays(
+      parseOptionalInt(
+        "ABUSEIPDB_MAX_AGE_DAYS",
+        process.env.ABUSEIPDB_MAX_AGE_DAYS,
+        ABUSEIPDB_DEFAULT_MAX_AGE_DAYS,
+        { strict: true }
+      )
+    );
+  } catch (err) {
+    // Normalized to ConfigError so every configuration failure this module
+    // throws is the same class, whatever variable caused it. No variable
+    // value is ever included — validateAbuseIpdb*'s own messages never
+    // interpolate the raw input, only the variable name and its bounds.
+    throw new ConfigError(err instanceof AbuseIpdbConfigError ? err.message : `Invalid AbuseIPDB configuration: ${err.message}`);
+  }
+
+  // Phase 2 (§2B, Packet B) — vulnerability provider configuration. NVD_API_KEY
+  // stays optional at startup exactly like ABUSEIPDB_API_KEY: a missing key
+  // only affects NvdCveProvider.lookup() (the public rate limit applies), never
+  // whether the app starts. CISA KEV and FIRST EPSS take no key at all. Base
+  // URL/timeout are real request parameters sent to a live third party, so an
+  // invalid value fails configuration validation loudly rather than silently
+  // substituting a default — the same reasoning P2-T2c already applied to
+  // AbuseIPDB.
+  let nvdBaseUrl;
+  let nvdTimeoutMs;
+  let cisaKevUrl;
+  let cisaKevTimeoutMs;
+  let firstEpssBaseUrl;
+  let firstEpssTimeoutMs;
+  let vulnerabilityBatchSize;
+  let vulnerabilityLeaseSeconds;
+  let vulnerabilityMaxAttempts;
+  try {
+    nvdBaseUrl = validateNvdBaseUrl(requireString(process.env.NVD_BASE_URL) || NVD_DEFAULT_BASE_URL);
+    nvdTimeoutMs = validateNvdTimeoutMs(
+      parseOptionalInt("NVD_TIMEOUT_MS", process.env.NVD_TIMEOUT_MS, NVD_DEFAULT_TIMEOUT_MS, { strict: true })
+    );
+    cisaKevUrl = validateCisaKevUrl(requireString(process.env.CISA_KEV_URL) || CISA_KEV_DEFAULT_URL);
+    cisaKevTimeoutMs = validateCisaKevTimeoutMs(
+      parseOptionalInt("CISA_KEV_TIMEOUT_MS", process.env.CISA_KEV_TIMEOUT_MS, CISA_KEV_DEFAULT_TIMEOUT_MS, {
+        strict: true,
+      })
+    );
+    firstEpssBaseUrl = validateFirstEpssBaseUrl(
+      requireString(process.env.FIRST_EPSS_BASE_URL) || FIRST_EPSS_DEFAULT_BASE_URL
+    );
+    firstEpssTimeoutMs = validateFirstEpssTimeoutMs(
+      parseOptionalInt(
+        "FIRST_EPSS_TIMEOUT_MS",
+        process.env.FIRST_EPSS_TIMEOUT_MS,
+        FIRST_EPSS_DEFAULT_TIMEOUT_MS,
+        { strict: true }
+      )
+    );
+    vulnerabilityBatchSize = validateVulnerabilityBatchSize(
+      parseOptionalInt(
+        "VULNERABILITY_BATCH_SIZE",
+        process.env.VULNERABILITY_BATCH_SIZE,
+        VULNERABILITY_DEFAULT_BATCH_SIZE,
+        { strict: true }
+      )
+    );
+    vulnerabilityLeaseSeconds = validateVulnerabilityLeaseSeconds(
+      parseOptionalInt(
+        "VULNERABILITY_LEASE_SECONDS",
+        process.env.VULNERABILITY_LEASE_SECONDS,
+        VULNERABILITY_DEFAULT_LEASE_SECONDS,
+        { strict: true }
+      )
+    );
+    vulnerabilityMaxAttempts = validateVulnerabilityMaxAttempts(
+      parseOptionalInt(
+        "VULNERABILITY_MAX_ATTEMPTS",
+        process.env.VULNERABILITY_MAX_ATTEMPTS,
+        VULNERABILITY_DEFAULT_MAX_ATTEMPTS,
+        { strict: true }
+      )
+    );
+  } catch (err) {
+    throw new ConfigError(
+      err instanceof VulnerabilityConfigError
+        ? err.message
+        : `Invalid vulnerability enrichment configuration: ${err.message}`
+    );
+  }
+
+  // Declared, not consumed by anything: no code reads this value — the TTL
+  // policy (enrichmentTtlPolicy.js) is a pure module configured through
+  // explicit policy input, never through the environment.
   const abuseIpdbCacheTtlHours = parseOptionalInt(
     "ABUSEIPDB_CACHE_TTL_HOURS",
     process.env.ABUSEIPDB_CACHE_TTL_HOURS,
@@ -146,13 +277,29 @@ function buildConfig() {
     // surface. The former SEED_ADMIN_EMAIL / SEED_DEFAULT_PASSWORD entries
     // belonged to a seed script that never existed.
 
-    // Phase 2 — declared, not consumed by anything in Phase 0.
+    // Phase 2 (P2-T2c) — real AbuseIPDBProvider configuration. API key is
+    // optional (never required to start the app); never logged or included
+    // in any error message this module throws.
     IOC_ENRICHMENT_PROVIDER: process.env.IOC_ENRICHMENT_PROVIDER || "mock",
     ABUSEIPDB_API_KEY: process.env.ABUSEIPDB_API_KEY || "",
-    ABUSEIPDB_BASE_URL:
-      process.env.ABUSEIPDB_BASE_URL || "https://api.abuseipdb.com/api/v2",
+    ABUSEIPDB_BASE_URL: abuseIpdbBaseUrl,
     ABUSEIPDB_TIMEOUT_MS: abuseIpdbTimeoutMs,
+    ABUSEIPDB_MAX_AGE_DAYS: abuseIpdbMaxAgeDays,
     ABUSEIPDB_CACHE_TTL_HOURS: abuseIpdbCacheTtlHours,
+
+    // Phase 2 (§2B, Packet B) — vulnerability provider/runtime configuration.
+    // NVD_API_KEY is optional and never required to start the app; never
+    // logged or included in any error message this module throws.
+    NVD_API_KEY: process.env.NVD_API_KEY || "",
+    NVD_BASE_URL: nvdBaseUrl,
+    NVD_TIMEOUT_MS: nvdTimeoutMs,
+    CISA_KEV_URL: cisaKevUrl,
+    CISA_KEV_TIMEOUT_MS: cisaKevTimeoutMs,
+    FIRST_EPSS_BASE_URL: firstEpssBaseUrl,
+    FIRST_EPSS_TIMEOUT_MS: firstEpssTimeoutMs,
+    VULNERABILITY_BATCH_SIZE: vulnerabilityBatchSize,
+    VULNERABILITY_LEASE_SECONDS: vulnerabilityLeaseSeconds,
+    VULNERABILITY_MAX_ATTEMPTS: vulnerabilityMaxAttempts,
 
     // Phase 5 — declared, not consumed by anything in Phase 0. Off by default.
     AI_ENABLED: (process.env.AI_ENABLED || "false").trim().toLowerCase() === "true",

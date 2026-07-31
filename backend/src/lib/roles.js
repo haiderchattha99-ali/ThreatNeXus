@@ -27,6 +27,38 @@ const CAPABILITIES = Object.freeze({
   MANAGE_USERS: "manage:users",
   MANAGE_SYSTEM: "manage:system",
   DELETE_RECORDS: "delete:records",
+
+  // Phase 2 (P2-T1) — ownership mapping. Additive, non-hierarchical: neither
+  // grant is implied by an existing capability, matching this file's
+  // explicit-grants-per-role convention.
+  MANAGE_OWNERSHIP_MAPPINGS: "manage:ownership-mappings",
+  OVERRIDE_FINDING_OWNERSHIP: "override:finding-ownership",
+
+  // Phase 2 (P2-T2e-2) — IOC enrichment. Additive, non-hierarchical, same
+  // convention as above. TRIGGER_FINDING_ENRICHMENT lets an analyst ask for a
+  // fresh/forced lookup on one Finding; EXECUTE_ENRICHMENT_BATCH lets an admin
+  // run the bounded worker against the durable queue. Enrichment reads reuse
+  // READ_FINDINGS rather than a new capability — this table decides only
+  // which roles may cause work or provider spend, not which may see results.
+  TRIGGER_FINDING_ENRICHMENT: "trigger:finding-enrichment",
+  EXECUTE_ENRICHMENT_BATCH: "execute:enrichment-batch",
+
+  // Phase 2 (P2-T3) — deterministic risk scoring. Additive, non-hierarchical,
+  // same convention. Reading a risk score reuses READ_FINDINGS (a score is
+  // part of understanding a finding); only *causing* a recalculation needs
+  // this grant. Nothing here lets a caller influence the formula — weights
+  // are code constants and no endpoint accepts a weight, score or band.
+  RECALCULATE_FINDING_RISK: "recalculate:finding-risk",
+
+  // Phase 2 (§2B, Packet B) — vulnerability association/enrichment HTTP
+  // surface. Additive, non-hierarchical, same convention as every other
+  // grant in this table. Reads reuse READ_FINDINGS — this table decides only
+  // which roles may assert/retract a CVE association, trigger a manual
+  // enrichment lookup, or run the administrator batch worker, never which
+  // roles may see the result.
+  MANAGE_FINDING_VULNERABILITIES: "manage:finding-vulnerabilities",
+  TRIGGER_VULNERABILITY_ENRICHMENT: "trigger:vulnerability-enrichment",
+  EXECUTE_VULNERABILITY_ENRICHMENT_BATCH: "execute:vulnerability-enrichment-batch",
 });
 
 const CAPABILITY_VALUES = Object.freeze(Object.values(CAPABILITIES));
@@ -53,6 +85,22 @@ const ROLE_CAPABILITIES = Object.freeze({
     CAPABILITIES.INGEST_REPORTS,
     CAPABILITIES.TRIAGE_FINDINGS,
     CAPABILITIES.MANAGE_CASES,
+    // P2-T1 — an analyst may correct ownership on a Finding they triage, but
+    // may not touch the AssetMapping registry itself (that stays ADMIN-only
+    // below, via CAPABILITY_VALUES).
+    CAPABILITIES.OVERRIDE_FINDING_OWNERSHIP,
+    // P2-T2e-2 — an analyst may request/force re-enrichment on a Finding they
+    // triage, but may not run the administrator bounded-batch worker (that
+    // stays ADMIN-only below, via CAPABILITY_VALUES).
+    CAPABILITIES.TRIGGER_FINDING_ENRICHMENT,
+    // P2-T3 — an analyst may recalculate risk on a Finding they triage.
+    // REVIEWER and VIEWER may read scores but never cause a recalculation.
+    CAPABILITIES.RECALCULATE_FINDING_RISK,
+    // §2B Packet B — an analyst may assert/retract a CVE association and
+    // request manual enrichment, but may not run the administrator bounded
+    // batch worker (that stays ADMIN-only below, via CAPABILITY_VALUES).
+    CAPABILITIES.MANAGE_FINDING_VULNERABILITIES,
+    CAPABILITIES.TRIGGER_VULNERABILITY_ENRICHMENT,
   ]),
   ADMIN: Object.freeze([...CAPABILITY_VALUES]),
 });

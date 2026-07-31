@@ -112,7 +112,21 @@ describe("capability constants", () => {
         "delete:records",
       ])
     );
-    expect(CAPABILITY_VALUES).toHaveLength(10);
+    // + P2-T1 ownership + P2-T2e-2 enrichment + P2-T3 risk recalculation
+    // + §2B Packet B vulnerability association/enrichment/batch
+    expect(CAPABILITY_VALUES).toHaveLength(10 + 2 + 2 + 1 + 3);
+  });
+
+  it("defines the P2-T1 ownership capability set", () => {
+    expect(CAPABILITY_VALUES).toEqual(
+      expect.arrayContaining(["manage:ownership-mappings", "override:finding-ownership"])
+    );
+  });
+
+  it("defines the P2-T2e-2 enrichment capability set", () => {
+    expect(CAPABILITY_VALUES).toEqual(
+      expect.arrayContaining(["trigger:finding-enrichment", "execute:enrichment-batch"])
+    );
   });
 
   it("defines a grant list for every role", () => {
@@ -174,6 +188,8 @@ describe("VIEWER capabilities", () => {
       C.MANAGE_USERS,
       C.MANAGE_SYSTEM,
       C.DELETE_RECORDS,
+      C.TRIGGER_FINDING_ENRICHMENT,
+      C.EXECUTE_ENRICHMENT_BATCH,
     ].forEach((capability) => {
       expect(hasCapability("VIEWER", capability)).toBe(false);
     });
@@ -220,6 +236,74 @@ describe("ANALYST capabilities", () => {
   it("does not inherit REVIEWER approval capabilities", () => {
     expect(hasCapability("ANALYST", C.REVIEW_NOTIFICATIONS)).toBe(false);
     expect(hasCapability("ANALYST", C.REVIEW_AI_SUGGESTIONS)).toBe(false);
+  });
+
+  // P2-T1: an analyst may correct ownership on a Finding but not manage the
+  // AssetMapping registry itself.
+  it("can override finding ownership but not manage the mapping registry", () => {
+    expect(hasCapability("ANALYST", C.OVERRIDE_FINDING_OWNERSHIP)).toBe(true);
+    expect(hasCapability("ANALYST", C.MANAGE_OWNERSHIP_MAPPINGS)).toBe(false);
+  });
+
+  // P2-T2e-2: an analyst may trigger/force re-enrichment on a Finding but not
+  // run the administrator bounded-batch worker.
+  it("can trigger finding enrichment but not execute the enrichment batch worker", () => {
+    expect(hasCapability("ANALYST", C.TRIGGER_FINDING_ENRICHMENT)).toBe(true);
+    expect(hasCapability("ANALYST", C.EXECUTE_ENRICHMENT_BATCH)).toBe(false);
+  });
+
+  // P2-T3: an analyst may recalculate risk on a Finding they triage. No role
+  // — including ADMIN — can influence the score itself: the weights are frozen
+  // code constants and no endpoint accepts a weight, score or band.
+  it("can recalculate finding risk", () => {
+    expect(hasCapability("ANALYST", C.RECALCULATE_FINDING_RISK)).toBe(true);
+  });
+});
+
+describe("P2-T1 ownership capability grants", () => {
+  it("manage:ownership-mappings is ADMIN only", () => {
+    expect(hasCapability("ADMIN", C.MANAGE_OWNERSHIP_MAPPINGS)).toBe(true);
+    expect(hasCapability("ANALYST", C.MANAGE_OWNERSHIP_MAPPINGS)).toBe(false);
+    expect(hasCapability("REVIEWER", C.MANAGE_OWNERSHIP_MAPPINGS)).toBe(false);
+    expect(hasCapability("VIEWER", C.MANAGE_OWNERSHIP_MAPPINGS)).toBe(false);
+  });
+
+  it("override:finding-ownership is ADMIN and ANALYST only", () => {
+    expect(hasCapability("ADMIN", C.OVERRIDE_FINDING_OWNERSHIP)).toBe(true);
+    expect(hasCapability("ANALYST", C.OVERRIDE_FINDING_OWNERSHIP)).toBe(true);
+    expect(hasCapability("REVIEWER", C.OVERRIDE_FINDING_OWNERSHIP)).toBe(false);
+    expect(hasCapability("VIEWER", C.OVERRIDE_FINDING_OWNERSHIP)).toBe(false);
+  });
+});
+
+describe("P2-T2e-2 enrichment capability grants", () => {
+  it("trigger:finding-enrichment is ADMIN and ANALYST only", () => {
+    expect(hasCapability("ADMIN", C.TRIGGER_FINDING_ENRICHMENT)).toBe(true);
+    expect(hasCapability("ANALYST", C.TRIGGER_FINDING_ENRICHMENT)).toBe(true);
+    expect(hasCapability("REVIEWER", C.TRIGGER_FINDING_ENRICHMENT)).toBe(false);
+    expect(hasCapability("VIEWER", C.TRIGGER_FINDING_ENRICHMENT)).toBe(false);
+  });
+
+  it("execute:enrichment-batch is ADMIN only", () => {
+    expect(hasCapability("ADMIN", C.EXECUTE_ENRICHMENT_BATCH)).toBe(true);
+    expect(hasCapability("ANALYST", C.EXECUTE_ENRICHMENT_BATCH)).toBe(false);
+    expect(hasCapability("REVIEWER", C.EXECUTE_ENRICHMENT_BATCH)).toBe(false);
+    expect(hasCapability("VIEWER", C.EXECUTE_ENRICHMENT_BATCH)).toBe(false);
+  });
+});
+
+describe("P2-T3 risk capability grants", () => {
+  it("recalculate:finding-risk is ADMIN and ANALYST only", () => {
+    expect(hasCapability("ADMIN", C.RECALCULATE_FINDING_RISK)).toBe(true);
+    expect(hasCapability("ANALYST", C.RECALCULATE_FINDING_RISK)).toBe(true);
+    expect(hasCapability("REVIEWER", C.RECALCULATE_FINDING_RISK)).toBe(false);
+    expect(hasCapability("VIEWER", C.RECALCULATE_FINDING_RISK)).toBe(false);
+  });
+
+  it("reading a risk score needs only read:findings — every role that sees a finding sees why", () => {
+    ["ADMIN", "ANALYST", "REVIEWER", "VIEWER"].forEach((role) => {
+      expect(hasCapability(role, C.READ_FINDINGS)).toBe(true);
+    });
   });
 });
 
