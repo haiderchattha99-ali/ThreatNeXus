@@ -26,18 +26,203 @@ _Operational status / handoff note. Authoritative plan lives in
   immediately below is the versioned decision record for it. Findings are now scored automatically
   at ingestion, on enrichment completion and on ownership change, and analysts can read a score with
   its stored explanation or trigger a manual recalculation.
-- **BUILD_PLAN §2B — vulnerability enrichment (CISA KEV, FIRST EPSS, NVD/CVE): Packet A and Packet B
-  are both complete. §2B as a whole is still NOT fully release-gated.** See "Phase 2 §2B Packet B
-  complete" and "Phase 2 §2B Packet A complete" immediately below for exactly what landed and what
-  has not. It is a **separate path** from IOC reputation enrichment; neither substitutes for the
-  other. **No CVE is ever inferred from an exposed RDP port, banner, hostname, CPE or OS guess** —
-  the only source of a CVE association is an explicit analyst assertion.
+- **BUILD_PLAN §2B — vulnerability enrichment (CISA KEV, FIRST EPSS, NVD/CVE): COMPLETE AND
+  RELEASE-GATED.** Packets A, B and C have all landed; see "Phase 2 §2B COMPLETE AND RELEASE-GATED"
+  immediately below. It is a **separate path** from IOC reputation enrichment; neither substitutes
+  for the other. **No CVE is ever inferred from an exposed RDP port, banner, hostname, CPE or OS
+  guess** — the only source of a CVE association is an explicit analyst assertion.
 - **Phase 2 gate status:** the §2C half is met — the rendered explanation reconstructs exactly from
   stored factor rows (proven in `riskScoringConcurrency.test.js` case 13), and score ordering matches
   hand-recomputation on a 19-scenario manually authored sample (`npm run eval:risk`). The §2A half
-  was met in P2-T2c/P2-T2e-1. The gate **still cannot close**: Packet B ships the application/HTTP
-  surface, but `eval:vulnerability` (manually authored vulnerability ground truth), mutation checks
-  and the complete §2B release gate are Packet C work.
+  was met in P2-T2c/P2-T2e-1. The §2B half is now met by `npm run eval:vulnerability` (41 scenarios,
+  992 hand-authored assertions) and `npm run eval:vulnerability:mutation` (12/12 contract mutations
+  detected).
+
+## Phase 2 §2B COMPLETE AND RELEASE-GATED — Packet C (2026-07-31)
+
+Packet C adds no production feature. It adds the **evidence that §2B is correct**: a manually
+authored executable ground truth, an evaluator that drives real services against real PostgreSQL, a
+mutation gate that proves the evaluator would fail if the contract drifted, and an end-to-end release
+proof over the real HTTP surface.
+
+**Zero schema change.** `schema.prisma` is byte-identical to `54f8306`, the migration directory is
+unchanged, and the count remains exactly **14**. Risk v1 remains `risk-additive-bucketed-v1` /
+`v1.0.0`; no weight, cap, bucket, band or fingerprint was touched.
+
+### The §2B contract, as gated
+
+- **Explicit analyst-verified CVE association only.** `VulnerabilityEvidenceSource` has exactly one
+  value, `ANALYST_VERIFIED`. There is no NVD-derived path, no CPE/product/vendor matching, and no
+  inference from report type, port, protocol, banner, hostname or OS guess — proven by ground-truth
+  scenario `A06` and mutation `M12`.
+- **Append-only attach / remove / re-attach history.** Every transition appends a row and supersedes
+  the previous current one in the same SERIALIZABLE transaction; `currentAssociationKey` makes "at
+  most one current row per (Finding, CVE)" a database unique constraint. A duplicate attach writes
+  nothing (`A03`). A removal retracts by appending, never by deleting (`A04`, `A05`).
+- **NVD is normalized display metadata with no numeric role.** SUCCESS, `NOT_FOUND` and failure all
+  leave every Risk v1 number unchanged, and NVD's opinion never retracts an analyst's assertion
+  (`B07`–`B09`). A CVSS 9.8 CRITICAL contributes exactly zero (`B07`); new NVD metadata alone
+  produces an identical input fingerprint and therefore **no new RiskScore row at all** (`F39`).
+- **CISA KEV: listed versus not-listed versus unavailable are three different things.**
+  `KEV_LISTED` → 800. `KEV_NOT_LISTED` → APPLIED at 0, permitted **only** when every active CVE was
+  successfully checked and found absent (`C10`). One unchecked CVE makes the finding NOT_AVAILABLE,
+  not "not listed" (`C12`, mutation `M08`). Any active CVE listed wins (`C13`, `M07`). A failed
+  catalogue fetch stores `isKnownExploited: null` and can never read as `false` (`C15`).
+- **FIRST EPSS: exact decimal-to-basis-points, bucketed.** Probability is normalized to an integer
+  0–10000 at the input boundary; no float reaches scoring. A real score of **0 is APPLIED evidence**
+  (`EPSS_LOW`), structurally distinct from unavailable (`D16` vs `D17`, mutation `M10`) — both
+  contribute 0, only the applicability and code tell an analyst which they are reading.
+- **Multi-CVE aggregation.** cvePresence: flat 300 if any active CVE exists, never scaled by count.
+  KEV: any-listed → 800; all-checked-false → 0; otherwise unavailable. EPSS: the **maximum** fresh
+  usable score across active CVEs (`D27`, mutation `M06`), tie-broken by canonically smallest `cveId`
+  (`D28`), and requiring only that *some* CVE has a usable score (`D29`).
+- **Durable queue semantics.** `PENDING` is work, not an answer (`E30`). `DEAD_LETTER` means "we gave
+  up", never "this CVE is clean" — it writes no provider result and clears `activeJobKey`, so a later
+  schedule is a brand-new job with a full budget, never a resurrection (`E31`). A COMPLETED job
+  always carries exactly three provider results, written atomically (`E32`). Forced refresh bypasses
+  the cache but never active-job uniqueness, and preserves all earlier jobs and results (`E33`).
+  Freshness is the half-open window `[queriedAt, expiresAt)`: stale evidence does not score (`C14`,
+  `D18`), a newer fresh result wins over an older stale one (`E34`), and a result queried in the
+  future is not usable at an earlier instant (`E35`).
+- **Provider calls happen only during explicit administrator batch execution.** Attaching, removing
+  and scheduling perform no network I/O at all. `NVD_API_KEY` is optional (its absence only means the
+  public rate limit) and is sent **only** in the `apiKey` request header, never in a URL, log, audit,
+  error or `describe()`. KEV and EPSS need no key.
+- **Risk history is append-only and explanations are stable.** Provider completion appends a new
+  snapshot and supersedes the old one (`F36`); a later refresh leaves every older score row and every
+  one of its contribution rows byte-identical (`F37`); an explanation rendered from a stored score
+  stays field-for-field identical across later enrichment, CVE removal and re-attachment (`F38`).
+
+### Landed in Packet C
+
+- **`data/synthetic/vulnerability/ground_truth.yaml` + `README.md`** — 41 scenarios in seven groups,
+  manually authored and versioned. It imports nothing, calls no production risk helper, and copies no
+  observed database value into an expected field. The constants under `contract:` are transcribed by
+  hand and are an *independent* statement of the approved contract, not a view onto it.
+- **`eval/run_phase2_vulnerability_gate.js` + `eval/lib/vulnerabilityGroundTruthLoader.js`**
+  (`npm run eval:vulnerability`) — drives the real association, scheduling, batch-runner, TTL,
+  scoring and explanation services against real PostgreSQL and compares **persisted** state to the
+  ground truth. **41 scenarios, 992 assertions, PASS.** Database safety: requires
+  `EVAL_DATABASE_URL`, refuses to run when it equals `DATABASE_URL` under normalized comparison,
+  prints only the database *name*, never resets/truncates/drops, and cleans up an exact evaluator-owned
+  id set on success and on failure. Providers are the committed offline mock, and `global.fetch` is
+  replaced by a throwing stub for the whole run.
+- **`eval/run_phase2_vulnerability_mutation_gate.js`** (`npm run eval:vulnerability:mutation`) —
+  proves the baseline passes and that **12/12** load-bearing contract mutations each cause a *named*
+  assertion to fail. Mutations are applied to temporary copies under the OS temp directory; the
+  working tree, schema and migrations are never touched.
+- **`backend/tests/integration/vulnerabilityReleaseWorkflow.test.js`** — the end-to-end release proof
+  over the real Express app and real PostgreSQL: baseline **2300 LOW** → ANALYST attaches a CVE over
+  HTTP → **2600 LOW** → one bounded batch with injected NVD SUCCESS / KEV listed / EPSS 9000 →
+  **3800 MEDIUM** → ANALYST removes the CVE over HTTP → back to **2300 LOW**, with all association,
+  provider and risk history intact and the enriched explanation unchanged. 11 tests, stable across 3
+  consecutive runs.
+
+> **Note on the expected end-to-end total.** The Packet C task brief described the enriched score as
+> "3800 LOW". Under the **locked** Risk v1 bands, LOW ends at 3499 and MEDIUM begins at 3500, so
+> 2300 + 300 + 800 + 400 = 3800 is **MEDIUM**. The band follows from the score and is never assigned
+> directly. The arithmetic in the brief is honoured exactly; only the band label differed, and the
+> locked configuration was not changed to match it.
+
+### Focused defects found and fixed
+
+1. **Test-integrity defect (fixed).** `riskScoringConcurrency.test.js` case 3 — the required
+   "RiskScore concurrent current-row uniqueness" proof — ran `Promise.all` over **one shared
+   `PrismaClient`**. That is the exact trap this repository already documented in P2-T2b: a single
+   client's pool serializes the calls enough to hide the race, so the test would pass even against an
+   implementation with no invariant at all. Upgraded to **8 separate, pre-connected clients**. The
+   invariant genuinely holds — it now passes for the right reason, stable across 3 consecutive runs.
+   Test-only change; no production code touched.
+2. **Evaluator harness defect (found and fixed during Packet C).** The first revision of the gate's
+   fixture translation silently **dropped** a non-SUCCESS `CISA_KEV` provider spec, because KEV
+   failure is catalogue-level and has no per-CVE form. Three scenarios consequently asserted
+   "KEV checked and absent" while claiming to assert "KEV unavailable". Fixed by expressing KEV
+   unavailability as a failed catalogue fetch, and the ground-truth loader now **rejects** the
+   inexpressible form outright rather than reinterpreting it. A specification the harness cannot
+   honour must fail loudly, never be quietly reinterpreted.
+
+No production defect was found in §2B. Nothing was refactored opportunistically.
+
+### Security and contract review (full §2B diff, `cc5aac8..HEAD`)
+
+Clean: no committed key and no `backend/.env`; no secret-bearing fixture; the NVD key travels only in
+the `apiKey` header and never reaches a URL, audit, log, error or `describe()`; no import-time or
+startup fetch anywhere (every provider takes an injectable `fetchImpl`, and provider base URLs come
+from validated deployment environment only — HTTPS or an explicit localhost test URL, never caller
+input); `sourceReference` is stored, bounded and displayed but **never dereferenced**, so it cannot
+become an SSRF vector; no raw provider response, body or header column exists on any §2B table; no
+raw SQL and no partial index anywhere; evidence relations are `Restrict` and actor attributions are
+`SetNull`, consistently and intentionally; no indicator or victim IP appears anywhere in the §2B
+service, controller or audit layer; audit failure is swallowed and can never roll back domain state;
+Packet A's `.attached`/`.removed`/`.unchanged` events are reused rather than duplicated by Packet B's
+`.requested`/`.failed` bookends.
+
+**Accepted limitation (documented, not a violation):** the association and manual-scheduling services
+write a **bounded 200-character** `justificationPreview` / `sourceReferencePreview` into `AuditLog` on
+the **failure** path only. These are analyst-authored fields, deliberately truncated, and carry no
+provider data, credential or exception text. Recorded here because a justification is free text.
+
+### Verification matrix
+
+| Command | Environment | Files | Collected | Passed | Skipped | Failed |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| `npx vitest run` | no database | 88 | 2082 | 1960 | 122 | 0 |
+| `npx vitest run --no-file-parallelism` | `TEST_DATABASE_URL` + `EVAL_DATABASE_URL` | 88 | 2082 | 2082 | 0 | 0 |
+| `npx vitest run tests/integration --no-file-parallelism` | `TEST_DATABASE_URL` | 22 | 535 | 533 | 2 | 0 |
+| `npm run eval:phase1` | `EVAL_DATABASE_URL` | — | 9 | 9 | 0 | 0 |
+| `npm run eval:risk` | none needed | — | 19 + contract | 19 + contract | 0 | 0 |
+| `npm run eval:vulnerability` | `EVAL_DATABASE_URL` | — | 41 scenarios / 992 assertions | all | 0 | 0 |
+| `npm run eval:vulnerability:mutation` | `EVAL_DATABASE_URL` | — | 1 baseline + 12 mutations | all detected | 0 | 0 |
+
+The 122 skips are exactly the 12 database-gated files, and nothing else:
+`dedupServiceConcurrency` 5, `enrichmentRetryDeadLetter` 8, `enrichmentRunner` 8,
+`enrichmentWorkflowConcurrency` 10, `iocEnrichmentQueue` 14, `ownershipConcurrency` 11, `phase1Gate` 2,
+`reportIngestionConcurrency` 9, `riskScoringConcurrency` 15, `vulnerabilityCoreConcurrency` 19,
+`vulnerabilityPacketBApplication` 10, `vulnerabilityReleaseWorkflow` 11 — summing to exactly 122.
+
+Repeated concurrency runs, each with **separate pre-connected `PrismaClient` instances**, 3 runs each,
+all green: `vulnerabilityCoreConcurrency` + `vulnerabilityPacketBApplication` (29/29 ×3, covering the
+association race, the scheduling race and the claim race), `riskScoringConcurrency` (15/15 ×3,
+covering RiskScore current-row uniqueness), `vulnerabilityReleaseWorkflow` (11/11 ×3).
+
+### Test-count reconciliation (Packet A 1974/2 vs Packet B 1960/111)
+
+Neither number was wrong, and **no test was removed, renamed, consolidated or unintentionally
+skipped**. The two reports used different commands at different commits:
+
+- Packet A's **1974 passed / 2 skipped** = **1976 collected** at `5c1c242`, run **with**
+  `TEST_DATABASE_URL` but **without** `EVAL_DATABASE_URL`. The only 2 skips are
+  `phase1Gate.test.js`, which has exactly 2 tests and gates on `EVAL_DATABASE_URL` — verified
+  directly.
+- Packet B's **1960 passed / 111 skipped** = **2071 collected** at `54f8306`, run with **no** database
+  environment at all, so all 11 database-gated files self-skipped.
+- Packet B's separate "533/535" was `vitest run tests/integration` with `TEST_DATABASE_URL` — the
+  whole integration directory, reproduced exactly.
+
+The arithmetic closes: Packet B added 6 test files totalling exactly **95** tests
+(`vulnerabilityPacketBApplication`, `vulnerabilityPacketBRouteAuthorization`,
+`findingVulnerabilityReadService`, `vulnerabilityAssociationService`,
+`vulnerabilityBatchExecutionService`, `vulnerabilityRuntime`), and **1976 + 95 = 2071**. Packet C adds
+one file of 11 tests, giving the current **2082**.
+
+### Accepted limitations
+
+- **No live NVD / CISA KEV / FIRST EPSS smoke test has been performed.** Every automated test and both
+  evaluators use the committed offline mock; no real provider quota has ever been consumed and no test
+  depends on the internet.
+- No automatic provider execution loop, daemon or timer: a batch runs only when an administrator asks.
+- No automated CVE discovery and no product/CPE/version matching — association is analyst-only.
+- CVSS is displayed as context only; it has no numeric role in Risk v1.
+- External quotas and outages produce *unavailable* evidence, never a negative finding.
+- Provider base URLs remain deployment-configuration controlled (HTTPS or explicit localhost only).
+- No frontend for the vulnerability surface yet.
+- Bounded analyst-authored previews in failure-path audit rows, as described above.
+
+### Exact next task
+
+**Phase 2 combined gate and ownership hardening:** bounded re-resolution after AssetMapping changes,
+database query pushdown for `reResolveFindingsForMapping`, `Organization.sector` API exposure, the
+deferred ownership consistency checks, and the final Phase 2 integration review.
 
 ## Phase 2 §2B Packet B complete — vulnerability application surface (2026-07-29)
 
