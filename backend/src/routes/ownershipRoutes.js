@@ -15,7 +15,10 @@ const {
   disableMapping,
   reResolveMapping,
 } = require("../controllers/assetMappingController");
-const { getCoverage } = require("../controllers/findingOwnershipController");
+const {
+  getCoverage,
+  getConsistencyReport,
+} = require("../controllers/findingOwnershipController");
 
 // authenticate first (populates req.user), then a per-route capability guard
 // — unlike organizationRoutes.js, this router mixes read and write
@@ -27,6 +30,17 @@ const { getCoverage } = require("../controllers/findingOwnershipController");
 router.use(authenticate);
 
 router.get("/coverage", requireCapability(CAPABILITIES.READ_FINDINGS), getCoverage);
+
+// ADMIN-only diagnostic. Reports ownership rows that violate the closed
+// contract or have drifted from the authoritative resolver; it never repairs.
+// Gated behind the mapping-management capability rather than read:findings
+// because it returns exact Finding ids grouped by defect, which is an
+// administrative view of data quality, not a normal analyst read.
+router.post(
+  "/consistency-check",
+  requireCapability(CAPABILITIES.MANAGE_OWNERSHIP_MAPPINGS),
+  getConsistencyReport
+);
 
 router.get("/mappings", requireCapability(CAPABILITIES.READ_FINDINGS), listMappings);
 router.post("/mappings", requireCapability(CAPABILITIES.MANAGE_OWNERSHIP_MAPPINGS), createMapping);

@@ -28,12 +28,24 @@ const store = {
   nextId: 1,
 };
 
+// Operator support mirrors tests/unit/findingOwnershipService.test.js: AND/OR,
+// startsWith, in and gt were added for the database-pushed ownership candidate
+// selection. Without them this stub would match everything and the new
+// re-resolution assertions below would pass vacuously.
 function matches(row, where = {}) {
   return Object.entries(where).every(([key, condition]) => {
+    if (key === "AND") return condition.every((clause) => matches(row, clause));
+    if (key === "OR") return condition.some((clause) => matches(row, clause));
     if (condition && typeof condition === "object" && !Array.isArray(condition)) {
       if ("not" in condition) return row[key] !== condition.not;
       if ("lte" in condition) return row[key] <= condition.lte;
       if ("gte" in condition) return row[key] >= condition.gte;
+      if ("gt" in condition) return row[key] > condition.gt;
+      if ("lt" in condition) return row[key] < condition.lt;
+      if ("in" in condition) return condition.in.includes(row[key]);
+      if ("startsWith" in condition) {
+        return typeof row[key] === "string" && row[key].startsWith(condition.startsWith);
+      }
       return true;
     }
     return row[key] === condition;
@@ -42,6 +54,22 @@ function matches(row, where = {}) {
 function matchesOr(row, orConditions) {
   return orConditions.some((cond) => matches(row, cond));
 }
+function applyOrderAndTake(rows, orderBy, take) {
+  const clauses = Array.isArray(orderBy) ? orderBy : orderBy ? [orderBy] : [];
+  let out = rows;
+  if (clauses.length > 0) {
+    out = [...out].sort((a, b) => {
+      for (const clause of clauses) {
+        const [field, dir] = Object.entries(clause)[0];
+        const av = a[field] instanceof Date ? a[field].getTime() : a[field];
+        const bv = b[field] instanceof Date ? b[field].getTime() : b[field];
+        if (av !== bv) return dir === "desc" ? (bv > av ? 1 : -1) : av > bv ? 1 : -1;
+      }
+      return 0;
+    });
+  }
+  return Number.isInteger(take) && take > 0 ? out.slice(0, take) : out;
+}
 
 const prismaStub = {
   organization: {
@@ -49,7 +77,10 @@ const prismaStub = {
   },
   finding: {
     findUnique: async ({ where: { id } }) => store.findings.find((r) => r.id === id) || null,
-    findMany: async () => [...store.findings],
+    findMany: async ({ where, orderBy, take } = {}) => {
+      const filtered = store.findings.filter((r) => matches(r, where || {}));
+      return applyOrderAndTake(filtered, orderBy, take).map((r) => ({ ...r }));
+    },
     count: async () => store.findings.length,
   },
   assetMapping: {
@@ -90,20 +121,9 @@ const prismaStub = {
       const row = store.findingOwnerships.find((r) => r[key] === where[key]);
       return row ? { ...row } : null;
     },
-    findMany: async ({ where = {}, orderBy } = {}) => {
-      let rows = store.findingOwnerships.filter((r) => matches(r, where));
-      if (Array.isArray(orderBy)) {
-        rows = rows.sort((a, b) => {
-          for (const clause of orderBy) {
-            const [field, dir] = Object.entries(clause)[0];
-            const av = a[field] instanceof Date ? a[field].getTime() : a[field];
-            const bv = b[field] instanceof Date ? b[field].getTime() : b[field];
-            if (av !== bv) return dir === "desc" ? bv - av : av - bv;
-          }
-          return 0;
-        });
-      }
-      return rows.map((r) => ({ ...r }));
+    findMany: async ({ where = {}, orderBy, take } = {}) => {
+      const rows = store.findingOwnerships.filter((r) => matches(r, where));
+      return applyOrderAndTake(rows, orderBy, take).map((r) => ({ ...r }));
     },
     create: async ({ data }) => {
       const row = {
@@ -417,6 +437,118 @@ describe("Finding ownership override — override:finding-ownership is ADMIN and
       justification: "x",
     });
     expect(JSON.stringify(res.body)).not.toContain("override:finding-ownership");
+  });
+});
+
+describe("bounded re-resolution continuation — ADMIN only", () => {
+  const DENIED_ROLES = ["ANALYST", "REVIEWER", "VIEWER"];
+
+  it("denies every non-ADMIN role, and never reaches the controller", async () => {
+    for (const role of DENIED_ROLES) {
+      const res = await auth(
+        request(app).post("/api/ownership/mappings/1/re-resolve"),
+        role
+      ).send({ batchSize: 5 });
+      expect(res.status).toBe(403);
+      // A denied caller must not learn whether mapping 1 exists.
+      expect(JSON.stringify(res.body)).not.toContain("manage:ownership-mappings");
+    }
+  });
+
+  it("returns 401 unauthenticated", async () => {
+    const res = await request(app).post("/api/ownership/mappings/1/re-resolve").send({});
+    expect(res.status).toBe(401);
+  });
+
+  it("rejects caller-supplied internals rather than ignoring them", async () => {
+    // Every one of these is a value the server must own: an actor, a clock, a
+    // raw cursor, a resolver outcome, a risk number.
+    const forbidden = [
+      { actorUserId: 1 },
+      { asOf: "2020-01-01T00:00:00Z" },
+      { afterId: 5 },
+      { cursor: 5 },
+      { workerId: "w1" },
+      { riskScore: 9999 },
+      { confidence: "CONFIRMED" },
+      { status: "RESOLVED" },
+      { matchedMappingId: 2 },
+    ];
+    for (const body of forbidden) {
+      const res = await auth(
+        request(app).post("/api/ownership/mappings/1/re-resolve"),
+        "ADMIN"
+      ).send(body);
+      expect(res.status).toBe(400);
+      expect(res.body.fields).toEqual(Object.keys(body));
+    }
+  });
+
+  it("rejects an out-of-range batchSize", async () => {
+    for (const batchSize of [0, -1, 100000, 1.5, "10"]) {
+      const res = await auth(
+        request(app).post("/api/ownership/mappings/1/re-resolve"),
+        "ADMIN"
+      ).send({ batchSize });
+      expect(res.status).toBe(400);
+      expect(res.body.fields).toEqual(["batchSize"]);
+    }
+  });
+
+  it("rejects a continuation token the server did not issue", async () => {
+    const res = await auth(
+      request(app).post("/api/ownership/mappings/1/re-resolve"),
+      "ADMIN"
+    ).send({ continuationToken: "eyJtIjoxLCJhIjo5OTl9.forged" });
+    expect(res.status).toBe(400);
+    expect(res.body.fields).toEqual(["continuationToken"]);
+  });
+
+  it("returns 404 for a mapping that does not exist", async () => {
+    const res = await auth(
+      request(app).post("/api/ownership/mappings/99999/re-resolve"),
+      "ADMIN"
+    ).send({});
+    expect(res.status).toBe(404);
+  });
+});
+
+describe("ownership consistency diagnostic — ADMIN only", () => {
+  it("denies every non-ADMIN role", async () => {
+    for (const role of ["ANALYST", "REVIEWER", "VIEWER"]) {
+      const res = await auth(request(app).post("/api/ownership/consistency-check"), role).send({});
+      expect(res.status).toBe(403);
+    }
+  });
+
+  it("returns 401 unauthenticated", async () => {
+    const res = await request(app).post("/api/ownership/consistency-check").send({});
+    expect(res.status).toBe(401);
+  });
+
+  it("rejects caller-supplied internals", async () => {
+    for (const body of [{ afterId: 3 }, { asOf: "2020-01-01" }, { actorUserId: 1 }]) {
+      const res = await auth(request(app).post("/api/ownership/consistency-check"), "ADMIN").send(
+        body
+      );
+      expect(res.status).toBe(400);
+      expect(res.body.fields).toEqual(Object.keys(body));
+    }
+  });
+
+  it("reports aggregate counts to an ADMIN and never repairs anything", async () => {
+    const before = store.findingOwnerships.map((r) => ({ ...r }));
+    const res = await auth(request(app).post("/api/ownership/consistency-check"), "ADMIN").send({});
+    expect(res.status).toBe(200);
+    expect(res.body.data).toHaveProperty("checkedCount");
+    expect(res.body.data).toHaveProperty("countsByCode");
+    // Detection only: not one ownership row changed.
+    expect(store.findingOwnerships).toEqual(before);
+  });
+
+  it("never exposes an indicator address in the report", async () => {
+    const res = await auth(request(app).post("/api/ownership/consistency-check"), "ADMIN").send({});
+    expect(JSON.stringify(res.body)).not.toMatch(/\d+\.\d+\.\d+\.\d+/);
   });
 });
 

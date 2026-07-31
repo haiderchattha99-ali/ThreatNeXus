@@ -19,6 +19,12 @@ const {
   applyOverride,
   clearOverride,
 } = require("../services/ownership/findingOwnershipService");
+const { buildSectorContext } = require("../services/ownership/ownershipSectorContext");
+const {
+  runAuditedConsistencyCheck,
+  MIN_BATCH_SIZE: CONSISTENCY_MIN_BATCH_SIZE,
+  MAX_BATCH_SIZE: CONSISTENCY_MAX_BATCH_SIZE,
+} = require("../services/ownership/ownershipConsistencyService");
 
 const serverError = (res, label, err) => {
   console.error(label, { name: err && err.name });
@@ -58,6 +64,50 @@ function coerceInteger(value) {
   return Number.NaN;
 }
 
+// Strict allow-list for the ADMIN consistency diagnostic. `afterId`, `asOf`,
+// `actorUserId`, a worker id, or any resolver/risk/ownership value are all
+// rejected rather than ignored — this endpoint reports on state, it must never
+// be steerable into reporting on a caller-chosen slice of it.
+const CONSISTENCY_ALLOWED_FIELDS = Object.freeze(["batchSize"]);
+
+/**
+ * ADMIN-only bounded ownership consistency diagnostic.
+ *
+ * Reports; never repairs. Returns aggregate counts plus bounded exact Finding
+ * ids per issue code so an ADMIN can actually investigate, while the audit
+ * event it writes carries counts only.
+ */
+exports.getConsistencyReport = async (req, res) => {
+  const body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
+  const unexpected = Object.keys(body).filter((key) => !CONSISTENCY_ALLOWED_FIELDS.includes(key));
+  if (unexpected.length > 0) {
+    return res.status(400).json({ success: false, message: "Unexpected fields.", fields: unexpected });
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(body, "batchSize") &&
+    (!Number.isInteger(body.batchSize) ||
+      body.batchSize < CONSISTENCY_MIN_BATCH_SIZE ||
+      body.batchSize > CONSISTENCY_MAX_BATCH_SIZE)
+  ) {
+    return res.status(400).json({
+      success: false,
+      message: `batchSize must be an integer between ${CONSISTENCY_MIN_BATCH_SIZE} and ${CONSISTENCY_MAX_BATCH_SIZE}.`,
+      fields: ["batchSize"],
+    });
+  }
+
+  try {
+    const report = await runAuditedConsistencyCheck(prisma, {
+      batchSize: body.batchSize,
+      asOf: new Date(),
+      auditContext: buildAuditContext(req),
+    });
+    return res.status(200).json({ success: true, data: report });
+  } catch (error) {
+    return serverError(res, "Failed to run ownership consistency check", error);
+  }
+};
+
 exports.getCoverage = async (req, res) => {
   try {
     const coverage = await calculateCoverage({ client: prisma });
@@ -75,11 +125,16 @@ exports.getFindingOwnership = async (req, res) => {
 
   try {
     const { current, history } = await getFindingOwnership(id, { client: prisma });
+    // Safe organization/sector context. Sector APPLICABILITY comes from the
+    // same gate the risk engine scores with (riskInputSnapshot); the number it
+    // is worth stays in the risk explanation and is never computed here.
+    const sectorContext = await buildSectorContext(prisma, id, current);
     return res.status(200).json({
       success: true,
       data: {
         current: serializeOwnershipRow(current),
         history: history.map(serializeOwnershipRow),
+        sectorContext,
       },
     });
   } catch (error) {

@@ -417,4 +417,8 @@ module.exports = {
   elapsedWholeDays,
   buildInputFingerprint,
   loadRiskInputSnapshot,
+  // Exported so the ownership read API can report sector applicability using
+  // the SAME gate the risk engine scores with, instead of a second copy that
+  // could drift. The API must never re-derive this rule.
+  loadOwnershipContext,
 };
