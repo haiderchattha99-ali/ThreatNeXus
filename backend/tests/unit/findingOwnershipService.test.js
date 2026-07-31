@@ -27,13 +27,27 @@ function createFakeClient() {
   const organizations = new Map();
   const assetMappings = new Map();
   const findingOwnerships = new Map();
+  const findingFindManyCalls = [];
 
+  // Supports the operators the ownership services actually emit. `startsWith`,
+  // `in`, `gt`, `AND` and nested `OR` were added for the Phase 2 closing
+  // packet's database-pushed candidate selection — without them this fake
+  // would silently match everything and the "unrelated Findings are never
+  // loaded" tests would pass vacuously.
   function matches(row, where = {}) {
     return Object.entries(where).every(([key, condition]) => {
+      if (key === "AND") return condition.every((clause) => matches(row, clause));
+      if (key === "OR") return condition.some((clause) => matches(row, clause));
       if (condition && typeof condition === "object" && !Array.isArray(condition)) {
         if ("not" in condition) return row[key] !== condition.not;
         if ("lte" in condition) return row[key] <= condition.lte;
         if ("gte" in condition) return row[key] >= condition.gte;
+        if ("gt" in condition) return row[key] > condition.gt;
+        if ("lt" in condition) return row[key] < condition.lt;
+        if ("in" in condition) return condition.in.includes(row[key]);
+        if ("startsWith" in condition) {
+          return typeof row[key] === "string" && row[key].startsWith(condition.startsWith);
+        }
         return true;
       }
       return row[key] === condition;
@@ -44,13 +58,37 @@ function createFakeClient() {
     return orConditions.some((cond) => matches(row, cond));
   }
 
+  // Shared ordering/limiting used by both findMany implementations. Accepts
+  // Prisma's single-object (`{id:"asc"}`) and array (`[{a:"desc"},...]`) forms.
+  function applyOrderAndTake(rows, orderBy, take) {
+    const clauses = Array.isArray(orderBy) ? orderBy : orderBy ? [orderBy] : [];
+    let out = rows;
+    if (clauses.length > 0) {
+      out = [...out].sort((a, b) => {
+        for (const clause of clauses) {
+          const [field, dir] = Object.entries(clause)[0];
+          const av = a[field] instanceof Date ? a[field].getTime() : a[field];
+          const bv = b[field] instanceof Date ? b[field].getTime() : b[field];
+          if (av !== bv) return dir === "desc" ? (bv > av ? 1 : -1) : av > bv ? 1 : -1;
+        }
+        return 0;
+      });
+    }
+    return Number.isInteger(take) && take > 0 ? out.slice(0, take) : out;
+  }
+
   const client = {
     finding: {
       async findUnique({ where: { id } }) {
         return findings.has(id) ? { ...findings.get(id) } : null;
       },
-      async findMany() {
-        return [...findings.values()].map((r) => ({ ...r }));
+      // Records every call so a test can assert HOW the candidate set was
+      // selected, not merely what came back — an unfiltered findMany is the
+      // exact regression this packet removed.
+      async findMany({ where, orderBy, take } = {}) {
+        findingFindManyCalls.push({ where, orderBy, take });
+        const filtered = [...findings.values()].filter((r) => matches(r, where || {}));
+        return applyOrderAndTake(filtered, orderBy, take).map((r) => ({ ...r }));
       },
       async count() {
         return findings.size;
@@ -84,21 +122,9 @@ function createFakeClient() {
         const row = [...findingOwnerships.values()].find((r) => r[key] === value);
         return row ? { ...row } : null;
       },
-      async findMany({ where = {}, orderBy } = {}) {
-        let rows = [...findingOwnerships.values()].filter((r) => matches(r, where));
-        if (Array.isArray(orderBy)) {
-          rows = rows.sort((a, b) => {
-            // eslint-disable-next-line no-restricted-syntax
-            for (const clause of orderBy) {
-              const [field, dir] = Object.entries(clause)[0];
-              const av = a[field] instanceof Date ? a[field].getTime() : a[field];
-              const bv = b[field] instanceof Date ? b[field].getTime() : b[field];
-              if (av !== bv) return dir === "desc" ? bv - av : av - bv;
-            }
-            return 0;
-          });
-        }
-        return rows.map((r) => ({ ...r }));
+      async findMany({ where = {}, orderBy, take } = {}) {
+        const rows = [...findingOwnerships.values()].filter((r) => matches(r, where));
+        return applyOrderAndTake(rows, orderBy, take).map((r) => ({ ...r }));
       },
       async create({ data }) {
         const id = nextFindingOwnershipId++;
@@ -132,6 +158,7 @@ function createFakeClient() {
       return fn(client);
     },
     _stores: { findings, organizations, assetMappings, findingOwnerships },
+    _findingFindManyCalls: findingFindManyCalls,
   };
 
   return client;
@@ -405,6 +432,8 @@ describe("getFindingOwnership", () => {
 });
 
 describe("reResolveFindingsForMapping", () => {
+  const LATER = new Date("2026-06-02T00:00:00Z");
+
   it("re-resolves only findings whose indicator falls in the mapping's range", async () => {
     const client = createFakeClient();
     seedFinding(client, 1, "203.0.113.10");
@@ -414,19 +443,97 @@ describe("reResolveFindingsForMapping", () => {
     await resolveOneFinding(2, { client, asOf: ASOF });
 
     const mapping = seedCidrMapping(client, 1, "203.0.113.0/24");
-    const result = await reResolveFindingsForMapping(mapping, { client, asOf: new Date("2026-06-02T00:00:00Z") });
+    const summary = await reResolveFindingsForMapping(mapping, { client, asOf: LATER });
 
-    expect(result.skipped).toBe(false);
-    expect(result.reResolved.map((r) => r.findingId)).toEqual([1]);
-    expect(result.reResolved[0].changed).toBe(true);
+    expect(summary.candidateCount).toBe(1);
+    expect(summary.processedCount).toBe(1);
+    expect(summary.changedCount).toBe(1);
+    expect(summary.failedCount).toBe(0);
+    expect(summary.truncated).toBe(false);
+
+    // The out-of-range finding was never even re-decided: its ownership row is
+    // still the one written by the original resolveOneFinding above.
+    const untouched = await getFindingOwnership(2, { client });
+    expect(untouched.history).toHaveLength(1);
+    expect(untouched.current.asOf).toEqual(ASOF);
   });
 
-  it("skips ASN-type mappings with an explicit reason", async () => {
+  it("selects candidates through a bounded database filter, never a full table read", async () => {
     const client = createFakeClient();
-    const mapping = { mappingType: "ASN", asn: 64500 };
-    const result = await reResolveFindingsForMapping(mapping, { client });
-    expect(result.skipped).toBe(true);
-    expect(result.reason).toBe("ASN_NOT_PERSISTED_ON_FINDING");
+    seedFinding(client, 1, "203.0.113.10");
+    seedFinding(client, 2, "198.51.100.5");
+    seedOrganization(client, 1);
+    const mapping = seedCidrMapping(client, 1, "203.0.113.0/24");
+
+    client._findingFindManyCalls.length = 0;
+    await reResolveFindingsForMapping(mapping, { client, asOf: LATER });
+
+    // Exactly one candidate query, and it is filtered, ordered and limited.
+    // A regression back to `finding.findMany()` with no arguments fails here.
+    expect(client._findingFindManyCalls).toHaveLength(1);
+    const [call] = client._findingFindManyCalls;
+    expect(call.where).toBeDefined();
+    expect(call.take).toBeGreaterThan(0);
+    expect(call.orderBy).toEqual({ id: "asc" });
+    // A /24 decomposes to exactly one octet-aligned prefix, ending in a dot.
+    expect(JSON.stringify(call.where)).toContain("203.0.113.");
+  });
+
+  it("reports ASN mappings as acquisition-limited rather than skipping them outright", async () => {
+    const client = createFakeClient();
+    const mapping = { id: 99, mappingType: "ASN", asn: 64500, ipStart: null, ipEnd: null };
+    const summary = await reResolveFindingsForMapping(mapping, { client, asOf: LATER });
+
+    // An ASN mapping can still RELEASE findings it previously attributed, so it
+    // is processed — it simply cannot acquire new ones, which is reported.
+    expect(summary.acquisitionLimited).toBe(true);
+    expect(summary.candidateCount).toBe(0);
+    expect(summary.failureCode).toBeNull();
+  });
+
+  it("preserves an explicit analyst override instead of overwriting it", async () => {
+    const client = createFakeClient();
+    seedFinding(client, 1, "203.0.113.10");
+    seedOrganization(client, 1);
+    seedOrganization(client, 2);
+    await applyOverride(1, 2, "Confirmed owner by phone", { client, asOf: ASOF });
+
+    const mapping = seedCidrMapping(client, 1, "203.0.113.0/24");
+    const summary = await reResolveFindingsForMapping(mapping, { client, asOf: LATER });
+
+    expect(summary.changedCount).toBe(0);
+    expect(summary.unchangedCount).toBe(1);
+    expect(summary.overriddenPreservedCount).toBe(1);
+
+    const { current } = await getFindingOwnership(1, { client });
+    expect(current.status).toBe("OVERRIDDEN");
+    expect(current.organizationId).toBe(2); // NOT the mapping's org 1
+  });
+
+  it("bounds one call to the batch size and reports the remainder as truncated", async () => {
+    const client = createFakeClient();
+    seedOrganization(client, 1);
+    for (let i = 1; i <= 5; i += 1) seedFinding(client, i, `203.0.113.${i}`);
+    const mapping = seedCidrMapping(client, 1, "203.0.113.0/24");
+
+    const first = await reResolveFindingsForMapping(mapping, {
+      client,
+      asOf: LATER,
+      batchSize: 2,
+    });
+    expect(first.processedCount).toBe(2);
+    expect(first.truncated).toBe(true);
+    expect(first.nextAfterId).toBe(2);
+
+    const second = await reResolveFindingsForMapping(mapping, {
+      client,
+      asOf: LATER,
+      batchSize: 2,
+      afterId: first.nextAfterId,
+    });
+    // Continues after the cursor — no row re-processed, none skipped.
+    expect(second.processedCount).toBe(2);
+    expect(second.truncated).toBe(true);
   });
 });
 

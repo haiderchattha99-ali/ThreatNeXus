@@ -26,6 +26,22 @@ const { ipv4ToInt } = require("../../src/services/ownership/ipv4Cidr");
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 
+// Tests 9 and 10 lazily require reportIngestionService, which loads
+// src/config/env.js at module scope and therefore needs the full application
+// configuration to be present. Without this bootstrap the suite passed only
+// when the developer's shell happened to already export DATABASE_URL /
+// JWT_SECRET / CORS_ORIGIN, and failed with ConfigError on a clean
+// environment. Same module-scope pattern already used by
+// reportIngestionConcurrency, enrichmentWorkflowConcurrency, phase1Gate and
+// vulnerabilityReleaseWorkflow.
+if (TEST_DATABASE_URL) {
+  process.env.NODE_ENV = process.env.NODE_ENV || "test";
+  process.env.DATABASE_URL = TEST_DATABASE_URL;
+  process.env.JWT_SECRET =
+    process.env.JWT_SECRET || "ownership_concurrency_test_secret_not_a_real_key";
+  process.env.CORS_ORIGIN = process.env.CORS_ORIGIN || "http://localhost:5173";
+}
+
 // RFC 5737 TEST-NET-1 — distinct from the 198.51.100.x (P1-T4) and
 // 203.0.113.x (phase1-gate/fixtures) ranges already used by other real-DB
 // suites, so cleanup here can never collide with theirs.

@@ -21,8 +21,68 @@ const {
   assetMappingAuditSummary,
 } = require("../services/ownership/assetMappingService");
 
+const {
+  reResolveForMapping,
+  reResolutionAuditSummary,
+  normalizeBatchSize,
+  MIN_BATCH_SIZE,
+  MAX_BATCH_SIZE,
+} = require("../services/ownership/ownershipReResolutionService");
+const {
+  ContinuationTokenError,
+  issueContinuationToken,
+  readContinuationToken,
+} = require("../services/ownership/ownershipContinuationToken");
+
 const ASSET_MAPPING_ENTITY_TYPE = "AssetMapping";
 const PRISMA_FOREIGN_KEY_VIOLATION = "P2003";
+
+// Fields a PATCH may change that actually alter what resolveOwnership would
+// decide. `confidence`, `source`, `provenanceNote` and `mappingConfirmed` are
+// deliberately NOT here: the resolver derives its own confidence from the
+// matched tier/prefix length and never reads those columns, so changing them
+// cannot change an ownership outcome and must not trigger a re-resolution
+// sweep. organizationId changes who owns; validFrom/validUntil change whether
+// the mapping is active at all (see ownershipResolver.isActiveMapping).
+const PRECEDENCE_RELEVANT_FIELDS = Object.freeze(["organizationId", "validFrom", "validUntil"]);
+
+function sameValue(a, b) {
+  if (a instanceof Date && b instanceof Date) return a.getTime() === b.getTime();
+  return a === b;
+}
+
+function isPrecedenceRelevantChange(before, after) {
+  return PRECEDENCE_RELEVANT_FIELDS.some((field) => !sameValue(before[field], after[field]));
+}
+
+/**
+ * Runs ONE bounded re-resolution batch after a mapping mutation has already
+ * committed, and shapes the safe client-facing view of it.
+ *
+ * Deliberately outside the mutation: no Finding query, no resolution loop, no
+ * risk scoring and no audit write ever runs inside the mapping write. The
+ * mapping stays committed regardless of what happens here — reResolveForMapping
+ * never throws.
+ *
+ * `truncated` is surfaced with a server-issued continuation token so the
+ * response can never silently imply full re-resolution when only one batch ran.
+ */
+async function runBoundedReResolution(req, mapping, batchSize) {
+  const summary = await reResolveForMapping(mapping, {
+    client: prisma,
+    // Captured once, here, for the whole batch — the service never reads the clock.
+    asOf: new Date(),
+    batchSize,
+    auditContext: buildAuditContext(req),
+  });
+
+  return {
+    ...reResolutionAuditSummary(summary),
+    continuationToken: summary.truncated
+      ? issueContinuationToken(mapping.id, summary.nextAfterId)
+      : null,
+  };
+}
 
 const audit = async (req, event) => {
   try {
@@ -68,7 +128,12 @@ exports.createMapping = async (req, res) => {
       reason: "AssetMapping created",
     });
 
-    return res.status(201).json({ success: true, data: serializeAssetMapping(mapping) });
+    // A brand-new mapping can change ownership for anything in its range.
+    const reResolution = await runBoundedReResolution(req, mapping);
+
+    return res
+      .status(201)
+      .json({ success: true, data: serializeAssetMapping(mapping), reResolution });
   } catch (error) {
     if (error instanceof AssetMappingValidationError) {
       await audit(req, {
@@ -121,7 +186,13 @@ exports.updateMapping = async (req, res) => {
       reason: "AssetMapping updated",
     });
 
-    return res.status(200).json({ success: true, data: serializeAssetMapping(after) });
+    // Only a precedence-relevant edit can change an ownership outcome; a
+    // provenance-note edit must not trigger a sweep.
+    const reResolution = isPrecedenceRelevantChange(before, after)
+      ? await runBoundedReResolution(req, after)
+      : null;
+
+    return res.status(200).json({ success: true, data: serializeAssetMapping(after), reResolution });
   } catch (error) {
     if (error instanceof AssetMappingNotFoundError) {
       return res.status(404).json({ success: false, message: "Asset mapping not found." });
@@ -157,6 +228,97 @@ exports.updateMapping = async (req, res) => {
   }
 };
 
+// The ONLY fields this endpoint accepts. Anything else — actorUserId, asOf,
+// afterId/cursor, batch worker id, riskScore, confidence, status, resolver
+// result, matchedMappingId — is rejected outright rather than ignored, so a
+// caller can never steer resolution, backdate a batch, impersonate an actor or
+// inject a cursor. Rejecting (not ignoring) is deliberate: silently dropping a
+// field a caller believed was applied is its own failure mode.
+const RE_RESOLVE_ALLOWED_FIELDS = Object.freeze(["batchSize", "continuationToken"]);
+
+/**
+ * ADMIN-only bounded continuation of ownership re-resolution for one mapping.
+ *
+ * Exists because a mutation response may report `truncated: true`. Rather than
+ * silently leaving ownership half-re-resolved, or spawning a background worker
+ * to finish the job, the remaining work is an explicit, bounded, audited
+ * ADMIN action. No daemon, no cron, no self-rescheduling.
+ */
+exports.reResolveMapping = async (req, res) => {
+  const id = parseResourceId(req.params.id);
+  if (id === null) {
+    return res.status(400).json({ success: false, message: "Invalid asset mapping id." });
+  }
+
+  const body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
+  const unexpected = Object.keys(body).filter(
+    (key) => !RE_RESOLVE_ALLOWED_FIELDS.includes(key)
+  );
+  if (unexpected.length > 0) {
+    return res.status(400).json({
+      success: false,
+      message: "Unexpected fields.",
+      fields: unexpected,
+    });
+  }
+
+  if (
+    Object.prototype.hasOwnProperty.call(body, "batchSize") &&
+    (!Number.isInteger(body.batchSize) ||
+      body.batchSize < MIN_BATCH_SIZE ||
+      body.batchSize > MAX_BATCH_SIZE)
+  ) {
+    return res.status(400).json({
+      success: false,
+      message: `batchSize must be an integer between ${MIN_BATCH_SIZE} and ${MAX_BATCH_SIZE}.`,
+      fields: ["batchSize"],
+    });
+  }
+
+  let afterId = 0;
+  if (Object.prototype.hasOwnProperty.call(body, "continuationToken")) {
+    try {
+      afterId = readContinuationToken(body.continuationToken, id);
+    } catch (error) {
+      if (error instanceof ContinuationTokenError) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid continuation token.",
+          fields: ["continuationToken"],
+        });
+      }
+      return serverError(res, "Failed to read continuation token", error);
+    }
+  }
+
+  try {
+    const mapping = await prisma.assetMapping.findUnique({ where: { id } });
+    if (!mapping) {
+      return res.status(404).json({ success: false, message: "Asset mapping not found." });
+    }
+
+    const summary = await reResolveForMapping(mapping, {
+      client: prisma,
+      asOf: new Date(),
+      batchSize: normalizeBatchSize(body.batchSize),
+      afterId,
+      auditContext: buildAuditContext(req),
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        ...reResolutionAuditSummary(summary),
+        continuationToken: summary.truncated
+          ? issueContinuationToken(mapping.id, summary.nextAfterId)
+          : null,
+      },
+    });
+  } catch (error) {
+    return serverError(res, "Failed to re-resolve ownership for asset mapping", error);
+  }
+};
+
 exports.disableMapping = async (req, res) => {
   const id = parseResourceId(req.params.id);
   if (id === null) {
@@ -181,7 +343,11 @@ exports.disableMapping = async (req, res) => {
       });
     }
 
-    return res.status(200).json({ success: true, data: serializeAssetMapping(after) });
+    // Disabling releases whatever this mapping currently attributes. Skipped
+    // when it was already disabled — nothing changed, so nothing can re-decide.
+    const reResolution = alreadyDisabled ? null : await runBoundedReResolution(req, after);
+
+    return res.status(200).json({ success: true, data: serializeAssetMapping(after), reResolution });
   } catch (error) {
     if (error instanceof AssetMappingNotFoundError) {
       return res.status(404).json({ success: false, message: "Asset mapping not found." });

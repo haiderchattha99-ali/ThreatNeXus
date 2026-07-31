@@ -27,9 +27,18 @@
 // explicitly (see reportIngestionService.js). Any resolution triggered later
 // with no such value at hand — a manual re-resolve, or re-resolution
 // triggered by an AssetMapping mutation — passes asn: null and can only
-// re-evaluate the exact-IP/CIDR tiers. This is a real, accepted tradeoff
-// documented in STATUS.md, not a silent gap: an ASN-mapping change cannot
-// retroactively re-resolve Findings whose ASN was never stored.
+// re-evaluate the exact-IP/CIDR tiers.
+//
+// The Phase 2 closing packet narrowed, but did not remove, that gap. Because
+// re-resolution now also selects candidates through the ownership rows that
+// NAME a mapping (matchedMappingId), a disabled or reassigned ASN mapping CAN
+// now release the Findings it previously attributed — they get re-decided and
+// correctly fall through to whatever the remaining tiers say. What still
+// cannot happen is ACQUISITION: a new or newly-widened ASN mapping cannot
+// retroactively claim Findings whose ASN was never stored, because there is no
+// column to match on. Summaries report that asymmetry explicitly as
+// `acquisitionLimited: true`. Closing it fully needs a Finding.asn column,
+// which is a schema change and therefore out of scope here.
 
 const { AssetMappingType } = require("@prisma/client");
 
@@ -225,7 +234,13 @@ async function attemptAutomaticResolution(tx, findingId, { asn, asOf }) {
  * an unchanged outcome writes nothing (no new row, no audit).
  *
  * @param {number} findingId
- * @param {{client?: object, asn?: number|null, asOf?: Date, auditContext?: object}} [options]
+ * @param {{client?: object, asn?: number|null, asOf?: Date, auditContext?: object,
+ *   emitAudit?: boolean}} [options]
+ *   `emitAudit: false` suppresses this call's own per-Finding audit events. Used
+ *   by bounded batch re-resolution (ownershipReResolutionService), which emits
+ *   ONE aggregate event for the whole batch instead — the same discipline
+ *   riskRecalculationService.recalculateFindingRiskBatch already applies. The
+ *   resolution itself is unaffected; only the audit row is suppressed.
  */
 async function resolveOneFinding(findingId, options = {}) {
   if (!Number.isInteger(findingId) || findingId <= 0) {
@@ -234,13 +249,14 @@ async function resolveOneFinding(findingId, options = {}) {
   const client = resolveClient(options.client);
   const asOf = options.asOf instanceof Date ? options.asOf : new Date();
   const auditContext = options.auditContext || {};
+  const emitAudit = options.emitAudit !== false;
 
   try {
     const outcome = await runInRetryableTransaction(client, (tx) =>
       attemptAutomaticResolution(tx, findingId, { asn: options.asn ?? null, asOf })
     );
 
-    if (outcome.changed) {
+    if (outcome.changed && emitAudit) {
       await audit(client, auditContext, {
         action: "ownership.resolution.changed",
         outcome: AUDIT_OUTCOMES.SUCCESS,
@@ -255,56 +271,43 @@ async function resolveOneFinding(findingId, options = {}) {
   } catch (error) {
     if (error instanceof FindingOwnershipNotFoundError) throw error;
 
-    await audit(client, auditContext, {
-      action: "ownership.resolution.failed",
-      outcome: AUDIT_OUTCOMES.FAILURE,
-      entityType: "Finding",
-      entityId: findingId,
-      reason: "Ownership resolution failed unexpectedly",
-    });
+    if (emitAudit) {
+      await audit(client, auditContext, {
+        action: "ownership.resolution.failed",
+        outcome: AUDIT_OUTCOMES.FAILURE,
+        entityType: "Finding",
+        entityId: findingId,
+        reason: "Ownership resolution failed unexpectedly",
+      });
+    }
     throw error;
   }
 }
 
-// Re-resolves every Finding whose indicatorValue falls inside an EXACT_IP or
-// CIDR mapping's range — the precise, correct case, since indicatorValue is
-// always known. ASN-type mappings cannot drive re-resolution (see the module
-// header note) and are skipped with an explicit `skipped: true` result
-// rather than silently doing nothing.
+/**
+ * Re-resolves ownership for one BOUNDED batch of Findings affected by a
+ * mapping mutation, and returns the batch summary.
+ *
+ * Replaces the original implementation, which read EVERY Finding row into
+ * application memory and filtered in JavaScript. Candidate selection is now
+ * pushed into PostgreSQL (ownershipCandidateSelection) and execution is
+ * bounded and resumable (ownershipReResolutionService).
+ *
+ * Behaviour change worth knowing: ASN mappings are no longer skipped outright.
+ * They still cannot ACQUIRE new Findings — Finding stores no ASN, so there is
+ * nothing to match against — but they can now RELEASE the Findings they
+ * previously attributed, selected through the ownership rows that name the
+ * mapping. The summary reports that asymmetry as `acquisitionLimited: true`
+ * instead of silently doing nothing.
+ *
+ * Never throws: a re-resolution failure must not roll back the committed
+ * mapping mutation that triggered it.
+ */
 async function reResolveFindingsForMapping(mapping, options = {}) {
   const client = resolveClient(options.client);
-  const auditContext = options.auditContext || {};
-
-  if (mapping.mappingType === AssetMappingType.ASN) {
-    return { skipped: true, reason: "ASN_NOT_PERSISTED_ON_FINDING", reResolved: [] };
-  }
-
-  const allFindings = await client.finding.findMany({ select: { id: true, indicatorValue: true } });
-  const affected = allFindings
-    .filter((f) => isValidIpv4(f.indicatorValue))
-    .filter((f) => {
-      const ip = ipv4ToInt(f.indicatorValue);
-      return ip >= mapping.ipStart && ip <= mapping.ipEnd;
-    })
-    .map((f) => f.id)
-    .sort((a, b) => a - b); // deterministic, independent of DB row order
-
-  const results = [];
-  // Sequential by design — see resolveOneFinding's own transaction scope;
-  // there is no benefit and real risk in resolving a shared mapping's
-  // affected findings concurrently against each other.
-  // eslint-disable-next-line no-restricted-syntax
-  for (const findingId of affected) {
-    try {
-      // eslint-disable-next-line no-await-in-loop
-      const outcome = await resolveOneFinding(findingId, { client, auditContext });
-      results.push({ findingId, changed: outcome.changed });
-    } catch (error) {
-      results.push({ findingId, changed: false, failed: true });
-    }
-  }
-
-  return { skipped: false, reResolved: results };
+  // eslint-disable-next-line global-require
+  const { reResolveForMapping } = require("./ownershipReResolutionService");
+  return reResolveForMapping(mapping, { ...options, client });
 }
 
 async function attemptApplyOverride(tx, findingId, organizationId, justification, asOf, actorUserId) {

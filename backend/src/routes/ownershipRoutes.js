@@ -13,6 +13,7 @@ const {
   createMapping,
   updateMapping,
   disableMapping,
+  reResolveMapping,
 } = require("../controllers/assetMappingController");
 const { getCoverage } = require("../controllers/findingOwnershipController");
 
@@ -36,6 +37,16 @@ router.post(
   "/mappings/:id/disable",
   requireCapability(CAPABILITIES.MANAGE_OWNERSHIP_MAPPINGS),
   disableMapping
+);
+
+// Bounded continuation of ownership re-resolution. Same ADMIN-only capability
+// as the mutations themselves — it exists purely to finish work a mutation
+// reported as truncated, so it must not be reachable by anyone who could not
+// have caused that work in the first place.
+router.post(
+  "/mappings/:id/re-resolve",
+  requireCapability(CAPABILITIES.MANAGE_OWNERSHIP_MAPPINGS),
+  reResolveMapping
 );
 
 module.exports = router;
