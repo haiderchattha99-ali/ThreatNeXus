@@ -421,7 +421,13 @@ async function applyOverride(findingId, organizationId, justification, options =
         outcome: AUDIT_OUTCOMES.FAILURE,
         entityType: "Finding",
         entityId: findingId,
-        reason: `Override rejected: ${error.message}`,
+        // Closed error NAME plus the bounded field list, never error.message.
+        // The three classes caught here author their own messages today, so
+        // nothing leaks right now — but an audit reason built by string
+        // interpolation from an Error is one added error class away from
+        // carrying raw database or provider text into the audit trail.
+        reason: `Override rejected: ${error.name}`,
+        after: { errorName: error.name, fields: Array.isArray(error.fields) ? error.fields : null },
       });
     }
     throw error;
@@ -507,7 +513,9 @@ async function clearOverride(findingId, options = {}) {
         outcome: AUDIT_OUTCOMES.FAILURE,
         entityType: "Finding",
         entityId: findingId,
-        reason: `Override clear rejected: ${error.message}`,
+        // Closed error NAME only — see the applied-path note above.
+        reason: `Override clear rejected: ${error.name}`,
+        after: { errorName: error.name, fields: Array.isArray(error.fields) ? error.fields : null },
       });
     }
     throw error;
