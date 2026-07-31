@@ -37,6 +37,80 @@ _Operational status / handoff note. Authoritative plan lives in
   was met in P2-T2c/P2-T2e-1. The §2B half is now met by `npm run eval:vulnerability` (41 scenarios,
   992 hand-authored assertions) and `npm run eval:vulnerability:mutation` (12/12 contract mutations
   detected).
+- **Ali Haider Chattha's frontend RBAC commit (`4032868`) is merged from `origin/main`** and aligned
+  to backend capability enforcement — see "Frontend RBAC integration" immediately below. This is a
+  frontend/integration packet only: no schema change, no migration, no Risk v1 or vulnerability-
+  intelligence logic touched, and Phase 2 §2B remains release-gated as recorded above.
+
+## Frontend RBAC integration (2026-07-31)
+
+Ali Haider Chattha's frontend RBAC commit (`4032868`, based on `main`'s actual tip `a6b2852`, not on
+this branch) was merged via a normal merge commit (`git merge origin/main`, no rebase/cherry-pick),
+preserving his original authorship in history. His commit introduced `ProtectedRoute` role checks,
+`Sidebar` role-based nav, `RoleGuard.jsx`, `constants/roles.js` and `utils/permissions.js` — all
+authored independently of `backend/src/lib/roles.js`'s capability table, and with defects: `Sidebar`
+allowed `REVIEWER` to see Cases despite the backend never granting `REVIEWER` `manage:cases`,
+`ProtectedRoute` failed **open** (rendered content) whenever `allowedRoles` was omitted or empty
+instead of denying, `RoleGuard.jsx` was unused dead code, and there were no frontend RBAC tests.
+
+**Backend capability enforcement remains the sole authorization boundary — unchanged.** No
+`requireCapability`/`requireRole` middleware was touched. `POST /api/auth/login` and
+`GET /api/profile` (the existing session-validation endpoint, previously unused by the frontend) now
+additionally return a `capabilities` array — computed **only** from the verified role via
+`ROLE_CAPABILITIES` in `backend/src/lib/roles.js`, never from anything a caller submits. Focused
+backend tests (`backend/tests/integration/auth.test.js`) prove: the array matches
+`ROLE_CAPABILITIES` exactly for all four roles, a client cannot override it by submitting its own
+`capabilities`/`role` fields, an unrecognized/forged role yields `[]` rather than any grant, no
+password/hash leaks, and the existing `loggedInUser` response shape is unchanged.
+
+The frontend now mirrors that table (`frontend/src/constants/capabilities.js`,
+`frontend/src/utils/permissions.js`'s `PAGE_CAPABILITIES` map) instead of an independently authored
+role/page matrix, and is documented throughout as **UX only** — it decides what renders, never what
+is permitted. `AuthContext` validates a stored token against `GET /api/profile` on every app
+initialization instead of trusting `localStorage` blindly; a rejected/expired/forged token (or a
+tampered `localStorage` role/capabilities entry) clears all stored session state rather than being
+treated as valid. `logout()` clears token, user and capabilities together. `ProtectedRoute` now
+**fails closed**: a route with no `requiredCapability` and no explicit `requireAuthOnly` opt-in is
+denied by default; `requireAuthOnly` is reserved for the few routes that need only authentication
+(currently just `/profile`, which has no backend capability route of its own). `Sidebar` and
+`ProtectedRoute` read the same `PAGE_CAPABILITIES` map, so nav visibility and route access can never
+disagree. `RoleGuard.jsx` was unused and is deleted rather than kept as dead duplicate authorization
+code.
+
+Resulting behavior: **ADMIN** sees every section, including the admin-only Organizations/Settings
+pages (gated on `manage:system`, mirroring `organizationRoutes.js`). **ANALYST** gets
+dashboard/threats/analytics (read capabilities), upload (`ingest:reports`) and Cases
+(`manage:cases`), but no admin-only pages. **REVIEWER** gets read-only pages plus Notifications
+(`review:notifications`) — and, fixing the known defect, **no longer sees Cases**, since the backend
+never grants `REVIEWER` `manage:cases` (confirmed by `backend/src/routes/caseRoutes.js` gating the
+entire router, including reads, behind that capability). **VIEWER** sees only
+dashboard/threats/analytics and no mutation-capable page. Note: aligning Notifications to
+`review:notifications` also removes it from ANALYST/VIEWER's nav — the previous frontend table
+showed it to all four roles, but `backend/src/routes/notificationRoutes.js` gates the entire router
+(including reads) behind `review:notifications`, so ANALYST/VIEWER would have hit a 403 from the
+backend regardless; this alignment fixes a second, previously unrecorded frontend/backend mismatch,
+not just the known Cases one. There is currently **no frontend UI for vulnerability batch
+execution** (`execute:enrichment-batch` / `execute:vulnerability-enrichment-batch`) at all — nothing
+to gate yet — but `permissions.test.js` asserts both capabilities resolve to `false` for every
+non-ADMIN role, so a future batch-execution control wired through `PAGE_CAPABILITIES`/`hasCapability`
+will be correctly ADMIN-only from day one.
+
+Frontend RBAC test tooling did not exist; the minimal standard set (Vitest + React Testing Library +
+jsdom) was added (`frontend/vite.config.js` `test` block, `frontend/src/test/setup.js`,
+`npm test` in `frontend/package.json`). 25 tests across four files
+(`utils/permissions.test.js`, `components/Sidebar.test.jsx`, `components/ProtectedRoute.test.jsx`,
+`context/AuthContext.test.jsx`) cover the required navigation-visibility, route-protection,
+fail-closed, shared-decision-source, tampered-localStorage, logout, and capability-drift scenarios —
+all 25 pass. `npm run build` and `npm run lint` (oxlint) both pass with only pre-existing warnings
+unrelated to this change.
+
+The untracked `graphify-out/` and `backend/tests/graphify-out/` directories (Graphify tool output,
+not part of this integration) had their `cache/` subdirectories removed; the non-cache report files
+(`graph.html`, `GRAPH_REPORT.md`, `wiki/`, etc.) remain untracked and are not committed, per explicit
+direction — future Graphify runs belong in the separate `ThreatNeXus-AliReview` checkout, not this
+working tree.
+
+**Exact next task: Phase 2 combined gate and ownership hardening.**
 
 ## Phase 2 §2B COMPLETE AND RELEASE-GATED — Packet C (2026-07-31)
 
