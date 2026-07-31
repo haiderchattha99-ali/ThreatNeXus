@@ -38,6 +38,9 @@ const MARKER = "p2t3-risk";
 const IP_PREFIX = "203.0.113.2";
 
 const ASOF = new Date("2026-07-01T00:00:00Z");
+
+// Separate PrismaClient instances used only by the concurrency proofs.
+let racers = [];
 const DAY = 86400000;
 
 let prisma;
@@ -144,9 +147,20 @@ function persist(findingId, overrides = {}) {
 const describeDb = TEST_DATABASE_URL ? describe : describe.skip;
 
 describeDb("P2-T3 risk scoring — real PostgreSQL", () => {
-  beforeAll(() => {
-    prisma = new PrismaClient({ datasources: { db: { url: TEST_DATABASE_URL } } });
-  });
+  beforeAll(async () => {
+    const datasources = { db: { url: TEST_DATABASE_URL } };
+    prisma = new PrismaClient({ datasources });
+    // SEPARATE, PRE-CONNECTED clients for the concurrency proof. Promise.all
+    // over ONE shared PrismaClient does NOT prove a database concurrency
+    // invariant: that client's connection pool serializes the calls enough to
+    // hide the race, so such a test passes even against an implementation with
+    // no invariant at all (measured directly during P2-T2b — six schedulers on
+    // one shared client produced 1 row with the unique index dropped, while six
+    // separate clients produced 6). Connecting up front keeps connection setup
+    // out of the racing window.
+    racers = Array.from({ length: 8 }, () => new PrismaClient({ datasources }));
+    await Promise.all([prisma.$connect(), ...racers.map((client) => client.$connect())]);
+  }, 60000);
 
   beforeEach(async () => {
     await cleanup();
@@ -157,6 +171,8 @@ describeDb("P2-T3 risk scoring — real PostgreSQL", () => {
       await cleanup();
       await prisma.$disconnect();
     }
+    await Promise.all(racers.map((client) => client.$disconnect()));
+    racers = [];
   });
 
   it("1. writes one score plus a complete contribution set, atomically", async () => {
@@ -210,8 +226,11 @@ describeDb("P2-T3 risk scoring — real PostgreSQL", () => {
     // Eight racing calculations. Each either creates the first snapshot or
     // recognises the identical input state and returns UNCHANGED; the
     // currentForFindingId unique index makes any lost race retry from scratch.
+    // Eight SEPARATE pre-connected clients, one per racer, so the calls
+    // genuinely contend inside PostgreSQL rather than being serialized by a
+    // single client's pool.
     const results = await Promise.all(
-      Array.from({ length: 8 }, () => persist(finding.id))
+      racers.map((client) => persist(finding.id, { client }))
     );
 
     results.forEach((result) => {
