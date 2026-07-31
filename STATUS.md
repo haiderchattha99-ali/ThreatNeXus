@@ -318,20 +318,55 @@ an exported value makes every request 401), and real-PostgreSQL suites must run 
   locked Phase 3 API surface does not include one. Triage is therefore surfaced where findings
   actually appear — expandable per linked finding on the case detail — rather than inventing an
   endpoint outside the phase's scope.
-- **The case-create organization picker is limited for non-ADMIN.** `/api/organizations` is gated on
-  `manage:system` (ADMIN only), so an ANALYST cannot list the registry. The picker falls back to
-  organizations already visible on existing cases (readable by every role) plus a numeric-id field.
-  A future phase that needs analyst-side organization selection needs a safe organization-list
-  endpoint.
 - **A legacy `Case` row with a null `organizationId` cannot be bound to an organization through any
   endpoint.** Doing it safely needs a controlled migration that decides what the pre-existing
   free-text `organization` string actually referred to — a separate piece of work, deliberately not
   invented here. Such rows stay readable and every workflow operation refuses them with
   `CASE_NOT_ORGANIZATION_BOUND`.
-- **`occurredAt` is not collected by the response form.** The backend accepts and strictly validates
-  it (refusing an unparseable value rather than defaulting it), but the screen has no date control
-  yet, so the server stamps the recording instant. Both `occurredAt` and `recordedAt` are stored and
-  never conflated.
+
+### Phase 3 completeness patch (2026-08-01)
+
+Two accepted limitations recorded above at Phase 3 close were resolved before the PR, without
+touching lifecycle, closure, recurrence, triage or Risk semantics, and without a schema change.
+**Migration count stays 15.**
+
+**1. Reliable organization selection for case creation.** `GET /api/organizations/options`
+(`organizationController.getOrganizationOptions`) is new, registered in `organizationRoutes.js`
+*before* the router's `manage:system` gate so it runs on its own, narrower capability —
+`manage:cases`, held by ADMIN and ANALYST — rather than the administrator-only registry grant.
+REVIEWER and VIEWER hold neither and are denied by `requireCapability` before the organization table
+is ever read. It returns only `organizationId`/`name`/`sector` (never contact detail, counters or
+audit data), ordered deterministically (`name asc, id asc`), with a bounded case-insensitive
+`search` (≤100 chars) and a `limit` capped at 50 (default 25) plus a `page` offset — invalid `limit`,
+`page` or `search` are rejected with a 400 naming the field, never silently clamped or ignored, and
+an empty or unmatched result is a safe empty list rather than a fabricated option. `Cases.jsx` now
+sources its organization picker from this endpoint instead of the previous case-derived fallback
+(which is removed), so an ANALYST can create the **first** organization-bound case even when zero
+cases currently exist to derive an organization from — the whole reason the prior fallback was
+insufficient.
+
+**2. Organization-response `occurredAt` input.** The backend already accepted and strictly validated
+a caller-supplied `occurredAt` (rejecting an unparseable value rather than defaulting it); only the
+response form had no date control. `CaseDetail.jsx`'s response form now includes a
+`datetime-local` field defaulting to the current local date/time, parsed client-side with the same
+strictness as the server (invalid input disables the Record button and shows inline feedback rather
+than round-tripping to find out), and submits the selected instant as an ISO timestamp. The client
+never supplies actor identity or any other internal field — only `responseType`, `summary`,
+`reference` and `occurredAt` cross the wire, matching the backend's existing allow-list.
+`recordedAt` (when we wrote it down) stays server-captured and is never conflated with it.
+
+Verification: 15 new/changed backend tests
+(`tests/integration/organizationOptionsRouteAuthorization.test.js`) covering ADMIN/ANALYST read
+access, REVIEWER/VIEWER denial before the table is read, the exact three-field serializer shape, PII
+non-leakage, deterministic ordering, bounded search/limit/page validation and pagination; 6 new
+frontend tests across `Cases.test.jsx` and `CaseDetail.test.jsx` covering first-case creation with
+zero prior cases, the safe-API sourcing (and non-use of the ADMIN-only registry), the occurredAt
+default/submission/invalid-value paths. Full frontend suite **65/65** across 6 files, clean
+production build, `oxlint` clean of any new warning. Focused backend suites (case/organization RBAC,
+case workflow services/rules/serializer safety, roles) all green; full no-DB backend suite
+**2268 passed / 151 skipped**, consistent with the pre-patch skip set. `npx prisma validate` clean;
+migration count confirmed at **15**, `backend/prisma/` otherwise untouched. `git diff --check`
+clean; no secret, `.env` or Graphify artifact in the diff.
 
 ## Phase 2 COMPLETE AND COMBINED-GATE VERIFIED (2026-07-31)
 
