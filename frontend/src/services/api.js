@@ -40,6 +40,10 @@ apiClient.interceptors.request.use((config) => {
 
 export const authService = {
   login: (email, password) => apiClient.post('/auth/login', { email, password }),
+  // Backend session-validation endpoint: confirms a stored token is still
+  // valid and returns the server-derived role + capabilities for it. Used on
+  // app initialization instead of trusting localStorage blindly.
+  getCurrentUser: () => apiClient.get('/profile'),
 }
 
 export const dashboardService = {

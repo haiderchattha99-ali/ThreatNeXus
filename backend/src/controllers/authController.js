@@ -7,7 +7,7 @@ const jwt = require("jsonwebtoken");
 const prisma = require("../config/prisma");
 const env = require("../config/env");
 const { redact } = require("../lib/redact");
-const { DEFAULT_ROLE, normalizeRole } = require("../lib/roles");
+const { DEFAULT_ROLE, normalizeRole, ROLE_CAPABILITIES } = require("../lib/roles");
 const {
   MIN_PASSWORD_LENGTH,
   normalizeEmail,
@@ -249,6 +249,12 @@ const login = async (req, res) => {
 
     // Fields are listed explicitly; the user row from findUnique still holds
     // the password hash and must never be spread into a response.
+    //
+    // capabilities is derived solely from the normalized role via
+    // ROLE_CAPABILITIES (lib/roles.js) — never from the request body — so a
+    // caller cannot submit or influence what it grants. It is UX metadata for
+    // the frontend only; every backend route still enforces its own
+    // requireCapability/requireRole middleware independently.
     return res.json({
       success: true,
       message: "Login successful",
@@ -259,6 +265,7 @@ const login = async (req, res) => {
         email: user.email,
         role,
       },
+      capabilities: ROLE_CAPABILITIES[role] || [],
     });
   } catch (error) {
     logServerError("Login failed", error, req);

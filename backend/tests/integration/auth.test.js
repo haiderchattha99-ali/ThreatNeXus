@@ -4,6 +4,7 @@ const path = require("path");
 const request = require("supertest");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
+const { ROLE_CAPABILITIES, CAPABILITIES } = require("../../src/lib/roles");
 
 const JWT_SECRET = "a-reasonably-strong-32-char-plus-secret-value";
 
@@ -630,5 +631,104 @@ describe("authenticated routes end to end", () => {
       .set("Authorization", `Bearer ${forged}`);
 
     expect(res.status).toBe(401);
+  });
+});
+
+// Frontend RBAC alignment (Phase 2 integration packet): both endpoints expose
+// a server-derived capabilities array so the frontend can mirror backend
+// authorization instead of maintaining an independently-authored role table.
+// Every assertion here proves the array traces only to ROLE_CAPABILITIES
+// (lib/roles.js) keyed by the verified role — never to anything a caller
+// supplies — and that adding it does not loosen any existing response shape.
+describe("capabilities in login and profile responses", () => {
+  async function loginToken(role) {
+    const email = `caps-${role.toLowerCase()}@example.test`;
+    await seedUser({ email, role });
+    return request(app).post("/api/auth/login").send({ email, password: VALID_PASSWORD });
+  }
+
+  it.each(["ADMIN", "ANALYST", "REVIEWER", "VIEWER"])(
+    "login returns exactly the ROLE_CAPABILITIES set for %s",
+    async (role) => {
+      const res = await loginToken(role);
+
+      expect(res.status).toBe(200);
+      expect(res.body.capabilities.slice().sort()).toEqual(
+        [...ROLE_CAPABILITIES[role]].sort()
+      );
+    }
+  );
+
+  it.each(["ADMIN", "ANALYST", "REVIEWER", "VIEWER"])(
+    "profile returns exactly the ROLE_CAPABILITIES set for %s",
+    async (role) => {
+      const loginRes = await loginToken(role);
+      const res = await request(app)
+        .get("/api/profile")
+        .set("Authorization", `Bearer ${loginRes.body.token}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.capabilities.slice().sort()).toEqual(
+        [...ROLE_CAPABILITIES[role]].sort()
+      );
+    }
+  );
+
+  it("ADMIN alone receives every capability", async () => {
+    const res = await loginToken("ADMIN");
+    expect(res.body.capabilities.slice().sort()).toEqual(
+      Object.values(CAPABILITIES).slice().sort()
+    );
+  });
+
+  it("VIEWER receives only the read-only capabilities", async () => {
+    const res = await loginToken("VIEWER");
+    expect(res.body.capabilities.sort()).toEqual(
+      [CAPABILITIES.READ_DASHBOARD, CAPABILITIES.READ_FINDINGS].sort()
+    );
+  });
+
+  it("a client cannot submit or override the capabilities it receives", async () => {
+    const email = "caps-no-override@example.test";
+    await seedUser({ email, role: "VIEWER" });
+
+    const res = await request(app)
+      .post("/api/auth/login")
+      .send({
+        email,
+        password: VALID_PASSWORD,
+        capabilities: Object.values(CAPABILITIES),
+        role: "ADMIN",
+      });
+
+    expect(res.body.capabilities.sort()).toEqual(
+      [CAPABILITIES.READ_DASHBOARD, CAPABILITIES.READ_FINDINGS].sort()
+    );
+  });
+
+  it("a forged token with an unrecognized role receives no capabilities", async () => {
+    const forged = jwt.sign({ id: 1, email: "a@b.test", role: "superuser" }, JWT_SECRET);
+    const res = await request(app)
+      .get("/api/profile")
+      .set("Authorization", `Bearer ${forged}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.capabilities).toEqual([]);
+  });
+
+  it("still leaks no password/hash with capabilities present", async () => {
+    const res = await loginToken("ADMIN");
+    const serialized = JSON.stringify(res.body);
+    expect(serialized).not.toContain(VALID_PASSWORD);
+    expect(serialized).not.toContain("$2b$");
+  });
+
+  it("does not change the existing loggedInUser key shape", async () => {
+    const loginRes = await loginToken("ANALYST");
+    const res = await request(app)
+      .get("/api/profile")
+      .set("Authorization", `Bearer ${loginRes.body.token}`);
+
+    expect(Object.keys(res.body.loggedInUser).sort()).toEqual(["email", "id", "role"]);
   });
 });
