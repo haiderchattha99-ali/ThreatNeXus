@@ -41,6 +41,222 @@ _Operational status / handoff note. Authoritative plan lives in
   to backend capability enforcement — see "Frontend RBAC integration" immediately below. This is a
   frontend/integration packet only: no schema change, no migration, no Risk v1 or vulnerability-
   intelligence logic touched, and Phase 2 §2B remains release-gated as recorded above.
+- **PHASE 2 — COMPLETE AND COMBINED-GATE VERIFIED.** The closing packet landed ownership
+  re-resolution, PostgreSQL candidate pushdown, safe sector exposure, ownership consistency
+  detection, the combined `eval:phase2` integration gate and its mutation gate — see "Phase 2
+  COMPLETE AND COMBINED-GATE VERIFIED" immediately below. **Migration count remains 14 and
+  `backend/prisma/` is byte-identical to its §2B state.** Exact next task is **Phase 3 — defensible
+  analyst workflow**.
+
+## Phase 2 COMPLETE AND COMBINED-GATE VERIFIED (2026-07-31)
+
+The closing packet for Phase 2. It closed the last two deferred ownership items (C-1/C-2
+re-resolution and the `reResolveFindingsForMapping` full-table scan), added the safe sector surface
+and the consistency checker, and — most importantly — added the first gate that exercises Phase 2's
+layers **composed** rather than in isolation.
+
+**No schema change. Migration count remains 14. `backend/prisma/` is byte-identical to `fb253b4`.**
+
+### Ingestion lifecycle (unchanged, re-proven in composition)
+
+CSV → raw evidence (`RawReport`/`RawReportRow`, bytes preserved) → structural parse → row validation
+→ dedup on the locked key `(indicator_value, port, protocol, report_type)` → persistence (bump
+`occurrenceCount`, no new row) or recurrence (reopen a closed Finding, bump `recurrenceCount`) →
+ownership resolution → IOC enrichment scheduling → deterministic Risk v1. Absence from a later
+report never auto-closes a Finding; a newer occurrence against a closed Finding reopens it.
+
+### Ownership precedence and ambiguity (unchanged, now mutation-proven)
+
+1. explicit override → 2. exact IP → 3. longest matching CIDR → 4. ASN → 5. unresolved.
+Equally specific matches for different organizations produce **AMBIGUOUS**, never a silent winner:
+`organizationId` and `confidence` are both null and `candidateCount` records how many organizations
+tied. ASN attribution is **LOW confidence and ISP-flagged**. **Ownership contributes zero Risk v1
+basis points** — it is only the applicability gate for `sectorCriticality`.
+
+### Mapping-change re-resolution (new)
+
+`assetMappingService` previously committed a mapping mutation and stopped, so ownership went stale
+until something else happened to re-resolve a Finding. Mapping mutations now trigger **one bounded
+re-resolution batch, strictly after the mutation commits** — never inside it. No Finding query,
+resolution loop, risk scoring, audit write or provider call runs inside a mapping transaction.
+
+- Triggers: create, disable, and precedence-relevant updates only — `organizationId`, `validFrom`,
+  `validUntil`. **Not** `confidence`/`source`/`provenanceNote`/`mappingConfirmed`, which the resolver
+  never reads, so editing a provenance note cannot start a sweep.
+- `mappingType`/`exactIp`/`cidr`/`asn` are not PATCHable by existing design (retargeting is
+  disable+create), and `enabled` has no re-enable API path — so "IP/CIDR/ASN mapping change" reduces
+  to create+disable. Recorded as an accepted limitation, not an omission.
+- One Finding's failure increments `failedCount` and the loop continues; a re-resolution failure
+  never rolls back the committed mapping; a risk failure never rolls back ownership history; an
+  audit failure rolls back nothing.
+- Identical ownership fingerprint → UNCHANGED → no new row, no audit, no risk churn.
+- Summary reports `mappingId`, `mappingType`, `candidateCount`, `processedCount`, `changedCount`,
+  `unchangedCount`, `ambiguousCount`, `unresolvedCount`, `overriddenPreservedCount`, `failedCount`,
+  `riskChangedCount`, `riskUnchangedCount`, `riskFailedCount`, `truncated`, `acquisitionLimited`.
+- **No daemon, no cron, no self-rescheduling.** Truncation is surfaced with an HMAC-signed
+  continuation token and finished by an explicit ADMIN call, so a response can never imply full
+  re-resolution when one batch ran.
+
+### Bounded database candidate selection (new)
+
+`Finding.indicatorValue` is a String with no integer or ASN column, so numeric `BETWEEN` is
+unavailable and a lexical range would be **wrong** (`"10.0.0.9" > "10.0.0.10"` as text would silently
+skip rows). A CIDR range is block-aligned, so it decomposes into octet-aligned `startsWith` prefixes:
+
+| mapping prefix | filter granularity | predicate count | exact? |
+|---|---|---|---|
+| `p >= 24` | one `a.b.c.` | 1 | overshoots ≤ one /24 |
+| `16 <= p < 24` | `a.b.c.` enumeration | `2^(24-p)` ≤ 256 | exact |
+| `8 <= p < 16` | `a.b.` enumeration | `2^(16-p)` ≤ 256 | exact |
+| `p < 8` | `a.` enumeration | `2^(8-p)` ≤ 256 | exact |
+
+Never more than 256 OR'd predicates for any prefix length including `/0`. Every prefix ends in a
+**dot**, so `"10.1."` cannot match `"10.10.5.1"` — the textual-prefix trap. The overshoot for `p > 24`
+is narrowed by real BigInt containment, so **the ownership decision is never made by text matching**;
+`startsWith` is only a bounded pre-filter. These predicates ride the existing `finding_identity`
+index (which leads with `indicatorValue`), so **no index, no raw SQL and no migration** were needed.
+
+Candidates also come from ownership rows that **name** a mapping (`matchedMappingId`), which is what
+lets a disabled mapping release what it previously attributed. That narrows the ASN gap: an ASN
+mapping can now **release** its prior attributions, though it still cannot **acquire** new ones
+because Finding stores no ASN — reported explicitly as `acquisitionLimited: true`.
+
+Pagination is a keyset cursor on Finding id, never OFFSET, so concurrent ownership writes cannot
+shift the window; only `id`/`indicatorValue` are selected; no include tree, no N+1.
+
+### Explicit override preservation
+
+`resolveOneFinding` re-feeds an existing OVERRIDDEN row back to the resolver as `currentOverride`, so
+the decision returns OVERRIDDEN and identical, which the effective-fields comparison classifies as
+UNCHANGED. Automatic re-resolution can never discard an analyst's attribution — proven in the unit
+suite, the combined gate (scenario 11), under real concurrency (property 4), and by mutation M04.
+
+### Safe sector exposure (new)
+
+`GET /api/findings/:id/ownership` now returns a `sectorContext` block: `organizationId`,
+`organizationName`, `sector`, `ownershipStatus`, `ownershipConfidence`, `attributionType`,
+`isIspAttribution`, `matchedMapping` (type/source/confirmed only), `resolvedAt`, `effectiveAt`, and
+`sectorCriticalityApplicability`.
+
+Applicability is **not recomputed** — it delegates to `riskInputSnapshot.loadOwnershipContext`, the
+same gate the risk engine scores with. Seven distinct states are reported rather than one false:
+`APPLICABLE`, `NOT_APPLICABLE_AMBIGUOUS`, `_UNRESOLVED`, `_NO_ORGANIZATION`, `_ISP_ATTRIBUTION`,
+`_LOW_CONFIDENCE`, `_UNKNOWN_SECTOR`. ISP is reported ahead of confidence so the honest reason is
+"this is the carrier, not the victim". **No basis points are computed in a serializer** — what a
+sector is worth stays in the Risk v1 contribution/explanation surface. Never exposed: organization
+contacts, `securityScore`, `activeThreats`, `ipStart`/`ipEnd`, `provenanceNote`,
+`currentForFindingId`.
+
+### Ownership consistency detection (new)
+
+`POST /api/ownership/consistency-check` (ADMIN) reports, in bounded batches, eleven defect classes:
+duplicate current row, RESOLVED without organization, AMBIGUOUS/UNRESOLVED carrying an organization,
+OVERRIDDEN leaning on a mapping id, illegal status/confidence pairings, ISP attribution with
+incompatible confidence, a current mapping that is missing or disabled, divergence from the
+authoritative resolver, and sector-applicability mismatch.
+
+**Detection only — it never writes.** Ownership history is append-only evidence; a checker that
+silently repaired what it found would destroy the record showing something went wrong. Exact Finding
+ids go to the ADMIN caller bounded by batch size; the audit event carries **counts only**, so an
+`AuditLog` row cannot become a standing export of which hosts are affected. No indicator address
+appears in any count, log or audit payload. No repair operation was needed — no stale rows were
+demonstrated.
+
+### Enrichment roles (unchanged)
+
+**AbuseIPDB** is IOC reputation for the indicator, behind the provider abstraction, with
+`MockProvider` in every automated test. **NVD/KEV/EPSS** are vulnerability intelligence about an
+explicitly analyst-asserted CVE. They are separate paths and neither substitutes for the other; the
+combined gate proves both stay independent (scenario 13). **No CVE is ever inferred** from port 3389
+(scenario 14). Only `SUCCESS`/`NOT_FOUND` enrichment rows are reputation-bearing — `PENDING`,
+`RATE_LIMITED`, `TIMEOUT` and `DEAD_LETTER` are never scored as evidence.
+
+### APIs / RBAC / audit boundaries
+
+- New: `POST /api/ownership/mappings/:id/re-resolve` and `POST /api/ownership/consistency-check`,
+  both behind the existing **ADMIN-only** `manage:ownership-mappings`. **No new capability was
+  added, so the frontend needs no change.**
+- Both reject caller-supplied `actorUserId`, `asOf`, `afterId`/`cursor`, worker id, `riskScore`,
+  `confidence`, `status`, `matchedMappingId` and any unissued continuation token — **rejected, not
+  ignored**, since silently dropping a field a caller believed was applied is its own failure mode.
+- New audit actions: `ownership.mapping.reresolution.requested|completed|partial|failed`,
+  `ownership.consistency.check.requested|completed|failed`. Payloads carry the mapping id, mapping
+  type, aggregate counts and closed flags — never a candidate list, a victim indicator, a cursor, a
+  stack, an `Error.message` or a Prisma code. Per-Finding ownership audit is suppressed inside a
+  batch in favour of one aggregate event; risk emits its own single aggregate event and is not
+  duplicated here.
+
+### Verification
+
+| Gate | Result |
+|---|---|
+| `npx prisma validate` | valid; **14** migrations, none pending on `threatnexus_test`/`threatnexus_eval` |
+| Backend suite, no DB vars | **2040 passed / 134 skipped** |
+| Backend suite, `TEST_DATABASE_URL`, `--no-file-parallelism` | **2172 passed / 2 skipped** (93 files) |
+| Concurrency suites × 3 consecutive runs | **81/81** each run (7 suites) |
+| `npm run eval:phase1` | **9/9** |
+| `npm run eval:risk` | **19/19** |
+| `npm run eval:vulnerability` | **41 scenarios / 992 assertions** |
+| `npm run eval:vulnerability:mutation` | **12/12** |
+| `npm run eval:phase2` (new) | **22 scenarios / 112 assertions**, rerunnable |
+| `npm run eval:phase2:mutation` (new) | **6/6** ownership rules detected by a named scenario |
+| Frontend tests / production build | **25/25** / builds clean |
+
+**Two reproducible environment rules** (both cost time this session):
+
+1. **Never export `JWT_SECRET` globally** when running the backend suite. HTTP-token suites hardcode
+   their own signing secret and only self-default it (`process.env.JWT_SECRET || LOCAL`), so an
+   exported value makes the server verify with a different secret than the test signs with — every
+   request returns 401 and ~9 tests fail in a way that looks like an authorization regression.
+2. **Real-PG suites need `--no-file-parallelism`.** They share one `threatnexus_test` database, and
+   parallel files steal each other's queued enrichment jobs; failures move between runs (10 → 9 → 4 →
+   1), which reads like flakiness but is cross-suite interference. Sequentially: fully green.
+
+### Mutation checks
+
+`eval:phase2:mutation` re-runs the real gate in a child process with exactly one ownership rule
+broken and requires the gate to fail **in the scenario that guards that rule** — not merely to fail.
+All six detected: exact-IP precedence (04), longest-CIDR precedence (05), tied-specificity ambiguity
+(06), override preservation (11), the sector applicability gate (12), unaffected-Finding exclusion
+(08).
+
+Worth recording: exclusion is guarded by scenario **08**, not 09. 08 asserts *which* Findings were
+selected; 09 asserts an unrelated row was not *rewritten* — and 09 correctly still passes under that
+mutation, because re-resolving an unrelated Finding with a still-correct resolver reaches the same
+answer and writes nothing. Selecting too much work and corrupting an unrelated row are two different
+failures with two different guards.
+
+### Security review
+
+Verified clean: no tracked `.env`/key material; no hardcoded API key in `src/`; no provider key in
+logs, audits or errors; no raw provider response persisted; no inferred CVE; ownership never decided
+by text matching; no unbounded database read remaining; no network call inside an ingestion or
+mapping transaction; no `PENDING`/`DEAD_LETTER` evidence scored; backend capabilities remain the sole
+authorization boundary; historical evidence never overwritten; no actor-controlled risk/ownership
+field; no Graphify output tracked or untracked; no direct `main` change; no schema or migration
+change.
+
+**One defect found and fixed** (`df565cb`): the override apply/clear failure paths built their
+`AuditLog.reason` by interpolating `error.message`. Nothing leaked — the three classes those catch
+blocks handle all author their own bounded messages — but an audit reason assembled by interpolation
+from an `Error` is one added error class away from carrying raw database or provider text into the
+audit trail. Now records the closed error **name** plus the bounded field list.
+
+### Accepted limitations
+
+- **ASN acquisition.** An ASN mapping cannot retroactively claim Findings whose ASN was never stored;
+  `Finding` has no `asn` column and adding one is a schema change. Release works, acquisition does
+  not, and the asymmetry is reported as `acquisitionLimited` rather than hidden.
+- **No `matchedMappingId` index.** Prior-attribution selection filters on an unindexed column, kept
+  bounded by the batch limit and the `currentForFindingId` predicate. Adding the index is a migration
+  and the count is locked at 14 for this packet.
+- **Mapping retargeting and re-enable have no API path** (disable+create by existing design), so
+  those re-resolution triggers are unreachable rather than unimplemented.
+- **No live external provider smoke test yet.** Every automated test uses `MockProvider` and the
+  gates forbid network access outright; a real AbuseIPDB/NVD call has still never been exercised in
+  CI. Deliberate — tests must never consume live quota.
+- **`EVAL_DATABASE_URL` safety is still raw string equality** (carried over from the Phase 1 audit):
+  `postgres://` vs `postgresql://` spellings would not be caught.
 
 ## Frontend RBAC integration (2026-07-31)
 
@@ -2806,19 +3022,34 @@ provider registers under the exact lowercase name `abuseipdb` and requires no
 API key to construct or import. **Still nothing calls either of them from the
 queue layer.**
 
-**Exact next task: P2-T2d — bounded enrichment runner and queue completion
-integration.** That packet owns: the consumer that claims queued work via
-`enrichmentQueueService.js`, calls `AbuseIPDBProvider.lookup` **outside** any
-database transaction, applies `resolveEnrichmentTtl` to the result, and
-completes the claim; and the ingestion wiring that schedules enrichment for a
-Finding's IPv4 indicator. **Enrichment failure must never block ingestion** —
-findings are still created and the `IocEnrichment` row records
-`FAILED`/`RATE_LIMITED` instead. API keys from environment variables only,
-redacted from all logs and error responses (already proven for the provider
-and for `env.js` in P2-T2c). This is a separate path from the existing
-KEV/EPSS/NVD vulnerability enrichment design (unchanged, not started) and from
-ownership mapping (P2-T1/P2-H1, done) — neither substitutes for either of the
-others.
+**Everything above this line is now historical.** P2-T2d, P2-T2e-1/2, P2-T3 and
+§2B Packets A/B/C all landed, and the Phase 2 closing packet has since completed
+ownership re-resolution, database candidate pushdown, safe sector exposure,
+consistency detection and the combined integration gate.
+
+**PHASE 2 IS COMPLETE AND COMBINED-GATE VERIFIED** — see "Phase 2 COMPLETE AND
+COMBINED-GATE VERIFIED" near the top of this file for the full record, the
+verification matrix and the accepted limitations.
+
+**Exact next task: Phase 3 — defensible analyst workflow.**
+
+    Finding triage
+      → CaseFinding
+        → case lifecycle
+          → organization response tracking
+            → recurrence-driven reopening
+
+That packet owns the analyst-facing workflow that turns a scored, owned Finding
+into tracked work: triage state on a Finding; the `CaseFinding` link between a
+Case and the Findings it covers; the case lifecycle and its transitions; how an
+organization's response is recorded; and how recurrence (already detected and
+proven in Phase 1/Phase 2) drives reopening a closed case.
+
+Carry the existing invariants in unchanged: audit every write path in the same
+change; keep recurrence/persistence semantics exactly as locked; keep backend
+capabilities the sole authorization boundary; keep AI off by default and unable
+to approve, close or resolve anything. **Notification export still requires
+analyst approval and is not part of this packet.**
 
 Non-blocking carry-overs from the Phase 1 audit (none gate Phase 2): add a
 `RawReport.rawContent` byte-preservation test; fix the `cleanupUpload`
