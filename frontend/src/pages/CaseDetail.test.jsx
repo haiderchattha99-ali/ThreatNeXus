@@ -332,6 +332,51 @@ describe('case detail — ANALYST management controls', () => {
     expect(screen.queryByTestId('reject-closure')).not.toBeInTheDocument()
   })
 
+  it('defaults the response occurredAt field to the current local date/time', async () => {
+    renderDetail(ANALYST_CAPABILITIES)
+
+    const input = await screen.findByTestId('response-occurred-at')
+    const field = input.querySelector('input')
+    // datetime-local values are "YYYY-MM-DDTHH:mm" — assert the shape and that
+    // it is not blank, without depending on exactly which instant "now" is.
+    expect(field.value).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/)
+  })
+
+  it('sends the selected occurredAt as an ISO timestamp when recording a response', async () => {
+    const user = userEvent.setup()
+    renderDetail(ANALYST_CAPABILITIES)
+    caseWorkflowService.recordResponse.mockResolvedValue({ data: { data: workflowView() } })
+
+    await user.type(await screen.findByLabelText('Summary (required)'), 'Confirmed remediation')
+    const occurredAtInput = screen.getByTestId('response-occurred-at').querySelector('input')
+    await user.clear(occurredAtInput)
+    await user.type(occurredAtInput, '2026-08-02T14:30')
+    await user.click(screen.getByTestId('record-response'))
+
+    await waitFor(() =>
+      expect(caseWorkflowService.recordResponse).toHaveBeenCalledWith(
+        4,
+        expect.objectContaining({
+          summary: 'Confirmed remediation',
+          occurredAt: new Date('2026-08-02T14:30').toISOString(),
+        }),
+      ),
+    )
+  })
+
+  it('rejects an invalid occurredAt with clear validation feedback, and calls nothing', async () => {
+    const user = userEvent.setup()
+    renderDetail(ANALYST_CAPABILITIES)
+
+    await user.type(await screen.findByLabelText('Summary (required)'), 'Confirmed remediation')
+    const occurredAtInput = screen.getByTestId('response-occurred-at').querySelector('input')
+    await user.clear(occurredAtInput)
+
+    expect(screen.getByText('Enter a valid date and time.')).toBeInTheDocument()
+    expect(screen.getByTestId('record-response')).toBeDisabled()
+    expect(caseWorkflowService.recordResponse).not.toHaveBeenCalled()
+  })
+
   it('links a finding and adopts the refreshed view the server returns', async () => {
     const user = userEvent.setup()
     renderDetail(ANALYST_CAPABILITIES)

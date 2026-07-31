@@ -147,6 +147,13 @@ export const organizationService = {
   getOrganizations: () =>
     apiClient.get("/organizations"),
 
+  // Safe, bounded organization-options list for case creation. Gated on
+  // manage:cases (ADMIN + ANALYST) rather than manage:system, so an ANALYST
+  // can list it — unlike getOrganizations above. Returns only
+  // organizationId/name/sector.
+  getOrganizationOptions: (params) =>
+    apiClient.get("/organizations/options", { params }),
+
   getOrganization: (id) =>
     apiClient.get(`/organizations/${id}`),
 

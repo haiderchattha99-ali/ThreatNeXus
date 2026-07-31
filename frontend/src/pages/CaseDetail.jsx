@@ -41,6 +41,23 @@ import {
   formatInstant,
 } from '../constants/caseWorkflow'
 
+// Formats a Date as the value an <input type="datetime-local"> expects, in
+// the browser's local timezone (not UTC — toISOString would silently shift
+// the displayed instant).
+function toLocalDatetimeInputValue(date) {
+  const pad = (n) => String(n).padStart(2, '0')
+  return (
+    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
+    `T${pad(date.getHours())}:${pad(date.getMinutes())}`
+  )
+}
+
+function parseDatetimeInputValue(value) {
+  if (typeof value !== 'string' || value.trim() === '') return null
+  const parsed = new Date(value)
+  return Number.isNaN(parsed.getTime()) ? null : parsed
+}
+
 function Section({ title, subtitle, children, testId }) {
   return (
     <Card className="surface" sx={{ p: 3, mb: 3 }} data-testid={testId}>
@@ -84,15 +101,18 @@ export const CaseDetail = () => {
 
   const [linkFindingId, setLinkFindingId] = useState('')
   const [stateNote, setStateNote] = useState('')
-  // occurredAt is deliberately NOT collected here. It records when the
-  // ORGANIZATION responded, and the backend refuses an unparseable value rather
-  // than defaulting it — so until this screen has a real date control, letting
-  // the server stamp the recording instant is the honest behaviour. Both
-  // occurredAt and recordedAt are stored server-side and never conflated.
+  // occurredAt records when the ORGANIZATION responded — a real-world instant
+  // the analyst knows and the server does not — and defaults to the current
+  // local date/time. The backend strictly validates it and refuses an
+  // unparseable value rather than silently defaulting it, so this screen
+  // parses it client-side too and blocks submission on an invalid value
+  // rather than letting the request round-trip to find out. recordedAt (when
+  // we wrote it down) stays server-captured and is never conflated with it.
   const [responseForm, setResponseForm] = useState({
     responseType: 'ACKNOWLEDGED',
     summary: '',
     reference: '',
+    occurredAt: toLocalDatetimeInputValue(new Date()),
   })
   const [closureForm, setClosureForm] = useState({ closureReason: 'OTHER', justification: '' })
   const [reviewNote, setReviewNote] = useState('')
@@ -478,14 +498,40 @@ export const CaseDetail = () => {
               onChange={(e) => setResponseForm({ ...responseForm, reference: e.target.value })}
               sx={{ width: 180 }}
             />
+            <TextField
+              size="small"
+              type="datetime-local"
+              label="Occurred at"
+              data-testid="response-occurred-at"
+              value={responseForm.occurredAt}
+              onChange={(e) => setResponseForm({ ...responseForm, occurredAt: e.target.value })}
+              error={parseDatetimeInputValue(responseForm.occurredAt) === null}
+              helperText={
+                parseDatetimeInputValue(responseForm.occurredAt) === null
+                  ? 'Enter a valid date and time.'
+                  : ' '
+              }
+              slotProps={{ inputLabel: { shrink: true } }}
+              sx={{ minWidth: 210 }}
+            />
             <Button
               variant="contained"
-              disabled={busy || responseForm.summary.trim() === ''}
+              disabled={
+                busy ||
+                responseForm.summary.trim() === '' ||
+                parseDatetimeInputValue(responseForm.occurredAt) === null
+              }
               data-testid="record-response"
               onClick={async () => {
+                const occurredAt = parseDatetimeInputValue(responseForm.occurredAt)
+                if (occurredAt === null) {
+                  toast.error('Enter a valid response date and time.')
+                  return
+                }
                 const payload = {
                   responseType: responseForm.responseType,
                   summary: responseForm.summary.trim(),
+                  occurredAt: occurredAt.toISOString(),
                 }
                 if (responseForm.reference.trim()) payload.reference = responseForm.reference.trim()
                 const ok = await run(
@@ -498,6 +544,7 @@ export const CaseDetail = () => {
                     responseType: 'ACKNOWLEDGED',
                     summary: '',
                     reference: '',
+                    occurredAt: toLocalDatetimeInputValue(new Date()),
                   })
                 }
               }}

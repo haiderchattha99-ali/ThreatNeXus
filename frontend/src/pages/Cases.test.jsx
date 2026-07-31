@@ -26,8 +26,14 @@ vi.mock('../services/api', () => ({
   },
   organizationService: {
     getOrganizations: vi.fn(),
+    getOrganizationOptions: vi.fn(),
   },
 }))
+
+const ORGANIZATION_OPTIONS = [
+  { organizationId: 3, name: 'Acme Bank', sector: 'FINANCE' },
+  { organizationId: 6, name: 'Beta Utilities', sector: 'ENERGY' },
+]
 
 const ADMIN_CAPABILITIES = Object.values(CAPABILITIES)
 const ANALYST_CAPABILITIES = [
@@ -97,13 +103,16 @@ const CASES = [
   },
 ]
 
-function renderCases(capabilities, rows = CASES) {
+function renderCases(capabilities, rows = CASES, organizationOptions = ORGANIZATION_OPTIONS) {
   vi.spyOn(useAuthModule, 'useAuth').mockReturnValue({
     user: { id: 1, capabilities },
     capabilities,
   })
   caseService.getCases.mockResolvedValue({ data: { data: rows } })
   organizationService.getOrganizations.mockResolvedValue({ data: { data: [] } })
+  organizationService.getOrganizationOptions.mockResolvedValue({
+    data: { data: organizationOptions },
+  })
   return render(
     <MemoryRouter>
       <Cases />
@@ -197,7 +206,7 @@ describe('case list — creation', () => {
   it('refuses to submit without an organization, and calls nothing', async () => {
     const user = userEvent.setup()
     const toast = (await import('react-hot-toast')).default
-    renderCases(ANALYST_CAPABILITIES, [])
+    renderCases(ANALYST_CAPABILITIES, [], [])
 
     await user.click(await screen.findByRole('button', { name: /new case/i }))
     await user.type(screen.getByLabelText('Case title'), 'New exposure')
@@ -207,15 +216,13 @@ describe('case list — creation', () => {
     expect(toast.error).toHaveBeenCalledWith(expect.stringContaining('organization is required'))
   })
 
-  it('sends a numeric organizationId with the case', async () => {
+  it('sends a numeric organizationId with the case, sourced from the safe options API', async () => {
     const user = userEvent.setup()
     renderCases(ANALYST_CAPABILITIES)
     caseService.createCase.mockResolvedValue({ data: { data: { id: 9 } } })
 
     await user.click(await screen.findByRole('button', { name: /new case/i }))
     await user.type(screen.getByLabelText('Case title'), 'New exposure')
-    // The picker is populated from the organizations already visible on
-    // existing cases, because the organization registry itself is ADMIN-only.
     await user.click(screen.getByLabelText('Organization'))
     await user.click(screen.getByRole('option', { name: 'Acme Bank' }))
     await user.click(screen.getByRole('button', { name: 'Create' }))
@@ -227,26 +234,52 @@ describe('case list — creation', () => {
     )
   })
 
-  it('falls back to a numeric id field when no organization is visible yet', async () => {
+  // The whole point of the safe options endpoint: an ANALYST must be able to
+  // create the FIRST organization-bound case even though zero cases exist yet
+  // to derive an organization from. Options come entirely from the safe API,
+  // never from `cases`.
+  it('lets an ANALYST create the first case when no cases previously exist', async () => {
     const user = userEvent.setup()
-    renderCases(ANALYST_CAPABILITIES, [])
+    renderCases(ANALYST_CAPABILITIES, [], ORGANIZATION_OPTIONS)
+    caseService.createCase.mockResolvedValue({ data: { data: { id: 1 } } })
+
+    await user.click(await screen.findByRole('button', { name: /new case/i }))
+    await user.type(screen.getByLabelText('Case title'), 'First case for this org')
+    await user.click(screen.getByLabelText('Organization'))
+    await user.click(screen.getByRole('option', { name: 'Beta Utilities' }))
+    await user.click(screen.getByRole('button', { name: 'Create' }))
+
+    await waitFor(() =>
+      expect(caseService.createCase).toHaveBeenCalledWith(
+        expect.objectContaining({ organizationId: 6 }),
+      ),
+    )
+  })
+
+  it('falls back to a numeric id field when the safe options list is empty', async () => {
+    const user = userEvent.setup()
+    renderCases(ANALYST_CAPABILITIES, [], [])
 
     await user.click(await screen.findByRole('button', { name: /new case/i }))
     expect(screen.getByLabelText('Organization id')).toBeInTheDocument()
-    expect(
-      screen.getByText(/No organization is visible from here yet/i),
-    ).toBeInTheDocument()
+    expect(screen.getByText(/No organization exists yet/i)).toBeInTheDocument()
   })
 
-  it('does not attempt the ADMIN-only organization registry as an ANALYST', async () => {
+  it('sources organization options from the safe manage:cases-gated API, not the ADMIN-only registry', async () => {
     renderCases(ANALYST_CAPABILITIES)
     await screen.findByText('TNX-2026-000004')
+    expect(organizationService.getOrganizationOptions).toHaveBeenCalled()
     expect(organizationService.getOrganizations).not.toHaveBeenCalled()
   })
 
-  it('does load the organization registry for ADMIN', async () => {
-    renderCases(ADMIN_CAPABILITIES)
+  it('does not fetch organization options for REVIEWER or VIEWER', async () => {
+    renderCases(REVIEWER_CAPABILITIES)
+    await screen.findAllByText('TNX-2026-000004')
+    expect(organizationService.getOrganizationOptions).not.toHaveBeenCalled()
+
+    vi.clearAllMocks()
+    renderCases(VIEWER_CAPABILITIES)
     await screen.findByText('TNX-2026-000004')
-    expect(organizationService.getOrganizations).toHaveBeenCalled()
+    expect(organizationService.getOrganizationOptions).not.toHaveBeenCalled()
   })
 })

@@ -12,7 +12,22 @@ const {
   createOrganization,
   updateOrganization,
   deleteOrganization,
+  getOrganizationOptions,
 } = require("../controllers/organizationController");
+
+// Phase 3 completeness patch — a safe, bounded organization-options list for
+// case creation. Registered BEFORE the manage:system gate below so it is
+// reachable on its own, narrower capability (manage:cases, held by ADMIN and
+// ANALYST) rather than the administrator-only registry grant. REVIEWER and
+// VIEWER hold neither manage:cases nor manage:system, so both are denied here
+// by requireCapability before this controller (or the organization table) is
+// ever reached.
+router.get(
+  "/options",
+  authenticate,
+  requireCapability(CAPABILITIES.MANAGE_CASES),
+  getOrganizationOptions
+);
 
 // authenticate first (it populates req.user), then the capability guard.
 //

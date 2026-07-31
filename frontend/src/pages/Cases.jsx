@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Box,
@@ -69,10 +69,9 @@ export const Cases = () => {
   const { user } = useAuth()
   const capabilities = user?.capabilities
   const canManage = hasCapability(capabilities, CAPABILITIES.MANAGE_CASES)
-  const canListOrganizations = hasCapability(capabilities, CAPABILITIES.MANAGE_SYSTEM)
 
   const [cases, setCases] = useState([])
-  const [organizations, setOrganizations] = useState([])
+  const [organizationOptions, setOrganizationOptions] = useState([])
   const [loading, setLoading] = useState(true)
   const [creating, setCreating] = useState(false)
   const [page, setPage] = useState(0)
@@ -93,38 +92,25 @@ export const Cases = () => {
     }
   }, [])
 
-  // The organization registry is ADMIN-only (`manage:system`), so an ANALYST
-  // cannot list it. Rather than fail, the picker falls back to the
-  // organizations already visible on existing cases — which every role can
-  // read — plus a free numeric entry for one that has no case yet.
-  const fetchOrganizations = useCallback(async () => {
-    if (!canListOrganizations) return
+  // The safe, bounded organization-options endpoint (`manage:cases`, held by
+  // both ADMIN and ANALYST) — unlike GET /api/organizations (`manage:system`,
+  // ADMIN only), this is reachable by an analyst creating the first
+  // organization-bound case, even when zero cases currently exist to derive
+  // an organization from.
+  const fetchOrganizationOptions = useCallback(async () => {
+    if (!canManage) return
     try {
-      const res = await organizationService.getOrganizations()
-      setOrganizations(res.data?.data || [])
+      const res = await organizationService.getOrganizationOptions()
+      setOrganizationOptions(res.data?.data || [])
     } catch {
-      setOrganizations([])
+      setOrganizationOptions([])
     }
-  }, [canListOrganizations])
+  }, [canManage])
 
   useEffect(() => {
     fetchCases()
-    fetchOrganizations()
-  }, [fetchCases, fetchOrganizations])
-
-  const organizationOptions = useMemo(() => {
-    const byId = new Map()
-    organizations.forEach((org) => byId.set(org.id, { id: org.id, name: org.name }))
-    cases.forEach((row) => {
-      if (row.ownerOrganization) {
-        byId.set(row.ownerOrganization.id, {
-          id: row.ownerOrganization.id,
-          name: row.ownerOrganization.name,
-        })
-      }
-    })
-    return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name))
-  }, [organizations, cases])
+    fetchOrganizationOptions()
+  }, [fetchCases, fetchOrganizationOptions])
 
   const handleSearchChange = (event) => {
     setSearch(event.target.value)
@@ -415,7 +401,7 @@ export const Cases = () => {
               value={formData.organizationId}
               onChange={(e) => {
                 const selected = organizationOptions.find(
-                  (org) => String(org.id) === String(e.target.value),
+                  (org) => String(org.organizationId) === String(e.target.value),
                 )
                 setFormData({
                   ...formData,
@@ -425,7 +411,7 @@ export const Cases = () => {
               }}
             >
               {organizationOptions.map((org) => (
-                <MenuItem key={org.id} value={String(org.id)}>
+                <MenuItem key={org.organizationId} value={String(org.organizationId)}>
                   {org.name}
                 </MenuItem>
               ))}
@@ -435,7 +421,7 @@ export const Cases = () => {
               margin="dense"
               fullWidth
               label="Organization id"
-              helperText="No organization is visible from here yet — enter its numeric id."
+              helperText="No organization exists yet — enter its numeric id, or create the organization first."
               value={formData.organizationId}
               onChange={(e) => setFormData({ ...formData, organizationId: e.target.value })}
             />
