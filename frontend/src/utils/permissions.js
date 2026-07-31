@@ -17,7 +17,14 @@ export const PAGE_CAPABILITIES = {
   threats: CAPABILITIES.READ_FINDINGS,
   analytics: CAPABILITIES.READ_FINDINGS,
   upload: CAPABILITIES.INGEST_REPORTS,
-  cases: CAPABILITIES.MANAGE_CASES,
+  // Phase 3 split the case group's reads from its writes. The PAGE capability
+  // is the READ one, because REVIEWER (who must read a case to decide its
+  // closure) and VIEWER (read-only oversight) both need to reach the screen.
+  // Every mutation control inside the screen is gated separately on
+  // MANAGE_CASES or REVIEW_CASE_CLOSURE — and the backend re-checks both on
+  // every request regardless of what this table says.
+  cases: CAPABILITIES.READ_CASES,
+  caseDetail: CAPABILITIES.READ_CASES,
   notifications: CAPABILITIES.REVIEW_NOTIFICATIONS,
   organizations: CAPABILITIES.MANAGE_SYSTEM,
   settings: CAPABILITIES.MANAGE_SYSTEM,

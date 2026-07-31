@@ -11,6 +11,7 @@ import { Threats } from './pages/Threats'
 import { Upload } from './pages/Upload'
 import { Profile } from './pages/Profile'
 import Cases from './pages/Cases'
+import CaseDetail from './pages/CaseDetail'
 import Notifications from "./pages/Notifications";
 import Analytics from "./pages/Analytics";
 import Organizations from "./pages/Organizations";
@@ -85,6 +86,15 @@ function App() {
     element={
       <ProtectedRoute requiredCapability={PAGE_CAPABILITIES.cases}>
         <Cases />
+      </ProtectedRoute>
+    }
+  />
+
+  <Route
+    path="/cases/:id"
+    element={
+      <ProtectedRoute requiredCapability={PAGE_CAPABILITIES.caseDetail}>
+        <CaseDetail />
       </ProtectedRoute>
     }
   />

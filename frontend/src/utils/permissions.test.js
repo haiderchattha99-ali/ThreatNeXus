@@ -13,6 +13,7 @@ const ANALYST_CAPABILITIES = [
   CAPABILITIES.INGEST_REPORTS,
   CAPABILITIES.TRIAGE_FINDINGS,
   CAPABILITIES.MANAGE_CASES,
+  CAPABILITIES.READ_CASES,
   CAPABILITIES.OVERRIDE_FINDING_OWNERSHIP,
   CAPABILITIES.TRIGGER_FINDING_ENRICHMENT,
   CAPABILITIES.RECALCULATE_FINDING_RISK,
@@ -22,10 +23,16 @@ const ANALYST_CAPABILITIES = [
 const REVIEWER_CAPABILITIES = [
   CAPABILITIES.READ_DASHBOARD,
   CAPABILITIES.READ_FINDINGS,
+  CAPABILITIES.READ_CASES,
   CAPABILITIES.REVIEW_NOTIFICATIONS,
   CAPABILITIES.REVIEW_AI_SUGGESTIONS,
+  CAPABILITIES.REVIEW_CASE_CLOSURE,
 ]
-const VIEWER_CAPABILITIES = [CAPABILITIES.READ_DASHBOARD, CAPABILITIES.READ_FINDINGS]
+const VIEWER_CAPABILITIES = [
+  CAPABILITIES.READ_DASHBOARD,
+  CAPABILITIES.READ_FINDINGS,
+  CAPABILITIES.READ_CASES,
+]
 
 describe('PAGE_CAPABILITIES', () => {
   it('contains no unknown backend capability names', () => {
@@ -66,16 +73,52 @@ describe('canAccessPage', () => {
 
   it('requires the mapped capability for a gated page', () => {
     expect(canAccessPage([], 'cases')).toBe(false)
-    expect(canAccessPage([CAPABILITIES.MANAGE_CASES], 'cases')).toBe(true)
+    expect(canAccessPage([CAPABILITIES.READ_CASES], 'cases')).toBe(true)
   })
 
-  it('denies REVIEWER access to cases (no backend manage:cases grant)', () => {
-    expect(canAccessPage(REVIEWER_CAPABILITIES, 'cases')).toBe(false)
+  // Phase 3 split the case group's reads from its writes. The PAGE gate is the
+  // READ capability, because a reviewer must be able to open the case whose
+  // closure they are deciding, and read-only oversight is a stated requirement.
+  // Holding manage:cases alone no longer grants the page — read:cases does, and
+  // every role holds it.
+  it('admits REVIEWER and VIEWER to the case pages, on read:cases', () => {
+    ;['cases', 'caseDetail'].forEach((page) => {
+      expect(canAccessPage(REVIEWER_CAPABILITIES, page)).toBe(true)
+      expect(canAccessPage(VIEWER_CAPABILITIES, page)).toBe(true)
+      expect(canAccessPage(ANALYST_CAPABILITIES, page)).toBe(true)
+    })
   })
 
-  it('denies VIEWER access to every mutation-capable page', () => {
-    ;['upload', 'cases', 'notifications', 'organizations', 'settings'].forEach((page) => {
+  it('still denies VIEWER every mutation-capable page', () => {
+    ;['upload', 'notifications', 'organizations', 'settings'].forEach((page) => {
       expect(canAccessPage(VIEWER_CAPABILITIES, page)).toBe(false)
+    })
+  })
+
+  // Reaching the case screen must never imply being able to change anything on
+  // it. The screen's own controls are gated on these, and the backend re-checks
+  // them on every request.
+  it('never gives a case reader the case write capabilities', () => {
+    ;[VIEWER_CAPABILITIES, REVIEWER_CAPABILITIES].forEach((caps) => {
+      expect(hasCapability(caps, CAPABILITIES.MANAGE_CASES)).toBe(false)
+      expect(hasCapability(caps, CAPABILITIES.TRIAGE_FINDINGS)).toBe(false)
+    })
+    expect(hasCapability(REVIEWER_CAPABILITIES, CAPABILITIES.REVIEW_CASE_CLOSURE)).toBe(true)
+    expect(hasCapability(VIEWER_CAPABILITIES, CAPABILITIES.REVIEW_CASE_CLOSURE)).toBe(false)
+  })
+
+  // The analyst who requests a closure can never approve one. Not their own,
+  // and not anybody else's — they simply hold no closure-review capability.
+  it('denies ANALYST the closure-review capabilities entirely', () => {
+    expect(hasCapability(ANALYST_CAPABILITIES, CAPABILITIES.REVIEW_CASE_CLOSURE)).toBe(false)
+    expect(hasCapability(ANALYST_CAPABILITIES, CAPABILITIES.OVERRIDE_CLOSURE_SELF_APPROVAL)).toBe(
+      false,
+    )
+  })
+
+  it('withholds the self-approval override from every non-ADMIN role', () => {
+    ;[ANALYST_CAPABILITIES, REVIEWER_CAPABILITIES, VIEWER_CAPABILITIES].forEach((caps) => {
+      expect(hasCapability(caps, CAPABILITIES.OVERRIDE_CLOSURE_SELF_APPROVAL)).toBe(false)
     })
   })
 })
