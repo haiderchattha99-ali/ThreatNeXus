@@ -12,7 +12,8 @@
     "eval:phase2": "node ../eval/run_phase2_gate.js",
     "eval:phase2:mutation": "node ../eval/run_phase2_ownership_mutation_gate.js",
     "eval:vulnerability": "node ../eval/run_phase2_vulnerability_gate.js",
-    "eval:vulnerability:mutation": "node ../eval/run_phase2_vulnerability_mutation_gate.js"
+    "eval:vulnerability:mutation": "node ../eval/run_phase2_vulnerability_mutation_gate.js",
+    "eval:phase3": "node ../eval/run_phase3_gate.js"
   },
   "keywords": [],
   "author": "",

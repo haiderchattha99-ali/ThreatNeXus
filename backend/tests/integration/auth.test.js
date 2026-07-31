@@ -684,7 +684,15 @@ describe("capabilities in login and profile responses", () => {
   it("VIEWER receives only the read-only capabilities", async () => {
     const res = await loginToken("VIEWER");
     expect(res.body.capabilities.sort()).toEqual(
-      [CAPABILITIES.READ_DASHBOARD, CAPABILITIES.READ_FINDINGS].sort()
+      [
+        CAPABILITIES.READ_DASHBOARD,
+        CAPABILITIES.READ_FINDINGS,
+        // Phase 3: read-only, serializer-filtered case and triage access. It
+        // joined READ_ONLY_CAPABILITIES because a VIEWER's oversight of case
+        // work is an explicit Phase 3 requirement, and the case read paths
+        // expose no organization contact, no audit row and no internal key.
+        CAPABILITIES.READ_CASES,
+      ].sort()
     );
   });
 
@@ -702,7 +710,15 @@ describe("capabilities in login and profile responses", () => {
       });
 
     expect(res.body.capabilities.sort()).toEqual(
-      [CAPABILITIES.READ_DASHBOARD, CAPABILITIES.READ_FINDINGS].sort()
+      [
+        CAPABILITIES.READ_DASHBOARD,
+        CAPABILITIES.READ_FINDINGS,
+        // Phase 3: read-only, serializer-filtered case and triage access. It
+        // joined READ_ONLY_CAPABILITIES because a VIEWER's oversight of case
+        // work is an explicit Phase 3 requirement, and the case read paths
+        // expose no organization contact, no audit row and no internal key.
+        CAPABILITIES.READ_CASES,
+      ].sort()
     );
   });
 
