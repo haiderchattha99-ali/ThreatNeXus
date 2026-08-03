@@ -35,10 +35,10 @@ import {
 } from '../constants/caseWorkflow'
 
 const priorityColors = {
-  Critical: '#ff6678',
-  High: '#ffb768',
-  Medium: '#7688ff',
-  Low: '#6ee7c7',
+  Critical: '#F2617A',
+  High: '#E8A33D',
+  Medium: '#5AB6D9',
+  Low: '#31C7B4',
 }
 
 const initialFormState = {
@@ -66,8 +66,9 @@ const initialFormState = {
  */
 export const Cases = () => {
   const navigate = useNavigate()
-  const { user } = useAuth()
-  const capabilities = user?.capabilities
+  // See FindingTriagePanel: capabilities live on the AuthContext, not on the
+  // user object that GET /api/profile returns alongside them.
+  const { capabilities } = useAuth()
   const canManage = hasCapability(capabilities, CAPABILITIES.MANAGE_CASES)
 
   const [cases, setCases] = useState([])
@@ -171,7 +172,7 @@ export const Cases = () => {
           <Typography className="page-title" sx={{ mt: 1 }}>
             Investigation cases
           </Typography>
-          <Typography sx={{ mt: 1, color: '#91a1b7', fontSize: 13 }}>
+          <Typography sx={{ mt: 1, color: '#9DAFC2', fontSize: 13 }}>
             Organization-bound cases, their evidence, and their closure review.
           </Typography>
         </Box>
@@ -181,7 +182,7 @@ export const Cases = () => {
           onClick={fetchCases}
           disabled={loading}
           variant="outlined"
-          sx={{ borderColor: '#33445c', color: '#b9c6d8' }}
+          sx={{ borderColor: '#33485F', color: '#9DAFC2' }}
         >
           Refresh
         </Button>
@@ -197,7 +198,7 @@ export const Cases = () => {
       >
         {['OPEN', 'WAITING_FOR_ORG', 'CLOSURE_PENDING', 'CLOSED'].map((state) => (
           <Card className="surface" sx={{ p: 3 }} key={state}>
-            <Typography color="#91a1b7" sx={{ fontSize: 12 }}>
+            <Typography color="#9DAFC2" sx={{ fontSize: 12 }}>
               {CASE_STATE_LABELS[state]}
             </Typography>
             <Typography
@@ -214,7 +215,7 @@ export const Cases = () => {
         className="surface"
         sx={{ p: 1.5, mb: 3, display: 'flex', gap: 1, alignItems: 'center' }}
       >
-        <FiSearch color="#7688ff" />
+        <FiSearch color="#5AB6D9" />
         <TextField
           variant="standard"
           fullWidth
@@ -222,7 +223,7 @@ export const Cases = () => {
           value={search}
           onChange={handleSearchChange}
           slotProps={{ input: { disableUnderline: true, 'aria-label': 'Search cases' } }}
-          sx={{ '& input': { color: '#e7eef9' } }}
+          sx={{ '& input': { color: '#EAF1F9' } }}
         />
         {canManage && (
           <Button
@@ -230,9 +231,9 @@ export const Cases = () => {
             variant="contained"
             onClick={() => setCreateDialog(true)}
             sx={{
-              bgcolor: '#6ee7c7',
-              color: '#091018',
-              '&:hover': { bgcolor: '#92f0d5' },
+              bgcolor: '#31C7B4',
+              color: '#08121B',
+              '&:hover': { bgcolor: '#4FD8C6' },
               whiteSpace: 'nowrap',
             }}
           >
@@ -275,7 +276,7 @@ export const Cases = () => {
                         {item.ownerOrganization ? (
                           item.ownerOrganization.name
                         ) : (
-                          <Typography sx={{ fontSize: 12, color: '#8491a4' }}>
+                          <Typography sx={{ fontSize: 12, color: '#7C8AA0' }}>
                             {item.organization} (legacy, unbound)
                           </Typography>
                         )}
@@ -285,8 +286,8 @@ export const Cases = () => {
                           size="small"
                           label={item.priority}
                           sx={{
-                            bgcolor: `${priorityColors[item.priority] || '#7688ff'}20`,
-                            color: priorityColors[item.priority] || '#7688ff',
+                            bgcolor: `${priorityColors[item.priority] || '#5AB6D9'}20`,
+                            color: priorityColors[item.priority] || '#5AB6D9',
                             fontWeight: 700,
                           }}
                         />
@@ -298,8 +299,8 @@ export const Cases = () => {
                             label={CASE_STATE_LABELS[item.lifecycleState] || item.lifecycleState}
                             data-testid={`case-state-${item.id}`}
                             sx={{
-                              bgcolor: `${CASE_STATE_COLORS[item.lifecycleState] || '#8491a4'}20`,
-                              color: CASE_STATE_COLORS[item.lifecycleState] || '#8491a4',
+                              bgcolor: `${CASE_STATE_COLORS[item.lifecycleState] || '#7C8AA0'}20`,
+                              color: CASE_STATE_COLORS[item.lifecycleState] || '#7C8AA0',
                               fontWeight: 700,
                             }}
                           />
@@ -309,8 +310,8 @@ export const Cases = () => {
                               label="Reopened by recurrence"
                               data-testid={`case-recurrence-${item.id}`}
                               sx={{
-                                bgcolor: '#ff879520',
-                                color: '#ff8795',
+                                bgcolor: '#F2617A20',
+                                color: '#F2617A',
                                 fontWeight: 700,
                                 fontSize: 10,
                               }}
@@ -324,7 +325,7 @@ export const Cases = () => {
                         <Button
                           size="small"
                           startIcon={<FiEye />}
-                          sx={{ color: '#6ee7c7' }}
+                          sx={{ color: '#31C7B4' }}
                           onClick={() => navigate(`/cases/${item.id}`)}
                         >
                           Open
@@ -364,7 +365,7 @@ export const Cases = () => {
         slotProps={{
           paper: {
             sx: {
-              bgcolor: '#101723',
+              bgcolor: '#111C2A',
               color: '#fff',
               minWidth: 520,
               border: '1px solid #2d3d55',
@@ -374,7 +375,7 @@ export const Cases = () => {
       >
         <DialogTitle>Create investigation case</DialogTitle>
         <DialogContent>
-          <Typography sx={{ fontSize: 12, color: '#91a1b7', mb: 1.5 }}>
+          <Typography sx={{ fontSize: 12, color: '#9DAFC2', mb: 1.5 }}>
             A case belongs to exactly one organization. Findings can only be linked to it when
             their resolved owner is that same organization.
           </Typography>
@@ -471,7 +472,7 @@ export const Cases = () => {
             variant="contained"
             disabled={creating}
             onClick={createCase}
-            sx={{ bgcolor: '#6ee7c7', color: '#091018' }}
+            sx={{ bgcolor: '#31C7B4', color: '#08121B' }}
           >
             Create
           </Button>

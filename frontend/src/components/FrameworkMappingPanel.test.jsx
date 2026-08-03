@@ -186,7 +186,11 @@ function suggestionsPayload(suggestions = []) {
 
 function mockAuth(capabilities) {
   vi.spyOn(useAuthModule, 'useAuth').mockReturnValue({
-    user: { id: 1, name: 'Test', role: 'ANALYST', capabilities },
+    // Deliberately does NOT carry `capabilities`: GET /api/profile returns them
+    // as a sibling of loggedInUser, so a mock that also nests them inside the
+    // user object can hide a component reading the wrong one.
+    user: { id: 1, name: 'Test', role: 'ANALYST' },
+    capabilities,
   })
 }
 

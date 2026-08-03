@@ -78,16 +78,16 @@ function SubPanel({ title, subtitle, children, testId, action }) {
     <Box sx={{ mb: 3 }} data-testid={testId}>
       <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
         <Box>
-          <Typography sx={{ fontSize: 14, fontWeight: 700, color: '#e7eef9' }}>{title}</Typography>
+          <Typography sx={{ fontSize: 14, fontWeight: 700, color: '#EAF1F9' }}>{title}</Typography>
           {subtitle && (
-            <Typography sx={{ fontSize: 12, color: '#8290a5', mt: 0.5, maxWidth: 760 }}>
+            <Typography sx={{ fontSize: 12, color: '#9DAFC2', mt: 0.5, maxWidth: 760 }}>
               {subtitle}
             </Typography>
           )}
         </Box>
         {action}
       </Box>
-      <Divider sx={{ my: 1.5, borderColor: '#233247' }} />
+      <Divider sx={{ my: 1.5, borderColor: '#243549' }} />
       {children}
     </Box>
   )
@@ -127,8 +127,9 @@ function SubPanel({ title, subtitle, children, testId, action }) {
  * rendered here, and a denied request creates no row.
  */
 export function FrameworkMappingPanel({ caseId }) {
-  const { user } = useAuth()
-  const capabilities = user?.capabilities
+  // See FindingTriagePanel: capabilities live on the AuthContext, not on the
+  // user object that GET /api/profile returns alongside them.
+  const { capabilities } = useAuth()
   const canManage = hasCapability(capabilities, CAPABILITIES.MANAGE_FRAMEWORK_MAPPINGS)
   const canReadSuggestions = hasCapability(capabilities, CAPABILITIES.READ_AI_MAPPING_SUGGESTIONS)
   const canRequestSuggestions = hasCapability(
@@ -362,7 +363,7 @@ export function FrameworkMappingPanel({ caseId }) {
         }
       >
         {groups.length === 0 && (
-          <Typography sx={{ fontSize: 13, color: '#8290a5' }} data-testid="no-active-mappings">
+          <Typography sx={{ fontSize: 13, color: '#9DAFC2' }} data-testid="no-active-mappings">
             No framework mappings have been recorded on this case.
           </Typography>
         )}
@@ -375,11 +376,11 @@ export function FrameworkMappingPanel({ caseId }) {
                 label={FRAMEWORK_LABELS[group.framework] || group.framework}
                 sx={{ bgcolor: FRAMEWORK_COLORS[group.framework], color: '#0b1220', fontWeight: 700 }}
               />
-              <Typography sx={{ fontSize: 12, color: '#8290a5' }}>
+              <Typography sx={{ fontSize: 12, color: '#9DAFC2' }}>
                 {group.count} mapping{group.count === 1 ? '' : 's'} recorded
               </Typography>
             </Box>
-            <Typography sx={{ fontSize: 12, color: '#8290a5', mt: 0.5, maxWidth: 760 }}>
+            <Typography sx={{ fontSize: 12, color: '#9DAFC2', mt: 0.5, maxWidth: 760 }}>
               {FRAMEWORK_NOTES[group.framework]}
             </Typography>
 
@@ -402,10 +403,10 @@ export function FrameworkMappingPanel({ caseId }) {
                         <Typography sx={{ fontSize: 13, fontWeight: 700 }}>
                           {mapping.referenceId}
                         </Typography>
-                        <Typography sx={{ fontSize: 12, color: '#8290a5' }}>
+                        <Typography sx={{ fontSize: 12, color: '#9DAFC2' }}>
                           {mapping.referenceTitle}
                         </Typography>
-                        <Typography sx={{ fontSize: 11, color: '#8290a5' }}>
+                        <Typography sx={{ fontSize: 11, color: '#9DAFC2' }}>
                           {mapping.frameworkVersion} · analyst-entered, not catalogue-verified
                         </Typography>
                       </TableCell>
@@ -672,7 +673,7 @@ export function FrameworkMappingPanel({ caseId }) {
           )}
 
           {aiAvailable && pending.length === 0 && (
-            <Typography sx={{ fontSize: 13, color: '#8290a5' }} data-testid="no-pending-suggestions">
+            <Typography sx={{ fontSize: 13, color: '#9DAFC2' }} data-testid="no-pending-suggestions">
               No suggestions are awaiting a decision.
             </Typography>
           )}
@@ -683,7 +684,7 @@ export function FrameworkMappingPanel({ caseId }) {
             <Box
               key={suggestion.id}
               data-testid={`suggestion-${suggestion.id}`}
-              sx={{ border: '1px solid #233247', borderRadius: 1, p: 2, mb: 2 }}
+              sx={{ border: '1px solid #243549', borderRadius: 1, p: 2, mb: 2 }}
             >
               <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
                 <Chip
@@ -698,7 +699,7 @@ export function FrameworkMappingPanel({ caseId }) {
                 <Typography sx={{ fontSize: 13, fontWeight: 700 }}>
                   {suggestion.referenceId}
                 </Typography>
-                <Typography sx={{ fontSize: 12, color: '#8290a5' }}>
+                <Typography sx={{ fontSize: 12, color: '#9DAFC2' }}>
                   {suggestion.referenceTitle}
                 </Typography>
                 <Chip
@@ -708,7 +709,7 @@ export function FrameworkMappingPanel({ caseId }) {
                 />
               </Box>
 
-              <Typography sx={{ fontSize: 12, color: '#8290a5', mt: 1 }}>
+              <Typography sx={{ fontSize: 12, color: '#9DAFC2', mt: 1 }}>
                 {suggestion.frameworkVersion} · {MAPPING_SCOPE_LABELS[suggestion.mappingScope]} ·{' '}
                 {EVIDENCE_BASIS_LABELS[suggestion.evidenceBasis]}
                 {/* Provider self-report, labelled as such. Nothing in this

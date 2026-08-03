@@ -172,7 +172,8 @@ function workflowView(overrides = {}) {
 
 function renderDetail(capabilities, view = workflowView()) {
   vi.spyOn(useAuthModule, 'useAuth').mockReturnValue({
-    user: { id: 1, capabilities },
+    // No `capabilities` inside user — see FrameworkMappingPanel.test.jsx.
+    user: { id: 1 },
     capabilities,
   })
   caseWorkflowService.getWorkflow.mockResolvedValue({ data: { data: view } })

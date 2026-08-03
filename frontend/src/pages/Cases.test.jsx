@@ -105,7 +105,8 @@ const CASES = [
 
 function renderCases(capabilities, rows = CASES, organizationOptions = ORGANIZATION_OPTIONS) {
   vi.spyOn(useAuthModule, 'useAuth').mockReturnValue({
-    user: { id: 1, capabilities },
+    // No `capabilities` inside user — see FrameworkMappingPanel.test.jsx.
+    user: { id: 1 },
     capabilities,
   })
   caseService.getCases.mockResolvedValue({ data: { data: rows } })

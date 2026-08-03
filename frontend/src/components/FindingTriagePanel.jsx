@@ -36,8 +36,12 @@ import {
  * the backend refuses the request regardless of what is rendered here.
  */
 export function FindingTriagePanel({ findingId, onTriaged }) {
-  const { user } = useAuth()
-  const capabilities = user?.capabilities
+  // Capabilities come from the AuthContext field, NOT from `user.capabilities`.
+  // GET /api/profile returns `capabilities` as a SIBLING of `loggedInUser`, so
+  // the user object never carries them; reading them from there yielded
+  // undefined and left every write control on this screen hidden for every
+  // role. Still UX only — the backend re-checks each capability per request.
+  const { capabilities } = useAuth()
   const canTriage = hasCapability(capabilities, CAPABILITIES.TRIAGE_FINDINGS)
 
   const [context, setContext] = useState(null)
@@ -89,7 +93,7 @@ export function FindingTriagePanel({ findingId, onTriaged }) {
 
   if (!context) {
     return (
-      <Typography sx={{ color: '#7b899c', fontSize: 12 }}>Triage unavailable.</Typography>
+      <Typography sx={{ color: '#75899E', fontSize: 12 }}>Triage unavailable.</Typography>
     )
   }
 
@@ -98,7 +102,7 @@ export function FindingTriagePanel({ findingId, onTriaged }) {
   return (
     <Box sx={{ py: 1 }} data-testid={`triage-panel-${findingId}`}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
-        <Typography sx={{ fontSize: 11, color: '#75849a', textTransform: 'uppercase' }}>
+        <Typography sx={{ fontSize: 11, color: '#75899E', textTransform: 'uppercase' }}>
           Triage
         </Typography>
         <Chip
@@ -106,24 +110,24 @@ export function FindingTriagePanel({ findingId, onTriaged }) {
           label={TRIAGE_LABELS[current] || current}
           data-testid={`triage-state-${findingId}`}
           sx={{
-            bgcolor: `${TRIAGE_COLORS[current] || '#8491a4'}22`,
-            color: TRIAGE_COLORS[current] || '#8491a4',
+            bgcolor: `${TRIAGE_COLORS[current] || '#7C8AA0'}22`,
+            color: TRIAGE_COLORS[current] || '#7C8AA0',
             fontWeight: 700,
             fontSize: 10,
           }}
         />
         {context.ownership ? (
-          <Typography sx={{ fontSize: 11, color: '#7b899c' }}>
+          <Typography sx={{ fontSize: 11, color: '#75899E' }}>
             Ownership: {context.ownership.status}
             {context.ownership.isIspAttribution ? ' (ISP-attributed)' : ''}
           </Typography>
         ) : (
-          <Typography sx={{ fontSize: 11, color: '#7b899c' }}>Ownership: not resolved</Typography>
+          <Typography sx={{ fontSize: 11, color: '#75899E' }}>Ownership: not resolved</Typography>
         )}
       </Box>
 
       {context.linkedCases?.length > 0 && (
-        <Typography sx={{ mt: 1, fontSize: 11, color: '#9eafc5' }}>
+        <Typography sx={{ mt: 1, fontSize: 11, color: '#9DAFC2' }}>
           Evidence in{' '}
           {context.linkedCases.map((c) => c.caseReference || `case ${c.id}`).join(', ')}
         </Typography>
@@ -132,7 +136,7 @@ export function FindingTriagePanel({ findingId, onTriaged }) {
       {context.history?.length > 0 && (
         <Box sx={{ mt: 1.5 }} data-testid={`triage-history-${findingId}`}>
           {context.history.map((row) => (
-            <Typography key={row.id} sx={{ fontSize: 11, color: '#8290a5', mt: 0.4 }}>
+            <Typography key={row.id} sx={{ fontSize: 11, color: '#9DAFC2', mt: 0.4 }}>
               {formatInstant(row.decidedAt)} · {TRIAGE_LABELS[row.decision] || row.decision} ·{' '}
               {row.source}
               {row.isCurrent ? ' · current' : ''}
@@ -170,7 +174,7 @@ export function FindingTriagePanel({ findingId, onTriaged }) {
             variant="contained"
             disabled={saving || (reasonRequired && reason.trim() === '')}
             onClick={submit}
-            sx={{ bgcolor: '#6ee7c7', color: '#091018', '&:hover': { bgcolor: '#92f0d5' } }}
+            sx={{ bgcolor: '#31C7B4', color: '#08121B', '&:hover': { bgcolor: '#4FD8C6' } }}
           >
             Record triage
           </Button>

@@ -7,6 +7,9 @@ import { authService } from '../services/api'
 
 vi.mock('../services/api', () => ({
   authService: { getCurrentUser: vi.fn() },
+  // The provider subscribes to this event name on mount (Phase 6 session-expiry
+  // handling), so the mock must export it too or the context fails to render.
+  SESSION_EXPIRED_EVENT: 'tnx:session-expired',
 }))
 
 function Probe() {

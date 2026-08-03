@@ -154,7 +154,8 @@ function detailView(overrides = {}) {
 
 function renderDetail(capabilities, view = detailView()) {
   vi.spyOn(useAuthModule, 'useAuth').mockReturnValue({
-    user: { id: 1, capabilities },
+    // No `capabilities` inside user — see FrameworkMappingPanel.test.jsx.
+    user: { id: 1 },
     capabilities,
   })
   notificationService.getNotification.mockResolvedValue({ data: { data: view } })
