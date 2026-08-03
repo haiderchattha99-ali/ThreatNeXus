@@ -5,8 +5,22 @@ _Operational status / handoff note. Authoritative plan lives in
 
 ## Current
 
-- **Branch:** `feat/phase-2-enrichment-risk` — pushed, not yet merged (no PR opened per the P2-T1 task
-  scope; Phase 1 remains merged into `main`, see "Phase 1 release audit" below).
+- **Branch:** `feat/phase-5-framework-ai-assistance` — pushed, no PR opened (not requested). Built on
+  `f894894`, which is Phase 4 merged into `main` via PR #5.
+- **Phases 0 through 5 are COMPLETE and gate-verified.** 17 migrations, all additive. Nine
+  evaluators all pass. Exact next task is **Phase 6 — dedicated professional frontend and
+  demonstration readiness** (premium SOC/CERT interface, authorized subtle PKCERT watermark,
+  real backend-derived metrics only, accessibility and responsiveness, and final security, Docker,
+  CI, end-to-end test, documentation and demo hardening).
+
+_The per-phase notes below are append-only and are kept in reverse-chronological order. Lines
+further down describe the state at the time they were written and are not re-edited; the entry
+nearest the top is the current one._
+
+### Historical — Phase 2 era
+
+- **Branch (at the time):** `feat/phase-2-enrichment-risk` — pushed, not yet merged (no PR opened per
+  the P2-T1 task scope; Phase 1 was merged into `main`, see "Phase 1 release audit" below).
 - **Phase:** Phase 1 (Ingest → Finding) is **complete, gate-complete, audited and merged**. Phase 2's
   first task, **P2-T1 (ownership mapping)**, is **complete** — see "Completed — P2-T1" below.
   **P2-H1 (ownership correctness + test hardening)** is also **complete** — see "Completed — P2-H1"
@@ -55,9 +69,201 @@ _Operational status / handoff note. Authoritative plan lives in
   from case evidence → immutable revisions → analyst editing → reviewer approval/rejection →
   approved-revision-only manual export → delivery tracking → `CaseOrganizationResponse` integration,
   with backend APIs, capability RBAC, cross-cutting audits, functional frontend screens and the
-  `eval:phase4` evaluator. See "Phase 4 COMPLETE" immediately below. **Exactly one additive
-  migration; migration count 15 → 16.** Branch `feat/phase-4-notification-workflow`. Exact next task
-  is **Phase 5 — framework mappings and guarded optional AI assistance**.
+  `eval:phase4` evaluator. See "Phase 4 COMPLETE" below. **Exactly one additive
+  migration; migration count 15 → 16.** Branch `feat/phase-4-notification-workflow`, merged into
+  `main` via PR #5.
+- **PHASE 5 — COMPLETE. Framework mapping and guarded, optional AI assistance are delivered end to
+  end**: append-only MITRE ATT&CK / NIST CSF 2.0 / CIS Controls v8 mappings on organization-bound
+  cases → a server-enforced ATT&CK observed-behaviour evidence rule → optional AI mapping
+  suggestions, disabled by default → immutable PENDING suggestions → human approve/reject with a
+  staleness guard → promotion through the SAME manual mapping service, recording the human as the
+  actor, with backend APIs, capability RBAC, cross-cutting audits, a functional frontend workspace
+  and the `eval:phase5` evaluator. See "Phase 5 COMPLETE" immediately below. **Exactly one additive
+  migration; migration count 16 → 17.** Branch `feat/phase-5-framework-ai-assistance`. Exact next
+  task is **Phase 6 — dedicated professional frontend and demonstration readiness**.
+
+## Phase 5 COMPLETE — framework mapping and guarded optional AI assistance (2026-08-05)
+
+Branch `feat/phase-5-framework-ai-assistance`, built on `f894894` (Phase 4 merged via PR #5).
+**Exactly one additive migration; migration count 16 → 17.**
+
+    manual framework mapping (ATT&CK / NIST CSF / CIS Controls)
+      → append-only history, one current row per (case, framework, scope, reference)
+        → safe Case/Finding evidence linkage
+          → optional AI mapping suggestions, DISABLED BY DEFAULT
+            → immutable PENDING suggestions (inert; change nothing)
+              → human APPROVE / REJECT, with a staleness guard
+                → promotion through the SAME manual mapping service
+                  → ACTIVE mapping, source AI_SUGGESTION_PROMOTED, human actor
+
+### Migration
+
+`20260803140000_add_phase5_framework_mapping_ai_assistance` — additive only: 8 `CREATE TYPE`,
+4 `CREATE TABLE`, 12 `CREATE INDEX`, 2 `CREATE UNIQUE INDEX`, 14 `ADD FOREIGN KEY`. Zero
+`ALTER COLUMN`, zero `DROP`, no raw SQL, no partial index. Deployed to `threatnexus`,
+`threatnexus_test` and `threatnexus_eval`.
+
+**The folder timestamp was hand-corrected.** `prisma migrate dev --create-only` generated
+`20260803101835_…`, which sorts BEFORE the hand-named Phase 4 migration `20260803120000_…`. It was
+renamed to `20260803140000_…` and the dev database's `_prisma_migrations.migration_name` updated to
+match. **Any future phase migration must be checked for this**: Phase 3 and Phase 4 both used
+hand-set round timestamps, so a generated one can easily land before them.
+
+New models: `CaseFrameworkMapping`, `AiSuggestionRun`, `AiFrameworkMappingSuggestion`,
+`AiSuggestionDecision`. New enums: `FrameworkFamily`, `FrameworkMappingScope`,
+`FrameworkMappingState`, `FrameworkEvidenceBasis`, `FrameworkMappingSource`,
+`AiSuggestionRunStatus`, `AiSuggestionState`, `AiSuggestionDecisionType`.
+
+### Durable design decisions
+
+- **D-P5-a — one writer, shared by both paths.** `frameworkMappingService.appendMappingWithinTransaction`
+  is the ONLY function in the repository that writes a `CaseFrameworkMapping`. The AI promotion path
+  calls it — not a copy of it, not a similar one — which is what makes "an approved suggestion is
+  held to exactly the standard a hand-written mapping is held to" a structural fact rather than a
+  claim. It re-normalizes content and re-checks every database-backed evidence obligation against
+  its own `tx`, so no caller can hand it content that skipped a gate.
+- **D-P5-b — creation and reactivation are ONE endpoint and ONE code path.** Re-adding a removed
+  mapping is a create that happens to find a `REMOVED` current row; the outcome is reported as
+  `REACTIVATED` so the story stays distinguishable from `CREATED`. A separate reactivate writer
+  would have been a second place the ATT&CK rule and the organization binding could drift.
+- **D-P5-c — `currentMappingKey` is `<caseId>:<framework>:<scope>:<referenceId>`, and
+  `evidenceFindingId` is deliberately NOT in it.** Changing which Finding a mapping cites is a
+  revision of the same mapping, not a second independent one. Scope IS in the key, so the same
+  reference may legitimately be mapped once at case scope and once at finding scope.
+- **D-P5-d — the ATT&CK rule is three structural gates plus one lexical backstop, and the
+  documentation says exactly that.** Structural: `evidenceBasis` must be `OBSERVED_BEHAVIOR`; the
+  rationale must reach a 60-character substance floor; evidence must be tied to the case or a
+  currently-linked Finding. Lexical: at least one term from a closed behaviour vocabulary must
+  appear, and the residual substance after stripping a closed exposure vocabulary must exceed a
+  floor. **The lexical gate is documented as a bounded guard, never as comprehension** — it catches
+  the overwhelmingly common "port 3389 is open, therefore T1021.001" mistake and cannot catch a
+  fluent fabrication. It fails closed. *Measured during development: the exposure-only fixture sat
+  exactly ON the residual threshold until bare `exposed`, `internet` and `score` were added to the
+  exposure vocabulary — "exposed to the internet" is how such a rationale is actually written.*
+- **D-P5-e — no catalogue is claimed, and every read path says so.** `referenceValidated: false` is
+  emitted as a LITERAL on every mapping and every suggestion, and `CATALOGUE_DISCLAIMER` travels
+  with every read. `T9999` passes the ATT&CK shape check and does not exist. Emitting the field
+  (rather than omitting it) means a future pinned catalogue can flip it to `true` and every existing
+  consumer already renders the distinction. `frameworkVersion` is REQUIRED and never defaulted.
+- **D-P5-f — no denominator anywhere, therefore no percentage.** Group counts are labelled
+  `MAPPING_COUNT_NOT_COVERAGE` in the payload itself, not just in a comment. A coverage figure would
+  require knowing how many references SHOULD apply, which nobody knows, and printing one creates
+  exactly the pressure to force weak mappings that `BUILD_PLAN.md` warns about.
+- **D-P5-g — the AI prohibition is enforced by what the interface OMITS.** A provider is
+  `{name, model, isEnabled, suggestMappings({snapshot, asOf, signal})}`. It receives no Prisma
+  client, no transaction, no repository, no HTTP handle, no user, no capability, no audit logger and
+  no file handle — so it cannot score, approve, close, reopen, export, notify, enrich, scan, attach
+  a CVE or resolve ownership, because it is handed nothing to do any of it with. Providers are
+  `Object.freeze`d, so nothing can graft a capability on at runtime either. *(That freezing is why
+  `vi.spyOn` cannot patch a provider; tests inject their own runtime-shaped double instead.)*
+- **D-P5-h — `aiEnabled` and `assistanceAvailable` are two different questions and are never
+  collapsed.** The first is what the operator asked for; the second is what the system can actually
+  do. They differ when `AI_ENABLED=true` but `AI_PROVIDER` names something unregistered — which,
+  today, is every value except `disabled`. Reporting only one would show an operator a green light
+  over a provider that does not exist.
+- **D-P5-i — no silent fallback from production to mock, ever.** The registry returns the mock ONLY
+  with an explicit `allowMockProvider: true`, and `aiRuntime` (the one production composition root)
+  never passes it. An unavailable provider resolves to the disabled provider with reason code
+  `AI_PROVIDER_NOT_AVAILABLE` — never to fabricated suggestions presented as a real assistant's.
+- **D-P5-j — the staleness fingerprint covers evidence ONLY.** `requestContext` (what the analyst
+  asked this time) is part of the snapshot sent to the provider but is excluded from the hash — it
+  describes the question, not the case. It is attached AFTER the hash is computed, so it
+  structurally cannot influence it. Linking a Finding, retriaging, rescoring, asserting a CVE or
+  adding a mapping all move the fingerprint, and a stale suggestion is REFUSED rather than silently
+  re-derived or approved as "close enough".
+- **D-P5-k — a repeated decision is recorded, not swallowed.** Deciding an already-decided
+  suggestion returns `ALREADY_DECIDED_UNCHANGED`, writes no mapping, does not overwrite the original
+  decision, and STILL appends an `AiSuggestionDecision` row. `promotedMappingId` is `@unique`, so a
+  second mapping is structurally impossible. Same reasoning as `CaseRecurrenceReopen` recording its
+  `SKIPPED_*` evaluations.
+- **D-P5-l — `DISABLED` is a recorded run, not an error.** Asking for suggestions while AI is off is
+  a legitimate request with a legitimate answer, and the run is persisted so "somebody asked and the
+  system was off" stays distinguishable from "nobody ever asked". The API answers 200, not 503: the
+  shipped default is "off", not "broken".
+- **D-P5-m — mapping reads reuse `read:cases`; no `read:framework-mappings` exists.** Reading which
+  controls an analyst associated with a case IS reading the case, and the policy is identical for
+  all four roles. Compare `READ_NOTIFICATIONS`, which DID need to exist because the notification
+  read policy genuinely differs by role.
+- **D-P5-n — the pre-existing `review:ai-suggestions` grant is deliberately left UNUSED.** It was
+  declared in Phase 0 on a review-of-somebody-else's-work model (REVIEWER + ADMIN) and never wired
+  to a route. Under it, a REVIEWER holding no mapping authority at all could have promoted machine
+  output into an active mapping. Phase 5 instead grants `decide:ai-mapping-suggestions` to exactly
+  the holders of `manage:framework-mappings`, so **approval authority never exceeds the authority to
+  write the same mapping by hand**. `review:ai-suggestions` stays declared and granted; a
+  `roles.test.js` case asserts it is not the same capability.
+- **D-P5-o — VIEWER sees active mappings, never a machine proposal.** VIEWER holds `read:cases` (so
+  the mapping list and history are visible, including that a mapping's `source` is
+  `AI_SUGGESTION_PROMOTED` — an approved, human-decided display fact) and does NOT hold
+  `read:ai-mapping-suggestions`. An undecided proposal is not oversight material. The frontend does
+  not even issue the suggestion request for VIEWER, since a 403 toast on a screen the role is
+  entitled to use would be a defect.
+- **D-P5-p — audit payloads carry LENGTHS, not analyst prose.** `rationaleLength` and
+  `decisionReasonLength` are recorded; the rationale and the rejection reason are not, in any form,
+  not even truncated. `AuditLog` is read far more widely than a case is. Fingerprints, prompts,
+  snapshots and provider output never reach it either — none of which is persisted anywhere to
+  leak.
+
+### Frontend
+
+`components/FrameworkMappingPanel.jsx` + `constants/frameworkMapping.js`, embedded in Case Detail
+after the evidence and response sections (a mapping is a judgement made ABOUT that evidence and
+should be read after it). Anti-automation-bias controls, each asserted by a test: no accept-all and
+no bulk control, one suggestion at a time with its own decision, nothing pre-selected, evidence
+beside the buttons, a rejection reason required before Reject enables, decided suggestions kept
+visible, and a stale suggestion shown as unapprovable with the reason rather than failing on click.
+Provider confidence is rendered as "the model's own claim, not an assessment by this system". The
+panel renders the SERVER's disclaimer verbatim rather than re-wording it, so the two cannot drift.
+
+**Frontend gotcha, will recur: MUI v9 removed `inputProps`.** Labels now come from `label` alone —
+and `required` appends the required marker to the label text, so `getByLabelText('Reference id')`
+misses a required field. Use an anchored regex (`/^Reference id/`).
+
+### Verification matrix at close
+
+| Check | Result |
+|---|---|
+| Backend suite, real PostgreSQL, `--no-file-parallelism` | **2850 / 2850 across 115 files** (was 2650/108) |
+| Phase 5 real-PG concurrency suite | **14 / 14**, separate pre-connected clients |
+| Phase 5 route/RBAC suite | **53 / 53**, every denial proven to create no row |
+| Phase 5 unit suites | 27 rules + 33 AI contract + 38 services + 15 serializer + 20 boundaries |
+| Frontend suite | **129 / 129 across 9 files** (+30 panel tests → 159 after the ADMIN case) |
+| Frontend production build | clean |
+| `npm run lint` (oxlint) | 6 warnings, all pre-existing |
+| `eval:phase1` | PASS |
+| `eval:risk` | PASS — 19 scenarios |
+| `eval:phase2` / `:mutation` | PASS — 22 scenarios / 112 assertions; 6 / 6 mutations detected |
+| `eval:vulnerability` / `:mutation` | PASS — 41 scenarios / 992 assertions; 12 / 12 mutations detected |
+| `eval:phase3` | PASS — 12 scenarios / 151 assertions |
+| `eval:phase4` | PASS — 14 scenarios / 151 assertions |
+| **`eval:phase5`** | **PASS — 14 scenarios / 148 assertions**, zero network attempts |
+| `prisma validate` | clean |
+| `migrate deploy` (test + eval databases) | applied, none pending |
+| Migration count | **17** |
+| `git diff --check` | clean |
+| Secret / generated-artifact scan | clean |
+
+`eval:phase5` safety guards verified directly: it refuses to run without `EVAL_DATABASE_URL`, and
+refuses to run when `EVAL_DATABASE_URL` equals `DATABASE_URL`.
+
+### Risk v1 and Phases 1–4 are unchanged
+
+No file under `backend/src/services/risk/` was touched. `eval:risk` passes unchanged at 19
+scenarios, and both `eval:phase5` scenario S13 and a real-PG test assert that a full
+generate-and-approve cycle leaves the stored score, band, algorithm version, configuration version,
+input fingerprint, current-row pointer and factor contributions numerically identical, with no new
+score row appended. The only edits outside new Phase 5 files were additive: `schema.prisma`
+back-relations, two route registrations in `app.js`, four capabilities in `roles.js`, the shared
+test fake, and the frontend capability mirror.
+
+### Known limitations carried forward
+
+- No pinned framework catalogue — references are format-checked, never verified to exist.
+- No live AI provider. The contract, the disabled provider and an offline mock exist.
+- The ATT&CK lexical gate cannot detect a fluent, well-worded fabrication. The structural gates and
+  the recorded human actor are what carry that weight.
+- The frontend "reactivate" control pre-fills from history; the list of linkable Finding ids is not
+  fetched separately, so a finding-scoped mapping needs the id typed. The server is the authority
+  and refuses anything not currently linked.
 
 ## Phase 4 COMPLETE — notification drafting, review, manual export, delivery (2026-08-03)
 
