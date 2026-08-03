@@ -1,8 +1,18 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from "vitest";
 
-// Authorization + write-audit matrix for the Case / Notification / Organization
-// route groups added alongside Phase 0. These three groups shipped completely
-// unauthenticated; this file is the enforcement proof that they no longer are.
+// Authorization + write-audit matrix for the Case / Organization route groups
+// added alongside Phase 0. These groups shipped completely unauthenticated;
+// this file is the enforcement proof that they no longer are.
+//
+// NOTIFICATIONS WERE PART OF THIS MATRIX UNTIL PHASE 4 and have moved to
+// tests/integration/notificationRouteAuthorization.test.js. They are no longer
+// a generic id-CRUD resource: /api/notifications is now a workflow surface with
+// five distinct capabilities across read / draft / review / export / delivery,
+// a create that takes a case id rather than a title and message, an edit that
+// takes revision content, and a DELETE that is a 409 tombstone because an
+// approval trail and export history are evidence. Expressing that inside a
+// matrix designed for "one capability, five verbs" would have meant weakening
+// the matrix for the other two groups.
 //
 // It is the counterpart to routeAuthorization.test.js (threat/dashboard) and
 // follows the same shape: only Prisma is stubbed, so the real routes,
@@ -195,11 +205,6 @@ const VALID_CASE = {
   organizationId: CASE_ORGANIZATION.id,
 };
 
-const VALID_NOTIFICATION = {
-  title: "Exposure notice",
-  message: "One host requires remediation.",
-};
-
 const VALID_ORGANIZATION = {
   name: "Acme Bank",
   industry: "Finance",
@@ -239,26 +244,6 @@ const GROUPS = [
         lifecycleState: "OPEN",
       };
       store.cases.push(row);
-      return row;
-    },
-  },
-  {
-    name: "notifications",
-    base: "/api/notifications",
-    capability: "review:notifications",
-    allowed: ["ADMIN", "REVIEWER"],
-    denied: ["ANALYST", "VIEWER"],
-    body: VALID_NOTIFICATION,
-    table: "notifications",
-    seed: () => {
-      const row = {
-        id: store.nextId++,
-        ...VALID_NOTIFICATION,
-        severity: "Low",
-        status: "Unread",
-        type: "System",
-      };
-      store.notifications.push(row);
       return row;
     },
   },
@@ -450,29 +435,28 @@ describe.each(GROUPS)("$name routes", (group) => {
   });
 });
 
-describe("separation of duties across the three groups", () => {
-  // The point of the mapping: ANALYST does case work, REVIEWER approves
-  // notifications, and neither inherits the other or the admin registry.
-  it("ANALYST reaches cases but not notifications or organizations", async () => {
+describe("separation of duties across the two groups", () => {
+  // The point of the mapping: ANALYST does case work and never reaches the
+  // admin registry. (The notification half of the separation of duties is
+  // proven in notificationRouteAuthorization.test.js, which is where that
+  // surface now lives.)
+  it("ANALYST reaches cases but not organizations", async () => {
     expect((await callAs("ANALYST", GROUPS[0], "list")).status).toBe(200);
     expect((await callAs("ANALYST", GROUPS[1], "list")).status).toBe(403);
-    expect((await callAs("ANALYST", GROUPS[2], "list")).status).toBe(403);
   });
 
   // Phase 3 changed exactly one cell of this matrix: REVIEWER and VIEWER can now
   // READ cases. Neither gained any case WRITE — that stays manage:cases, which
   // neither holds.
-  it("REVIEWER reaches notifications, reads cases, and writes neither cases nor organizations", async () => {
-    expect((await callAs("REVIEWER", GROUPS[1], "list")).status).toBe(200);
+  it("REVIEWER reads cases, and writes neither cases nor organizations", async () => {
     expect((await callAs("REVIEWER", GROUPS[0], "list")).status).toBe(200);
     expect((await callAs("REVIEWER", GROUPS[0], "create")).status).toBe(403);
-    expect((await callAs("REVIEWER", GROUPS[2], "list")).status).toBe(403);
+    expect((await callAs("REVIEWER", GROUPS[1], "list")).status).toBe(403);
   });
 
   it("VIEWER reads cases only, and writes nothing anywhere", async () => {
     expect((await callAs("VIEWER", GROUPS[0], "list")).status).toBe(200);
     expect((await callAs("VIEWER", GROUPS[1], "list")).status).toBe(403);
-    expect((await callAs("VIEWER", GROUPS[2], "list")).status).toBe(403);
 
     // eslint-disable-next-line no-restricted-syntax
     for (const group of GROUPS) {
@@ -574,22 +558,10 @@ describe("write actions are audited", () => {
     expect(store.cases).toHaveLength(0);
   });
 
-  it("records notification write events", async () => {
-    const created = await callAs("REVIEWER", GROUPS[1], "create");
-    const id = created.body.data.id;
-    await callAs("REVIEWER", GROUPS[1], "delete", id);
-
-    const actions = store.auditLogs
-      .filter((entry) => entry.outcome === "SUCCESS")
-      .map((entry) => entry.action);
-
-    expect(actions).toEqual(["notification.create", "notification.delete"]);
-  });
-
   it("records organization write events", async () => {
-    const created = await callAs("ADMIN", GROUPS[2], "create");
+    const created = await callAs("ADMIN", GROUPS[1], "create");
     const id = created.body.data.id;
-    await callAs("ADMIN", GROUPS[2], "delete", id);
+    await callAs("ADMIN", GROUPS[1], "delete", id);
 
     const actions = store.auditLogs
       .filter((entry) => entry.outcome === "SUCCESS")
@@ -681,7 +653,7 @@ describe("audit payloads carry summaries only", () => {
   });
 
   it("keeps organization contact PII out of the audit summary", async () => {
-    await callAs("ADMIN", GROUPS[2], "create");
+    await callAs("ADMIN", GROUPS[1], "create");
     const [entry] = store.auditLogs.filter(
       (e) => e.action === "organization.create"
     );
@@ -705,14 +677,14 @@ describe("audit payloads carry summaries only", () => {
 describe("validation produces controlled responses", () => {
   it("rejects a create with missing required fields as 400", async () => {
     const res = await request(app)
-      .post("/api/notifications")
-      .set("Authorization", `Bearer ${tokens.REVIEWER}`)
-      .send({ title: "no message" });
+      .post("/api/organizations")
+      .set("Authorization", `Bearer ${tokens.ADMIN}`)
+      .send({ name: "No contact details" });
 
     expect(res.status).toBe(400);
-    expect(res.body).toMatchObject({ success: false, message: "Missing required fields." });
-    expect(res.body.fields).toEqual(["message"]);
-    expect(store.notifications).toHaveLength(0);
+    expect(res.body).toMatchObject({ success: false, message: "Missing or invalid fields." });
+    expect(res.body.fields).toContain("email");
+    expect(store.organizations).toHaveLength(0);
   });
 
   it("rejects a non-numeric id as 400 rather than reaching Prisma", async () => {
@@ -760,12 +732,12 @@ describe("validation produces controlled responses", () => {
 
   it("returns 404, not 500, for a write against a missing record", async () => {
     const res = await request(app)
-      .put("/api/notifications/4242")
-      .set("Authorization", `Bearer ${tokens.REVIEWER}`)
-      .send({ status: "Read" });
+      .put("/api/organizations/4242")
+      .set("Authorization", `Bearer ${tokens.ADMIN}`)
+      .send({ location: "Lahore" });
 
     expect(res.status).toBe(404);
-    expect(res.body.message).toBe("Notification not found.");
+    expect(res.body.message).toBe("Organization not found.");
   });
 
   it("does not expose a stack trace or Prisma detail on a server error", async () => {

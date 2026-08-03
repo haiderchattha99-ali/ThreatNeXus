@@ -116,7 +116,10 @@ describe("capability constants", () => {
     // + §2B Packet B vulnerability association/enrichment/batch
     // + Phase 3 analyst workflow (read:cases, review:case-closure,
     //   override:closure-self-approval)
-    expect(CAPABILITY_VALUES).toHaveLength(10 + 2 + 2 + 1 + 3 + 3);
+    // + Phase 4 notification workflow (read:notifications,
+    //   manage:notifications, export:notifications,
+    //   record:notification-delivery, override:notification-self-approval)
+    expect(CAPABILITY_VALUES).toHaveLength(10 + 2 + 2 + 1 + 3 + 3 + 5);
   });
 
   it("defines the Phase 3 analyst-workflow capability set", () => {

@@ -19,11 +19,18 @@ const ANALYST_CAPABILITIES = [
   CAPABILITIES.RECALCULATE_FINDING_RISK,
   CAPABILITIES.MANAGE_FINDING_VULNERABILITIES,
   CAPABILITIES.TRIGGER_VULNERABILITY_ENRICHMENT,
+  // Phase 4 — an analyst drafts, edits, submits, exports and records delivery.
+  CAPABILITIES.READ_NOTIFICATIONS,
+  CAPABILITIES.MANAGE_NOTIFICATIONS,
+  CAPABILITIES.EXPORT_NOTIFICATIONS,
+  CAPABILITIES.RECORD_NOTIFICATION_DELIVERY,
 ]
 const REVIEWER_CAPABILITIES = [
   CAPABILITIES.READ_DASHBOARD,
   CAPABILITIES.READ_FINDINGS,
   CAPABILITIES.READ_CASES,
+  // Phase 4 — a reviewer reads a notification in order to decide it.
+  CAPABILITIES.READ_NOTIFICATIONS,
   CAPABILITIES.REVIEW_NOTIFICATIONS,
   CAPABILITIES.REVIEW_AI_SUGGESTIONS,
   CAPABILITIES.REVIEW_CASE_CLOSURE,
@@ -92,6 +99,38 @@ describe('canAccessPage', () => {
   it('still denies VIEWER every mutation-capable page', () => {
     ;['upload', 'notifications', 'organizations', 'settings'].forEach((page) => {
       expect(canAccessPage(VIEWER_CAPABILITIES, page)).toBe(false)
+    })
+  })
+
+  // Phase 4 — the notification page gate is the READ capability, so both
+  // halves of the separation of duties reach the screen while holding disjoint
+  // write grants.
+  it('lets ANALYST and REVIEWER reach the notification screens, and VIEWER neither', () => {
+    ;['notifications', 'notificationDetail'].forEach((page) => {
+      expect(canAccessPage(ANALYST_CAPABILITIES, page)).toBe(true)
+      expect(canAccessPage(REVIEWER_CAPABILITIES, page)).toBe(true)
+      expect(canAccessPage(VIEWER_CAPABILITIES, page)).toBe(false)
+    })
+  })
+
+  // Reaching the notification screen must never imply being able to act on it.
+  it('never gives a notification reader the wrong half of the separation of duties', () => {
+    // The analyst writes and exports but cannot approve.
+    expect(hasCapability(ANALYST_CAPABILITIES, CAPABILITIES.MANAGE_NOTIFICATIONS)).toBe(true)
+    expect(hasCapability(ANALYST_CAPABILITIES, CAPABILITIES.EXPORT_NOTIFICATIONS)).toBe(true)
+    expect(hasCapability(ANALYST_CAPABILITIES, CAPABILITIES.REVIEW_NOTIFICATIONS)).toBe(false)
+
+    // The reviewer approves but cannot write, export or record delivery.
+    expect(hasCapability(REVIEWER_CAPABILITIES, CAPABILITIES.REVIEW_NOTIFICATIONS)).toBe(true)
+    expect(hasCapability(REVIEWER_CAPABILITIES, CAPABILITIES.MANAGE_NOTIFICATIONS)).toBe(false)
+    expect(hasCapability(REVIEWER_CAPABILITIES, CAPABILITIES.EXPORT_NOTIFICATIONS)).toBe(false)
+    expect(
+      hasCapability(REVIEWER_CAPABILITIES, CAPABILITIES.RECORD_NOTIFICATION_DELIVERY),
+    ).toBe(false)
+
+    // Nobody below ADMIN may override the self-approval prohibition.
+    ;[ANALYST_CAPABILITIES, REVIEWER_CAPABILITIES, VIEWER_CAPABILITIES].forEach((caps) => {
+      expect(hasCapability(caps, CAPABILITIES.OVERRIDE_NOTIFICATION_SELF_APPROVAL)).toBe(false)
     })
   })
 

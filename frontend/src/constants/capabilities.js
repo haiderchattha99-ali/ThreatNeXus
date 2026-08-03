@@ -30,6 +30,22 @@ export const CAPABILITIES = {
   READ_CASES: 'read:cases',
   REVIEW_CASE_CLOSURE: 'review:case-closure',
   OVERRIDE_CLOSURE_SELF_APPROVAL: 'override:closure-self-approval',
+  // Phase 4 — notification drafting, review, manual export, delivery tracking.
+  //
+  // READ_NOTIFICATIONS is held by ADMIN, ANALYST and REVIEWER, and deliberately
+  // NOT by VIEWER: the approved pre-Phase-4 read policy excluded VIEWER (the
+  // whole router required review:notifications) and Phase 4 widens it only as
+  // far as the workflow requires — to the role that does the drafting.
+  //
+  // MANAGE/EXPORT/RECORD_DELIVERY are held by ADMIN and ANALYST;
+  // REVIEW_NOTIFICATIONS by ADMIN and REVIEWER. The two sets never overlap
+  // below ADMIN, which is what makes it impossible for the role that writes a
+  // notification to also approve one.
+  READ_NOTIFICATIONS: 'read:notifications',
+  MANAGE_NOTIFICATIONS: 'manage:notifications',
+  EXPORT_NOTIFICATIONS: 'export:notifications',
+  RECORD_NOTIFICATION_DELIVERY: 'record:notification-delivery',
+  OVERRIDE_NOTIFICATION_SELF_APPROVAL: 'override:notification-self-approval',
 }
 
 export const CAPABILITY_VALUES = Object.values(CAPABILITIES)

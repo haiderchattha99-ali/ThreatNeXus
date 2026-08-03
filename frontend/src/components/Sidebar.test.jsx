@@ -10,6 +10,10 @@ import * as useAuthModule from '../hooks/useAuth'
 // all four. Reaching the screen is not the same as being able to change
 // anything on it — the mutation controls inside it are gated separately, and
 // the backend re-checks every write regardless.
+// Phase 4 added read:notifications to ANALYST and REVIEWER (and to no other
+// role), so both fixtures gain it here. VIEWER deliberately does not: the
+// approved pre-Phase-4 notification-read policy excluded VIEWER and Phase 4
+// widened it only as far as the drafting role.
 const ANALYST_CAPABILITIES = [
   CAPABILITIES.READ_DASHBOARD,
   CAPABILITIES.READ_FINDINGS,
@@ -17,11 +21,16 @@ const ANALYST_CAPABILITIES = [
   CAPABILITIES.INGEST_REPORTS,
   CAPABILITIES.TRIAGE_FINDINGS,
   CAPABILITIES.MANAGE_CASES,
+  CAPABILITIES.READ_NOTIFICATIONS,
+  CAPABILITIES.MANAGE_NOTIFICATIONS,
+  CAPABILITIES.EXPORT_NOTIFICATIONS,
+  CAPABILITIES.RECORD_NOTIFICATION_DELIVERY,
 ]
 const REVIEWER_CAPABILITIES = [
   CAPABILITIES.READ_DASHBOARD,
   CAPABILITIES.READ_FINDINGS,
   CAPABILITIES.READ_CASES,
+  CAPABILITIES.READ_NOTIFICATIONS,
   CAPABILITIES.REVIEW_NOTIFICATIONS,
   CAPABILITIES.REVIEW_AI_SUGGESTIONS,
   CAPABILITIES.REVIEW_CASE_CLOSURE,
@@ -65,6 +74,9 @@ describe('Sidebar navigation visibility', () => {
     // ANALYST still gets the work it's granted for.
     expect(screen.getByText('Intelligence upload')).toBeInTheDocument()
     expect(screen.getByText('Cases')).toBeInTheDocument()
+    // Phase 4: an analyst drafts, edits and exports notifications, so the
+    // section is theirs too — it is no longer reviewer-only.
+    expect(screen.getByText('Notifications')).toBeInTheDocument()
   })
 
   it('hides upload and admin settings from REVIEWER, but not the cases they review', () => {

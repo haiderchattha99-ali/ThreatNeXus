@@ -13,6 +13,7 @@ import { Profile } from './pages/Profile'
 import Cases from './pages/Cases'
 import CaseDetail from './pages/CaseDetail'
 import Notifications from "./pages/Notifications";
+import NotificationDetail from './pages/NotificationDetail'
 import Analytics from "./pages/Analytics";
 import Organizations from "./pages/Organizations";
 import Settings from "./pages/Settings";
@@ -113,6 +114,16 @@ function App() {
     element={
       <ProtectedRoute requiredCapability={PAGE_CAPABILITIES.notifications}>
         <Notifications />
+      </ProtectedRoute>
+    }
+  />
+
+  {/* Registered after the list so "/notifications" is never matched as an id. */}
+  <Route
+    path="/notifications/:id"
+    element={
+      <ProtectedRoute requiredCapability={PAGE_CAPABILITIES.notificationDetail}>
+        <NotificationDetail />
       </ProtectedRoute>
     }
   />

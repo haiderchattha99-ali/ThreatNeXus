@@ -6,7 +6,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { CaseDetail } from './CaseDetail'
 import { CAPABILITIES } from '../constants/capabilities'
 import * as useAuthModule from '../hooks/useAuth'
-import { caseWorkflowService, findingTriageService } from '../services/api'
+import { caseWorkflowService, findingTriageService, notificationService } from '../services/api'
 
 // The Phase 3 case-detail screen.
 //
@@ -35,6 +35,14 @@ vi.mock('../services/api', () => ({
   findingTriageService: {
     getTriage: vi.fn(),
     updateTriage: vi.fn(),
+  },
+  // Phase 4 — the case screen lists the notifications drafted from this case
+  // and offers "Draft notification" to holders of manage:notifications. The
+  // list load is deliberately non-fatal, so it is mocked to resolve empty
+  // unless a test says otherwise.
+  notificationService: {
+    getNotifications: vi.fn(),
+    createDraft: vi.fn(),
   },
 }))
 
@@ -181,6 +189,9 @@ beforeEach(() => {
         ownership: { status: 'RESOLVED', confidence: 'HIGH', isIspAttribution: false },
       },
     },
+  })
+  notificationService.getNotifications.mockResolvedValue({
+    data: { data: { notifications: [], total: 0, page: 1, limit: 25 } },
   })
 })
 
