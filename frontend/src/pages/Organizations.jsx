@@ -22,7 +22,6 @@ import {
 } from "@mui/material";
 
 import {
-  FiUsers,
   FiPlus,
   FiSearch,
   FiEye,
@@ -36,7 +35,7 @@ const Organizations = () => {
 
   const [organizations, setOrganizations] = useState([]);
 
-  const [loading, setLoading] = useState(true);
+  const [_loading, setLoading] = useState(true);
 
   const [search, setSearch] = useState("");
 
@@ -252,9 +251,9 @@ return (
         placeholder="Search Organizations..."
         value={search}
         onChange={(e) => setSearch(e.target.value)}
-        InputProps={{
+        slotProps={{ input: {
           startAdornment: <FiSearch />,
-        }}
+        } }}
       />
 
       <Button

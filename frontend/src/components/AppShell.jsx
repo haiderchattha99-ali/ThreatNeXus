@@ -25,7 +25,7 @@ import {
   useMediaQuery,
 } from '@mui/material'
 import { useTheme } from '@mui/material/styles'
-import { FiMenu, FiLogOut, FiUser, FiChevronDown } from 'react-icons/fi'
+import { FiMenu, FiLogOut, FiUser, FiChevronDown, FiX } from 'react-icons/fi'
 
 import { useAuth } from '../hooks/useAuth'
 import { SidebarNav, DRAWER_WIDTH } from './Sidebar'
@@ -128,6 +128,7 @@ export function AppShell({ children }) {
               aria-label="Open navigation menu"
               aria-expanded={mobileOpen}
               aria-controls="tnx-mobile-nav"
+              sx={{ width: 44, height: 44 }}
             >
               <FiMenu size={19} />
             </IconButton>
@@ -181,6 +182,7 @@ export function AppShell({ children }) {
               borderRadius: `${radius.sm}px`,
               color: color.text,
               cursor: 'pointer',
+              minHeight: 44,
               font: 'inherit',
               '&:hover': { borderColor: color.borderStrong, backgroundColor: color.surfaceRaised },
               '&:focus-visible': { outline: `2px solid ${color.borderFocus}`, outlineOffset: 2 },
@@ -253,10 +255,20 @@ export function AppShell({ children }) {
           open={mobileOpen}
           onClose={() => setMobileOpen(false)}
           ModalProps={{ keepMounted: true }}
-          sx={{ '& .MuiDrawer-paper': { width: DRAWER_WIDTH, backgroundColor: color.canvasAlt } }}
+          sx={{
+            zIndex: (t) => t.zIndex.drawer + 2,
+            '& .MuiDrawer-paper': { width: DRAWER_WIDTH, backgroundColor: color.canvasAlt },
+          }}
         >
-          <Box sx={{ px: 2, py: 1.75, borderBottom: `1px solid ${color.border}` }}>
+          <Box sx={{ px: 2, py: 1, minHeight: 60, borderBottom: `1px solid ${color.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1 }}>
             <BrandMark size={22} showWordmark />
+            <IconButton
+              onClick={() => setMobileOpen(false)}
+              aria-label="Close navigation menu"
+              sx={{ width: 44, height: 44 }}
+            >
+              <FiX size={19} />
+            </IconButton>
           </Box>
           <SidebarNav onNavigate={() => setMobileOpen(false)} />
         </Drawer>

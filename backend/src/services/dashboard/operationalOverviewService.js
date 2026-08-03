@@ -34,7 +34,11 @@
 
 const prisma = require("../../config/prisma");
 const env = require("../../config/env");
-const { CAPABILITIES, hasCapability } = require("../../lib/roles");
+const {
+  CAPABILITIES,
+  hasCapability,
+  resolveAuthorizationRole,
+} = require("../../lib/roles");
 
 // Section availability.
 const AVAILABILITY = Object.freeze({
@@ -51,6 +55,17 @@ const PROVIDER_STALE_AFTER_MS = 24 * 60 * 60 * 1000;
 // Bounded size of the recent-activity list. A dashboard is a summary; anyone
 // who needs the full history opens the case.
 const RECENT_ACTIVITY_LIMIT = 8;
+
+// Phase 6.1 — bounded size of every attention queue. A queue is a shortlist of
+// what to do next, not a paged table: the full list lives on the screen the
+// queue links to, which is also where filtering and paging already exist.
+const QUEUE_LIMIT = 6;
+
+// Phase 6.1 — the stored-observation trend window, in whole UTC days ending on
+// the snapshot's own day. Seven is the window the demo dataset spans; it is a
+// constant here rather than a query parameter because nothing in this snapshot
+// accepts caller input.
+const TREND_WINDOW_DAYS = 7;
 
 /** A computed figure. `value` may legitimately be 0 — that is a counted zero. */
 function metric(value, source, asOf) {
@@ -461,9 +476,27 @@ async function buildProvidersSection(client, asOf) {
     },
   ];
 
+  // Phase 6.1 — a one-line freshness roll-up, so "can I trust the stored
+  // intelligence context behind these scores?" is answerable at a glance
+  // without reading four rows. Every figure is a count of the rows above; it
+  // asserts nothing the individual entries do not already say, and in
+  // particular it is NOT a health, uptime or availability score.
+  const allProviders = [iocProvider, ...vulnerabilityProviders];
+  const countState = (state) => allProviders.filter((p) => p.state === state).length;
+  const summary = {
+    total: allProviders.length,
+    fresh: countState("FRESH"),
+    stale: countState("STALE"),
+    noSuccessfulLookup: countState("NO_SUCCESSFUL_LOOKUP_RECORDED"),
+    source: "Counted from the provider entries in this same snapshot",
+    asOf: iso,
+    staleAfterHours: PROVIDER_STALE_AFTER_MS / (60 * 60 * 1000),
+  };
+
   return {
     availability: AVAILABILITY.AVAILABLE,
     asOf: iso,
+    summary,
     ioc: iocProvider,
     vulnerability: vulnerabilityProviders,
     ai: {
@@ -519,6 +552,400 @@ async function buildRecentActivity(client, asOf) {
 }
 
 // ---------------------------------------------------------------------------
+// Phase 6.1 — attention queues
+// ---------------------------------------------------------------------------
+//
+// A count tells an analyst that work exists. A queue tells them WHICH work, and
+// gives them somewhere to click. That is the whole difference between the
+// operations report this dashboard was and the command centre it has to be.
+//
+// Every queue below obeys the same five rules:
+//
+//   1. BOUNDED     — an explicit `take`, never an unbounded findMany.
+//   2. DETERMINISTIC — the ordering ends in a unique tiebreaker (an id), so the
+//                    same database state always produces the same list. A queue
+//                    whose order changes between two identical reads is a queue
+//                    two analysts will disagree about.
+//   3. ALLOWLISTED — an explicit `select` and an explicit serializer. No row is
+//                    ever spread into the response, so a column added to a model
+//                    later cannot silently start being published.
+//   4. COUNTED     — `total` is a real count of everything matching the queue's
+//                    predicate, so "6 shown" can never be mistaken for "6 exist".
+//   5. GATED       — on an EXISTING capability. Phase 6.1 mints no new authority.
+
+// The only Finding columns any queue publishes. Deliberately excludes
+// closedBy/closureReason/closedThroughObservedAt and every relation.
+const FINDING_QUEUE_SELECT = Object.freeze({
+  id: true,
+  indicatorValue: true,
+  port: true,
+  protocol: true,
+  reportType: true,
+  status: true,
+  occurrenceCount: true,
+  recurrenceCount: true,
+  firstSeen: true,
+  lastSeen: true,
+});
+
+function isoOrNull(value) {
+  return value ? new Date(value).toISOString() : null;
+}
+
+/**
+ * One queue row for a Finding.
+ *
+ * `risk.state` is a factual lifecycle state, not an availability: NOT_SCORED
+ * means the scoring engine has genuinely never produced a current snapshot for
+ * this Finding, which is different from "we could not read it". A row in that
+ * state carries nulls, never a zero and never the lowest band.
+ */
+function serializeFindingQueueItem(finding, score) {
+  return {
+    id: finding.id,
+    indicatorValue: finding.indicatorValue,
+    port: finding.port,
+    protocol: finding.protocol,
+    reportType: finding.reportType,
+    status: finding.status,
+    occurrenceCount: finding.occurrenceCount,
+    recurrenceCount: finding.recurrenceCount,
+    firstSeen: isoOrNull(finding.firstSeen),
+    lastSeen: isoOrNull(finding.lastSeen),
+    // Derived from the two counters above and shown alongside them, so the
+    // badge can always be checked against the number it was derived from.
+    persistent: finding.occurrenceCount > 1,
+    recurred: finding.recurrenceCount > 0,
+    risk: score
+      ? {
+          state: "SCORED",
+          band: score.riskBand,
+          // The same floor(basisPoints / 100) projection the Finding read path
+          // uses. Risk v1 is a locked contract; nothing here rescores.
+          displayScore: Math.floor(score.scoreBasisPoints / 100),
+          scoreBasisPoints: score.scoreBasisPoints,
+          asOf: isoOrNull(score.asOf),
+        }
+      : { state: "NOT_SCORED", band: null, displayScore: null, scoreBasisPoints: null, asOf: null },
+  };
+}
+
+async function buildFindingQueues(client, asOf) {
+  const iso = asOf.toISOString();
+
+  // "Awaiting triage" is expressed against the current-triage projection
+  // (FindingTriage.currentForFindingId), which is the same column the triage
+  // read path treats as authoritative. It is NOT inferred from the absence of
+  // history — a Finding whose only triage row was superseded is still triaged.
+  const untriaged = {
+    status: "OPEN",
+    triageHistory: { none: { currentForFindingId: { not: null } } },
+  };
+
+  const [openTotal, untriagedTotal, priorityRows, untriagedRows] = await Promise.all([
+    client.finding.count({ where: { status: "OPEN" } }),
+    client.finding.count({ where: untriaged }),
+    // Driven from RiskScore rather than Finding, because the current score is
+    // reachable there through the unique currentForFindingId projection —
+    // which means one bounded query, no per-row lookup, and an ordering
+    // PostgreSQL can satisfy from an index.
+    client.riskScore.findMany({
+      where: { currentForFindingId: { not: null }, finding: { status: "OPEN" } },
+      take: QUEUE_LIMIT,
+      orderBy: [{ scoreBasisPoints: "desc" }, { findingId: "asc" }],
+      select: {
+        scoreBasisPoints: true,
+        riskBand: true,
+        asOf: true,
+        finding: { select: FINDING_QUEUE_SELECT },
+      },
+    }),
+    client.finding.findMany({
+      where: untriaged,
+      take: QUEUE_LIMIT,
+      // Most-repeated first: a Finding seen in five reports and never triaged
+      // is a worse backlog item than one seen once. `id` closes the ordering.
+      orderBy: [{ occurrenceCount: "desc" }, { lastSeen: "desc" }, { id: "asc" }],
+      select: FINDING_QUEUE_SELECT,
+    }),
+  ]);
+
+  // One extra bounded query — never one per row — to attach the current score
+  // to the triage backlog. `in` is over at most QUEUE_LIMIT ids.
+  const untriagedIds = untriagedRows.map((f) => f.id);
+  const untriagedScores = untriagedIds.length
+    ? await client.riskScore.findMany({
+        where: { currentForFindingId: { in: untriagedIds } },
+        select: { currentForFindingId: true, scoreBasisPoints: true, riskBand: true, asOf: true },
+      })
+    : [];
+  const scoreByFinding = new Map(untriagedScores.map((s) => [s.currentForFindingId, s]));
+
+  return {
+    availability: AVAILABILITY.AVAILABLE,
+    asOf: iso,
+    limit: QUEUE_LIMIT,
+    priority: {
+      availability: AVAILABILITY.AVAILABLE,
+      // Named for what it is. This is the highest CURRENT Risk v1 score among
+      // open findings — not a severity, not a threat level, and not a ranking
+      // of anything outside the loaded dataset.
+      label: "Highest current Risk v1 score, open findings",
+      source:
+        "RiskScore.scoreBasisPoints WHERE currentForFindingId IS NOT NULL AND Finding.status = OPEN, ordered by score descending then findingId",
+      asOf: iso,
+      total: openTotal,
+      totalLabel: "open findings",
+      items: priorityRows.map((row) => serializeFindingQueueItem(row.finding, row)),
+    },
+    awaitingTriage: {
+      availability: AVAILABILITY.AVAILABLE,
+      label: "Open findings with no current triage decision",
+      source:
+        "Finding.status = OPEN with no FindingTriage row holding currentForFindingId, ordered by occurrenceCount descending then lastSeen descending then id",
+      asOf: iso,
+      total: untriagedTotal,
+      totalLabel: "awaiting a triage decision",
+      items: untriagedRows.map((f) => serializeFindingQueueItem(f, scoreByFinding.get(f.id) || null)),
+    },
+  };
+}
+
+// The only Case columns any queue publishes. caseReference/title/organization
+// name are already what the Phase 3 case serializer exposes to every holder of
+// read:cases, so this adds no new exposure; organization CONTACT detail (email,
+// phone, contact person) is excluded here exactly as it is there.
+const CASE_QUEUE_SELECT = Object.freeze({
+  id: true,
+  caseReference: true,
+  title: true,
+  lifecycleState: true,
+  createdAt: true,
+  updatedAt: true,
+  ownerOrganization: { select: { name: true } },
+});
+
+function serializeCaseQueueItem(record) {
+  return {
+    id: record.id,
+    caseReference: record.caseReference || null,
+    title: record.title,
+    lifecycleState: record.lifecycleState,
+    organizationName: record.ownerOrganization ? record.ownerOrganization.name : null,
+    createdAt: isoOrNull(record.createdAt),
+    updatedAt: isoOrNull(record.updatedAt),
+  };
+}
+
+async function buildCaseQueues(client, asOf) {
+  const iso = asOf.toISOString();
+
+  const [closureTotal, waitingTotal, closureRows, waitingRows] = await Promise.all([
+    client.caseClosureRequest.count({ where: { state: "PENDING" } }),
+    client.case.count({ where: { lifecycleState: "WAITING_FOR_ORG" } }),
+    client.caseClosureRequest.findMany({
+      where: { state: "PENDING" },
+      take: QUEUE_LIMIT,
+      // Oldest request first: a review queue that surfaces the newest item is a
+      // queue whose oldest item is never reached.
+      orderBy: [{ requestedAt: "asc" }, { id: "asc" }],
+      select: {
+        id: true,
+        caseId: true,
+        closureReason: true,
+        requestedAt: true,
+        case: { select: CASE_QUEUE_SELECT },
+      },
+    }),
+    client.case.findMany({
+      where: { lifecycleState: "WAITING_FOR_ORG" },
+      take: QUEUE_LIMIT,
+      orderBy: [{ updatedAt: "asc" }, { id: "asc" }],
+      select: CASE_QUEUE_SELECT,
+    }),
+  ]);
+
+  return {
+    availability: AVAILABILITY.AVAILABLE,
+    asOf: iso,
+    limit: QUEUE_LIMIT,
+    closureReview: {
+      availability: AVAILABILITY.AVAILABLE,
+      label: "Closure requests awaiting a reviewer decision",
+      source: "CaseClosureRequest.state = PENDING, ordered by requestedAt ascending then id",
+      asOf: iso,
+      total: closureTotal,
+      totalLabel: "pending closure requests",
+      items: closureRows.map((row) => ({
+        id: row.id,
+        caseId: row.caseId,
+        closureReason: row.closureReason,
+        requestedAt: isoOrNull(row.requestedAt),
+        // The analyst's written justification is deliberately NOT published
+        // here. It belongs on the case, where the reviewer reads it in full
+        // before deciding — not truncated into a dashboard row.
+        case: row.case ? serializeCaseQueueItem(row.case) : null,
+      })),
+    },
+    waitingOnOrganization: {
+      availability: AVAILABILITY.AVAILABLE,
+      label: "Cases waiting on a constituent organization",
+      source: "Case.lifecycleState = WAITING_FOR_ORG, ordered by updatedAt ascending then id",
+      asOf: iso,
+      total: waitingTotal,
+      totalLabel: "cases waiting on an organization",
+      items: waitingRows.map(serializeCaseQueueItem),
+    },
+  };
+}
+
+// Notification queue columns. `title` and `message` are constituent-addressed
+// CONTENT and are never published to a dashboard — a reviewer opens the
+// notification to read what it says, which is also where the revision the
+// approval will bind to is shown.
+const NOTIFICATION_QUEUE_SELECT = Object.freeze({
+  id: true,
+  notificationReference: true,
+  lifecycleState: true,
+  createdAt: true,
+  caseId: true,
+  case: { select: { caseReference: true } },
+  ownerOrganization: { select: { name: true } },
+});
+
+function serializeNotificationQueueItem(record) {
+  return {
+    id: record.id,
+    notificationReference: record.notificationReference || null,
+    lifecycleState: record.lifecycleState,
+    caseId: record.caseId,
+    caseReference: record.case ? record.case.caseReference : null,
+    organizationName: record.ownerOrganization ? record.ownerOrganization.name : null,
+    createdAt: isoOrNull(record.createdAt),
+  };
+}
+
+async function buildNotificationQueue(client, asOf) {
+  const iso = asOf.toISOString();
+  const workflow = { caseId: { not: null } };
+
+  const [reviewTotal, draftTotal, reviewRows, draftRows] = await Promise.all([
+    client.notification.count({ where: { ...workflow, lifecycleState: "PENDING_REVIEW" } }),
+    client.notification.count({ where: { ...workflow, lifecycleState: "DRAFT" } }),
+    client.notification.findMany({
+      where: { ...workflow, lifecycleState: "PENDING_REVIEW" },
+      take: QUEUE_LIMIT,
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      select: NOTIFICATION_QUEUE_SELECT,
+    }),
+    client.notification.findMany({
+      where: { ...workflow, lifecycleState: "DRAFT" },
+      take: QUEUE_LIMIT,
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      select: NOTIFICATION_QUEUE_SELECT,
+    }),
+  ]);
+
+  return {
+    availability: AVAILABILITY.AVAILABLE,
+    asOf: iso,
+    limit: QUEUE_LIMIT,
+    awaitingReview: {
+      availability: AVAILABILITY.AVAILABLE,
+      label: "Notifications awaiting a reviewer decision",
+      source:
+        "Notification.lifecycleState = PENDING_REVIEW WHERE caseId IS NOT NULL, ordered by createdAt ascending then id",
+      asOf: iso,
+      total: reviewTotal,
+      totalLabel: "awaiting review",
+      items: reviewRows.map(serializeNotificationQueueItem),
+    },
+    drafting: {
+      availability: AVAILABILITY.AVAILABLE,
+      label: "Drafts not yet submitted for review",
+      source:
+        "Notification.lifecycleState = DRAFT WHERE caseId IS NOT NULL, ordered by createdAt ascending then id",
+      asOf: iso,
+      total: draftTotal,
+      totalLabel: "drafts in progress",
+      items: draftRows.map(serializeNotificationQueueItem),
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Phase 6.1 — stored observation trend
+// ---------------------------------------------------------------------------
+//
+// This is NOT a trend line, and the distinction is the reason it is allowed to
+// exist at all. Each entry is a COUNT OF PERSISTED ROWS whose timestamp falls
+// inside one whole UTC day. Nothing is interpolated, smoothed, forecast or
+// carried forward: a day on which no report was ingested is a factual zero,
+// because the query ran and found none. The frontend renders it as discrete
+// bars for the same reason — a continuous curve would imply measurements
+// between the days that this system never took.
+
+function utcDayStart(date) {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+}
+
+async function buildIngestionTrend(client, asOf) {
+  const dayMs = 24 * 60 * 60 * 1000;
+  const todayStart = utcDayStart(asOf);
+
+  const windows = [];
+  for (let back = TREND_WINDOW_DAYS - 1; back >= 0; back -= 1) {
+    const start = new Date(todayStart.getTime() - back * dayMs);
+    windows.push({ start, end: new Date(start.getTime() + dayMs) });
+  }
+
+  // 2 bounded aggregates per day. Fixed at 14 queries regardless of how much
+  // data exists, and none of them returns a row.
+  const results = await Promise.all(
+    windows.flatMap(({ start, end }) => [
+      client.findingOccurrence.groupBy({
+        by: ["action"],
+        where: { observedAt: { gte: start, lt: end } },
+        _count: { _all: true },
+      }),
+      client.rawReport.count({ where: { ingestedAt: { gte: start, lt: end } } }),
+    ])
+  );
+
+  const days = windows.map(({ start }, index) => {
+    const actionRows = results[index * 2] || [];
+    const reportsIngested = results[index * 2 + 1] || 0;
+    const byAction = new Map(OCCURRENCE_ACTIONS.map((a) => [a, 0]));
+    let observations = 0;
+    for (const row of actionRows) {
+      const count = row._count?._all ?? 0;
+      byAction.set(row.action, count);
+      observations += count;
+    }
+    return {
+      date: start.toISOString().slice(0, 10),
+      observations,
+      reportsIngested,
+      byAction: Array.from(byAction, ([key, count]) => ({ key, count })),
+    };
+  });
+
+  return {
+    availability: AVAILABILITY.AVAILABLE,
+    asOf: asOf.toISOString(),
+    windowDays: TREND_WINDOW_DAYS,
+    source:
+      "FindingOccurrence.observedAt and RawReport.ingestedAt, counted per whole UTC day (persisted rows only)",
+    days,
+    totals: {
+      observations: days.reduce((n, d) => n + d.observations, 0),
+      reportsIngested: days.reduce((n, d) => n + d.reportsIngested, 0),
+    },
+    note: "Each column counts persisted rows for one UTC day. A day with no ingested report is a counted zero, not an interpolated point, and no value between two days is implied.",
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Composition
 // ---------------------------------------------------------------------------
 
@@ -562,7 +989,18 @@ async function buildOperationalOverview({ role, asOf = new Date(), client = pris
     }
   }
 
-  const [findings, cases, notifications, frameworks, providers, recentActivity] = await Promise.all([
+  const [
+    findings,
+    cases,
+    notifications,
+    frameworks,
+    providers,
+    recentActivity,
+    findingQueues,
+    caseQueues,
+    notificationQueue,
+    ingestionTrend,
+  ] = await Promise.all([
     section("findings", CAPABILITIES.READ_FINDINGS, buildFindingsSection, "Reading findings requires read:findings."),
     section("cases", CAPABILITIES.READ_CASES, buildCasesSection, "Reading cases requires read:cases."),
     // VIEWER holds read:dashboard but deliberately NOT read:notifications — a
@@ -594,10 +1032,44 @@ async function buildOperationalOverview({ role, asOf = new Date(), client = pris
       buildRecentActivity,
       "Reading case activity requires read:cases."
     ),
+    // Phase 6.1 attention queues. Each rides on the SAME existing capability
+    // as the counts it details — a queue of findings is findings, a queue of
+    // cases is cases — so no role can see through a queue what the equivalent
+    // section already refuses it.
+    section(
+      "findingQueues",
+      CAPABILITIES.READ_FINDINGS,
+      buildFindingQueues,
+      "Reading findings requires read:findings."
+    ),
+    section(
+      "caseQueues",
+      CAPABILITIES.READ_CASES,
+      buildCaseQueues,
+      "Reading cases requires read:cases."
+    ),
+    section(
+      "notificationQueue",
+      CAPABILITIES.READ_NOTIFICATIONS,
+      buildNotificationQueue,
+      "Reading notifications requires read:notifications."
+    ),
+    section(
+      "ingestionTrend",
+      CAPABILITIES.READ_FINDINGS,
+      buildIngestionTrend,
+      "Reading ingestion history requires read:findings."
+    ),
   ]);
 
   return {
     generatedAt: asOf.toISOString(),
+    // The role this snapshot was actually gated against. Returned so the UI
+    // composes its layout from the SAME server-resolved role that decided which
+    // sections are readable, rather than from a separately-fetched profile that
+    // could disagree with it. It is a UX input only: nothing the client does
+    // with it can widen what this response already contains.
+    audience: { role: resolveAuthorizationRole(role) },
     // Every consumer must render this. The dataset is what has been loaded into
     // this instance — it is not a national, sector-wide or Internet-wide
     // measurement, and no figure here may be presented as one.
@@ -611,7 +1083,18 @@ async function buildOperationalOverview({ role, asOf = new Date(), client = pris
       reason:
         "No provenance-backed coordinate is persisted by any phase, and geolocation is never inferred from an indicator, an organization or a provider response.",
     },
-    sections: { findings, cases, notifications, frameworkMappings: frameworks, providers, recentActivity },
+    sections: {
+      findings,
+      cases,
+      notifications,
+      frameworkMappings: frameworks,
+      providers,
+      recentActivity,
+      findingQueues,
+      caseQueues,
+      notificationQueue,
+      ingestionTrend,
+    },
   };
 }
 
@@ -620,7 +1103,13 @@ module.exports = {
   AVAILABILITY,
   PROVIDER_STALE_AFTER_MS,
   RECENT_ACTIVITY_LIMIT,
+  QUEUE_LIMIT,
+  TREND_WINDOW_DAYS,
   // exported for tests
   distribution,
   providerFreshness,
+  serializeFindingQueueItem,
+  serializeCaseQueueItem,
+  serializeNotificationQueueItem,
+  utcDayStart,
 };

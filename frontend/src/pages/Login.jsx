@@ -214,7 +214,7 @@ export const Login = () => {
               disabled={submitting}
               error={Boolean(fieldErrors.password)}
               helperText={fieldErrors.password || ' '}
-              InputProps={{
+              slotProps={{ input: {
                 endAdornment: (
                   <InputAdornment position="end">
                     <IconButton
@@ -228,7 +228,7 @@ export const Login = () => {
                     </IconButton>
                   </InputAdornment>
                 ),
-              }}
+              } }}
             />
 
             <Button

@@ -102,6 +102,8 @@ export function Provenance({ source, asOf, note, sx = {} }) {
         fontSize: 11,
         lineHeight: 1.5,
         color: color.textFaint,
+        minWidth: 0,
+        overflowWrap: 'anywhere',
         ...sx,
       }}
     >

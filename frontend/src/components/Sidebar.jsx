@@ -109,7 +109,7 @@ export function SidebarNav({ onNavigate }) {
                   aria-current={active ? 'page' : undefined}
                   sx={{
                     position: 'relative',
-                    minHeight: 40,
+                    minHeight: 44,
                     mb: 0.25,
                     px: 1.5,
                     borderRadius: `${radius.sm}px`,
@@ -138,7 +138,7 @@ export function SidebarNav({ onNavigate }) {
                   </ListItemIcon>
                   <ListItemText
                     primary={item.label}
-                    primaryTypographyProps={{ fontSize: 13.5, fontWeight: active ? 600 : 500 }}
+                    slotProps={{ primary: { fontSize: 13.5, fontWeight: active ? 600 : 500 } }}
                   />
                 </ListItemButton>
               )
