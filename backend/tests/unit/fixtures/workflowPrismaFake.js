@@ -16,6 +16,19 @@
 //   * transaction rollback, so a throw part-way through a link/closure/reopen
 //     cannot leave a half-written history behind
 //
+// Extended in Phase 4 with the notification tables, which depend on the same
+// two behaviours plus one more:
+//
+//   * NotificationRevision.currentForNotificationId — the distinct-NULLs
+//     current-row unique again, this time enforcing "exactly one current
+//     revision"
+//   * NotificationRevision's COMPOSITE (notificationId, revisionNumber)
+//     unique, which is what stops two concurrent edits both becoming
+//     revision 4
+//   * the guarded `notification.updateMany` compare-and-swap behind every
+//     lifecycle transition, including the one that clears the approval
+//     projection in the same statement
+//
 // A fake that did not enforce these would let a test pass against an
 // implementation with no invariant at all. What it deliberately does NOT model
 // is row locking and genuine concurrency — those are proven against a real
@@ -128,6 +141,13 @@ function createWorkflowPrismaFake() {
     caseOrganizationResponses: [],
     caseClosureRequests: [],
     caseRecurrenceReopens: [],
+    // Phase 4.
+    users: [],
+    notifications: [],
+    notificationRevisions: [],
+    notificationLifecycleEvents: [],
+    notificationExports: [],
+    notificationDeliveryEvents: [],
     auditLogs: [],
     nextId: 1,
   };
@@ -299,6 +319,75 @@ function createWorkflowPrismaFake() {
     }),
     caseRecurrenceReopen: table("caseRecurrenceReopens", {
       uniques: [{ fields: ["findingOccurrenceId", "caseId"], ignoreNull: false }],
+    }),
+
+    // --- Phase 4 -------------------------------------------------------------
+    user: table("users"),
+    notification: table("notifications", {
+      uniques: [{ fields: ["notificationReference"], ignoreNull: true }],
+      defaults: () => ({
+        lifecycleState: "DRAFT",
+        notificationReference: null,
+        caseId: null,
+        organizationId: null,
+        createdByUserId: null,
+        approvedRevisionId: null,
+        approvedByUserId: null,
+        approvedAt: null,
+      }),
+      relations: {
+        ownerOrganization: { table: "organizations", foreignKey: "organizationId" },
+        createdBy: { table: "users", foreignKey: "createdByUserId" },
+        approvedBy: { table: "users", foreignKey: "approvedByUserId" },
+      },
+    }),
+    notificationRevision: table("notificationRevisions", {
+      uniques: [
+        // "Exactly one current revision", the distinct-NULLs mechanism again.
+        { fields: ["currentForNotificationId"], ignoreNull: true },
+        // "No two revision Ns for one notification" — a genuine composite
+        // unique with no NULL exemption, which is what makes two concurrent
+        // edits unable to both become revision N+1.
+        { fields: ["notificationId", "revisionNumber"], ignoreNull: false },
+      ],
+      defaults: () => ({
+        remediationGuidance: null,
+        recipientName: null,
+        recipientEmail: null,
+        analystNotes: null,
+        createdByUserId: null,
+        supersededAt: null,
+        currentForNotificationId: null,
+      }),
+      relations: { createdBy: { table: "users", foreignKey: "createdByUserId" } },
+    }),
+    notificationLifecycleEvent: table("notificationLifecycleEvents", {
+      defaults: () => ({ fromState: null, note: null, actorUserId: null }),
+      relations: {
+        actor: { table: "users", foreignKey: "actorUserId" },
+        revision: { table: "notificationRevisions", foreignKey: "revisionId" },
+      },
+    }),
+    notificationExport: table("notificationExports", {
+      defaults: () => ({ exportedByUserId: null }),
+      relations: {
+        exportedBy: { table: "users", foreignKey: "exportedByUserId" },
+        revision: { table: "notificationRevisions", foreignKey: "revisionId" },
+      },
+    }),
+    notificationDeliveryEvent: table("notificationDeliveryEvents", {
+      defaults: () => ({
+        exportId: null,
+        revisionId: null,
+        reference: null,
+        note: null,
+        recordedByUserId: null,
+        recordedAt: new Date(),
+      }),
+      relations: {
+        recordedBy: { table: "users", foreignKey: "recordedByUserId" },
+        revision: { table: "notificationRevisions", foreignKey: "revisionId" },
+      },
     }),
     auditLog: {
       async create({ data }) {

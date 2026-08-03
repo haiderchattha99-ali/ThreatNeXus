@@ -37,7 +37,21 @@ const { RISK_CONFIGURATION } = require("../../src/services/risk/riskConfiguratio
 const { calculateRisk } = require("../../src/services/risk/riskEngine");
 const { buildInputFingerprint } = require("../../src/services/risk/riskInputSnapshot");
 
-const groundTruthText = fs.readFileSync(GROUND_TRUTH_PATH, "utf8");
+// Normalized to LF at read time.
+//
+// The tamper cases below build their mutations with hardcoded LF-joined
+// strings ("      cvePresent: false\n"). `core.autocrlf=true` materializes a
+// CRLF working copy from the LF-committed blob, so on such a checkout every
+// one of those `.replace()` calls matches nothing, the "tampered" text is
+// byte-identical to the original, and each test that expects the loader to
+// REJECT it fails because there was never anything wrong with the input.
+//
+// This is the same defect class documented in evalGroundTruthLoader.test.js's
+// "line-ending independence" block, which records the Phase 1 gate test having
+// had exactly this bug. Normalizing here restores the tampers' teeth without
+// rewriting all fourteen of them; the loader itself is line-ending agnostic
+// (proven in that block), so parsing LF-normalized text tests the same code.
+const groundTruthText = fs.readFileSync(GROUND_TRUTH_PATH, "utf8").replace(/\r\n/g, "\n");
 
 describe("the committed risk ground truth", () => {
   it("loads and validates", () => {
