@@ -50,9 +50,355 @@ _Operational status / handoff note. Authoritative plan lives in
   organization-bound case → `CaseFinding` evidence linkage → case lifecycle → organization-response
   tracking → reviewer-approved closure → recurrence-driven reopening, with backend APIs, capability
   RBAC, cross-cutting audits, functional frontend screens and the `eval:phase3` evaluator. See
-  "Phase 3 COMPLETE" immediately below. **Exactly one additive migration; migration count 14 → 15.**
-  Branch `feat/phase-3-analyst-workflow`. Exact next task is **Phase 4 — notification drafting,
-  analyst approval/edit/reject, manual export, and delivery/response tracking integration**.
+  "Phase 3 COMPLETE" below. **Exactly one additive migration; migration count 14 → 15.**
+- **PHASE 4 — COMPLETE. The notification workflow is delivered end to end**: notification drafting
+  from case evidence → immutable revisions → analyst editing → reviewer approval/rejection →
+  approved-revision-only manual export → delivery tracking → `CaseOrganizationResponse` integration,
+  with backend APIs, capability RBAC, cross-cutting audits, functional frontend screens and the
+  `eval:phase4` evaluator. See "Phase 4 COMPLETE" immediately below. **Exactly one additive
+  migration; migration count 15 → 16.** Branch `feat/phase-4-notification-workflow`. Exact next task
+  is **Phase 5 — framework mappings and guarded optional AI assistance**.
+
+## Phase 4 COMPLETE — notification drafting, review, manual export, delivery (2026-08-03)
+
+Branch `feat/phase-4-notification-workflow`, built on `13d0b43` (Phase 3 merged via PR #4).
+**Exactly one additive migration; migration count 15 → 16.**
+
+    notification drafted from case evidence
+      → immutable revisions (exactly one current)
+        → analyst editing
+          → reviewer approval bound to an exact revision
+            → approved-revision-only manual export
+              → delivery tracking (never inferred)
+                → shared CaseOrganizationResponse timeline
+
+### Schema and migration
+
+`20260803120000_add_phase4_notification_workflow` — strictly additive: 4 `CREATE TYPE`, 4
+`CREATE TABLE`, one `ALTER TABLE` adding only nullable or defaulted `Notification` columns, plus
+indexes and foreign keys. No `DROP`, no column retype, no raw SQL, no partial index. Every
+pre-existing `Notification` row stays valid.
+
+**The existing `Notification` model is EXTENDED, never duplicated.** There is deliberately no second
+notification entity: `notificationReference`, `caseId`/`organizationId`, `lifecycleState`,
+`createdByUserId` and the approval projection (`approvedRevisionId`/`approvedByUserId`/`approvedAt`)
+are all new nullable or defaulted columns on it. A row with a null `caseId` is a legacy Phase 0
+notification — readable, excluded from every Phase 4 list, and refused by every workflow operation
+(`assertWorkflowBound`), exactly as a legacy non-organization-bound `Case` is in Phase 3.
+
+Four append-only models: `NotificationRevision`, `NotificationLifecycleEvent`,
+`NotificationExport`, `NotificationDeliveryEvent`.
+
+**Two invariants are database constraints, not checked-and-hoped-for properties.**
+`NotificationRevision.currentForNotificationId` reuses the repository's established distinct-NULLs
+mechanism (D-006/D-007) so at most one revision is current; the composite
+`@@unique([notificationId, revisionNumber])` is what stops two concurrent edits both becoming
+revision N+1. No raw SQL, no partial index.
+
+Every FK onto `Notification` / `NotificationRevision` / `NotificationExport` / `Case` /
+`Organization` is `Restrict` so an approval, an export or a delivery claim can never be orphaned;
+every actor FK is `SetNull` so deleting a user nulls attribution without destroying the record that
+justified an approval.
+
+**The artifact bytes are deliberately not stored.** Persisting the generated message would put
+constituent-addressed content and a recipient address into a second table with a different retention
+story, for no gain: the revision is immutable, the builder is deterministic, and
+`artifactChecksum` + `artifactByteLength` prove the bytes an analyst holds are the bytes we produced.
+
+### Locked semantics, as implemented
+
+- **Every meaningful edit creates an immutable revision; exactly one is current.** A prior row is
+  touched only by the supersede stamp (`supersededAt` + `currentForNotificationId → null`), in the
+  same transaction that inserts its replacement. Content is never rewritten.
+- **An identical edit is UNCHANGED, not a new revision.** The comparison is made on normalized
+  CONTENT (`contentEquals`), not on the stored checksum alone — a checksum collision must never read
+  as identity, and a stale stored value must never read as a difference. UNCHANGED is audited and
+  returned as a first-class outcome, so a UI can say "your edit changed nothing" rather than
+  silently showing no new revision.
+- **Editing destroys a standing approval, by stored state rather than by a comparison.** Creating
+  any revision clears the whole approval projection and returns the notification to DRAFT *in the
+  same statement as the state change*, so no reader can observe an APPROVED-looking projection
+  against a newer revision. The approval EVENT survives in `NotificationLifecycleEvent`, which is
+  never rewritten. **This includes a notes-only edit** — the exported artifact would be
+  byte-identical, but the reviewer approved a record that has since changed, and treating that as
+  still-approved is the wrong default for a system whose purpose is a defensible approval trail.
+- **PENDING_REVIEW is not editable.** Editing while a reviewer is deciding would change the content
+  out from under them — the same class of defect Phase 3 found when an analyst could withdraw a
+  pending closure by posting a bare target state (D-P3-a). The recovery path is the reviewer's: they
+  reject, and the analyst then edits into a new DRAFT.
+- **The content checksum is computed from content alone.** Canonical, field-ordered, version-tagged,
+  with an explicit length prefix on each value so text moved across a field boundary cannot produce
+  the same digest. Deliberately excludes row ids, revision numbers, timestamps, actor identity,
+  database row order, environment values, secrets and any error text — which is what makes it usable
+  both as a no-op detector and as an integrity re-check at export time.
+- **Approval names a revision, or it is not an approval.** The current revision is re-read INSIDE the
+  transaction, so a concurrent edit cannot slip different content under a decision in flight: the
+  edit moves the notification to DRAFT and the guarded `PENDING_REVIEW → APPROVED` transition then
+  finds no row to update and fails with `CONCURRENT_STATE_CHANGE`.
+- **The author or submitter may not approve their own revision** unless they hold the ADMIN-only
+  `override:notification-self-approval`. Enforced in the service from a **capability-derived boolean
+  supplied by the controller, never a role string**, so the service holds no role knowledge at all.
+  The disqualified set is read from durable rows (the revision's `createdByUserId` and the actor on
+  the most recent `SUBMITTED_FOR_REVIEW` event **for that exact revision**) — an earlier revision's
+  submitter is not disqualified from reviewing a later one they had no hand in. An unattributed
+  revision is not self-approval: `null === null` must not lock the review out.
+
+### Manual export — nothing is sent, ever
+
+There is no SMTP client, no webhook, no messaging SDK, no `mailto:` launch and no scheduler anywhere
+in this system, by design. `notificationArtifactBuilder.js` requires exactly two modules — `crypto`
+and the pure rules — and a test asserts that dependency list literally, so a future edit reaching for
+`nodemailer`/`axios`/`node:net` fails the suite.
+
+**THE guard** (`evaluateExportEligibility`, pure and unit-tested branch by branch) permits an export
+only when: state is `APPROVED`; a current revision exists; an approval exists; it names the **exact**
+current revision id; `approvedByUserId` is non-null (the AGENTS.md rule, enforced literally); the
+stored checksum still matches the stored content; the revision still belongs to this notification;
+and a valid recipient exists. It runs **inside** the transaction against re-read rows, and a refusal
+throws before any row is written — proven by counting `NotificationExport` rows across the whole
+refusal matrix. Refusals carry a closed `EXPORT_REFUSAL_CODES` value the UI renders as advice.
+
+The artifact is an **RFC 5322 `.eml`**: CRLF throughout, RFC 2047 encoded-word for non-ASCII headers,
+RFC 2045 quoted-printable body (chosen over base64 so an analyst can read what they are about to
+send, and over raw 8-bit so it is 7-bit clean), correct `message/rfc822` content type, and a filename
+sanitized to `[A-Za-z0-9._-]` with dot-runs collapsed. A `TXT` variant is offered for environments
+where a `message/rfc822` attachment is unacceptable.
+
+**Header injection is prevented twice.** `notificationRules` rejects control characters in every
+single-line field at WRITE time, so a CR or LF cannot be stored at all; the builder re-checks and
+**throws rather than sanitizing**, because a stored value that should have been impossible is an
+alarm, not something to quietly clean up. The recipient pattern additionally rejects the RFC 5322
+specials (comma, semicolon, angle brackets, colon, quotes, backslash, parentheses) that would change
+a `To:` header's meaning.
+
+Never in the artifact: Bcc or any second recipient, `analystNotes`, database ids, checksums, API
+keys, filesystem paths, organization contact detail beyond the single approved recipient, **a
+Message-ID** (this system does not send the message and has no authority to mint its identifier; a
+fabricated one would be indexed by the recipient's mail system as though a real transmission
+occurred), and **no real From address** — RFC 5322 requires the field, so it carries the RFC 2606
+reserved `.invalid` TLD, which cannot resolve and cannot be replied to by accident.
+
+Repeated exports are permitted and each creates its own immutable row and `EXPORTED` event. The
+lifecycle state is deliberately unchanged by an export: exporting is a recorded act on an APPROVED
+notification, not a transition.
+
+### Delivery tracking — export is not delivery
+
+`NotificationExport` and `NotificationDeliveryEvent` are two tables because exporting is something we
+did and can prove, while delivery is something a human observed afterwards and must assert.
+
+Nothing in the codebase writes a delivery row on its own — there is no call to the delivery service
+from the export path, ingestion, a scheduler or any runner; it is reachable only from the HTTP route
+an analyst posts to. `DELIVERED` is never inferred from an export, a download, elapsed time or the
+absence of a bounce. `occurredAt` is **required and always caller-supplied** (defaulting it would
+fabricate the one timestamp a delivery timeline exists to record accurately); `recordedAt` is
+server-captured and the two are never conflated. No provider receipt or message identifier is ever
+synthesized. Rows are append-only: a correction is a further event, so the original claim and the
+correction both stay visible. A delivery claim is refused unless the notification has actually been
+exported — this system's only outbound act — and a named `exportId` must belong to that notification.
+A bounce does not un-approve anything.
+
+### CaseOrganizationResponse reuse
+
+There is **no** `NotificationResponse` table and no Phase 4 response service.
+`POST /api/notifications/:id/responses` calls the Phase 3 `caseResponseService` directly against the
+notification's bound case, so exactly one `CaseOrganizationResponse` row is written, carrying the
+same validation, the same `case.response.recorded` audit event and the same failure-isolation
+behaviour as the case route. The case timeline and the notification view render the same canonical
+row **because there is only one row** — asserted by id equality in the evaluator and under real
+PostgreSQL. It is gated on the existing `manage:cases` rather than a new capability: the authority to
+record what an organization said is the same authority from either screen, and a second capability
+would let the two drift. A response still closes nothing, and `REMEDIATED` remains only a Phase 3
+closure precondition.
+
+### APIs and RBAC
+
+Five additive, non-hierarchical capabilities in `lib/roles.js`:
+
+| Capability | ADMIN | ANALYST | REVIEWER | VIEWER |
+| --- | --- | --- | --- | --- |
+| `read:notifications` | yes | yes | yes | **no** |
+| `manage:notifications` | yes | yes | no | no |
+| `review:notifications` (existing) | yes | no | yes | no |
+| `export:notifications` | yes | yes | no | no |
+| `record:notification-delivery` | yes | yes | no | no |
+| `override:notification-self-approval` | yes | no | no | no |
+
+**VIEWER is deliberately excluded from notification reads.** The approved pre-Phase-4 policy gated
+the whole router behind `review:notifications` (REVIEWER + ADMIN only), so VIEWER never had access;
+Phase 4 widens that policy only as far as the workflow requires — to the drafting role.
+
+`/api/notifications` moved from a single router-level `requireCapability(REVIEW_NOTIFICATIONS)` to
+router-wide `authenticate` plus a per-route capability, the same split Phase 3 applied to
+`/api/cases`.
+
+    read:notifications            GET  /api/notifications   /:id   /:id/history
+    manage:notifications          POST /api/notifications              (draft from case)
+                                  PUT  /api/notifications/:id          (edit current revision)
+                                  POST /api/notifications/:id/submit
+                                  DELETE /api/notifications/:id        (409 tombstone)
+    review:notifications          POST /api/notifications/:id/approve
+                                  POST /api/notifications/:id/reject
+    export:notifications          GET  /api/notifications/:id/export   (download artifact)
+    record:notification-delivery  POST /api/notifications/:id/deliveries
+    manage:cases                  POST /api/notifications/:id/responses
+
+No role name appears in any Phase 4 controller. A denied request is answered by middleware before any
+service is reached and **creates no rows** — asserted by counting durable rows across the whole
+denied matrix. `DELETE` is a compatibility tombstone that always answers 409, deletes nothing, and
+deliberately does not look the notification up first: answering 404 for an unknown id and 409 for a
+known one would turn the endpoint into an existence oracle.
+
+The legacy Phase 0 notification CRUD controller was **deleted** rather than kept as dead code beside
+the workflow, matching how Phase 3 removed the unused `RoleGuard.jsx`.
+
+`notificationSerializers.js` is the single allow-list choke point. It constructs fresh objects from
+named fields rather than deleting keys from a row, so a future migration cannot silently start
+leaking a column. Never emitted: `currentForNotificationId`, verbatim recipient addresses (masked to
+`s**@domain`), organization contacts, artifact bytes, audit rows, filesystem paths, or the legacy
+unversioned `title`/`message`/`severity`/`status`/`type` projection. **One deliberate exception is
+documented in the module header and asserted by the evaluator:** `recipientName` is emitted in full
+because it is the approved recipient of the message and a reviewer who cannot see who a notification
+is addressed to cannot meaningfully approve it — it reaches only holders of `read:notifications`, the
+address beside it is still masked, and the evaluator asserts the name appears nowhere else.
+
+### Auditing
+
+Bounded events on every write path, emitted by the services themselves (controllers pass
+`auditContext` through and never audit twice): `notification.draft.created`,
+`notification.revision.created` / `.unchanged`, `notification.review.submitted`,
+`notification.approved`, `notification.rejected`, `notification.export.requested` / `.completed` /
+`.refused` / `.failed`, `notification.delivery.recorded`. Recording an organization response emits
+the shared Phase 3 `case.response.recorded`, never a Phase 4 duplicate.
+
+Every payload is an explicit allow-list. The notification body, subject text, recipient address,
+artifact bytes, full rejection reason and full response summary are reduced to booleans or lengths,
+never copied — asserted by substring search over the whole audit trail. `Error.message`, stacks and
+Prisma codes never reach `AuditLog`; failure reasons are closed vocabulary strings. A refused export
+is audited `DENIED` with its closed refusal code. `notification.export.completed` records
+`delivered: false` explicitly so nobody reading the trail can mistake an export for evidence that
+anything was sent, and a `DELIVERED` claim is recorded as "claim recorded, not verified by this
+system". Audit failure never rolls back a revision, an approval, export metadata, a delivery record
+or an organization response.
+
+### Frontend
+
+Backend-connected workflow screens on the existing design system:
+
+- `pages/Notifications.jsx` (rewritten) — reference, organization, subject, authoritative
+  `lifecycleState`, current revision number, export and delivery counts, with state tiles counted off
+  `lifecycleState` so they cannot disagree with the workflow. The **"Exportable" badge comes from the
+  server's `exportEligible`**, never from the state alone — an APPROVED notification edited
+  afterwards is not exportable and must not look like it is. The empty state directs the analyst to a
+  case rather than offering a "New notification" button that could not work.
+- `pages/NotificationDetail.jsx` (new) — draft editor, reviewer approval/rejection panel,
+  approved-only export control with the server's refusal reason rendered as advice, export history
+  with artifact fingerprints, append-only delivery timeline, the case's canonical organization-response
+  timeline, immutable revision history and the full lifecycle/review history.
+- `constants/notificationWorkflow.js` (new) — the presentation vocabulary plus
+  `describeNotificationError` / `describeExportRefusal`, which render the backend's closed codes as
+  advice an analyst can act on ("it was edited after it was approved, so the approval no longer
+  covers the current revision") rather than an error code.
+- `pages/CaseDetail.jsx` — a Notifications section listing the notifications drafted from that case,
+  with a "Draft notification" control for holders of `manage:notifications` and navigation in both
+  directions. The list load is deliberately non-fatal so the case screen stays usable for a caller
+  who may read the case but not notifications.
+
+Every control is rendered from the intersection of two independent facts: `permittedActions`, which
+the backend derives from the notification's **durable state alone** and which says nothing about the
+caller, and the caller's own capability list. **This is UX only** — the backend re-checks the
+capability (route middleware) and the state (service) on every request regardless. A no-send banner
+states the guarantee on the screen itself, and a test asserts no `mailto:` link or send control is
+ever rendered.
+
+### Verification (all re-run at commit time)
+
+**204 new/changed backend tests.** Every one reads the database's durable rows rather than a service
+return value, because the properties under test are about what was *written*.
+
+| Suite | Tests | What it proves |
+| --- | ---: | --- |
+| `tests/unit/notificationRules.test.js` | 57 | the closed vocabularies, bounded text, the control-character guard, checksum determinism and field-boundary safety, the state guards, and THE export eligibility matrix branch by branch |
+| `tests/unit/notificationArtifactBuilder.test.js` | 35 | RFC 5322 structure, CRLF, RFC 2047, quoted-printable (including trailing-whitespace and 76-column rules), filename sanitization, header-injection throws, and that no transport dependency exists |
+| `tests/unit/notificationServices.test.js` | 58 | append-only revisions, one current revision, UNCHANGED, submission, approval bound to an exact revision, self-approval, the export guard, delivery, audit isolation and audit payload exclusion |
+| `tests/unit/notificationSerializerSafety.test.js` | 28 | the exclusion proof the serializer's header promises, against contaminated real row shapes |
+| `tests/integration/notificationRouteAuthorization.test.js` | 76 | the whole HTTP surface, the five-capability matrix, and that a denied request creates no rows |
+| `tests/integration/notificationWorkflowConcurrency.test.js` | 12 | the same invariants against real PostgreSQL under genuine concurrency |
+
+The real-PostgreSQL suite uses **separate pre-connected `PrismaClient` instances** throughout —
+`Promise.all` over one shared client serializes enough to hide the race, the trap this repository has
+already been bitten by twice.
+
+Three existing suites were amended for the Phase 4 grants rather than worked around:
+`tests/unit/roles.test.js` (capability count), `tests/integration/resourceRouteAuthorization.test.js`
+(notifications removed from the generic id-CRUD matrix, since the surface is now a workflow with five
+capabilities, a case-id create and a 409 delete), and the frontend `Sidebar` / `permissions` fixtures.
+
+**Combined gate results:**
+
+- Full backend suite with `TEST_DATABASE_URL` + `EVAL_DATABASE_URL` and `--no-file-parallelism`:
+  **2650 passed / 2650, 108 files** (was 2404 before this phase).
+- Phase 4 real-PostgreSQL concurrency suite: **12/12, stable across 3 consecutive runs.**
+- Frontend: **100/100 across 8 files**, clean production build, `oxlint` clean of any new warning.
+- `npm run eval:phase1` PASS · `eval:risk` 19/19 · `eval:phase2` 22 scenarios / 112 assertions ·
+  `eval:phase2:mutation` 6/6 · `eval:vulnerability` 41 scenarios / 992 assertions ·
+  `eval:vulnerability:mutation` 12/12 · `eval:phase3` 12 scenarios / 151 assertions ·
+  **`eval:phase4` 14 scenarios / 151 assertions, rerunnable.**
+- `npx prisma validate` clean; `migrate deploy` reports **16 migrations, none pending** on both
+  `threatnexus_test` and `threatnexus_eval`; migration count is exactly **16**.
+- `git diff --check` clean; no secret, credential or generated artifact in the diff; no `.eml` or
+  `.txt` artifact written anywhere in the tree; no real network call anywhere in the suite or in any
+  evaluator (the Phase 4 gate replaces `global.fetch` with a throwing stub and asserts zero attempts).
+
+**Both environment rules from Phase 2/3 still apply and were followed:** never export `JWT_SECRET`
+globally when running the backend suite, and real-PostgreSQL suites must run with
+`--no-file-parallelism`.
+
+### Two pre-existing defects fixed in passing (both outside Phase 4's scope)
+
+1. **`evalRiskGate.test.js` had the documented CRLF gate-test bug.** Four tamper cases built their
+   mutations from hardcoded LF-joined strings and `.replace()`d them against the raw file text; on a
+   `core.autocrlf=true` checkout the working copy is CRLF, so every replace matched nothing, the
+   "tampered" text was identical to the original, and the tests failed because there was never
+   anything wrong with the input. This is the same defect class `evalGroundTruthLoader.test.js`
+   already documents for the Phase 1 gate. Fixed by normalizing the ground-truth text to LF at read
+   time (the loader itself is line-ending agnostic, proven in that block). Test-only change.
+2. **`frontend` would not build**: `main.jsx` imports `leaflet/dist/leaflet.css` and `leaflet` was
+   declared in `package.json` by the merged dashboard-redesign commit but not installed locally.
+   Resolved by `npm install`; no code change.
+
+### Accepted limitations
+
+- **No paging controls on the notification list.** The API is bounded and paged (`page`/`limit`,
+  max 50) and the screen requests the first page with a state filter; a page selector is not
+  rendered, and the count line says so explicitly rather than implying the list is complete.
+- **The recipient address is snapshotted at drafting time and is not re-synced** if the organization
+  registry contact changes later. That is deliberate — a later registry edit must not silently
+  re-target an approved notification — but it means correcting a recipient requires an edit, which
+  creates a revision and invalidates a standing approval.
+- **A notification cannot be drafted from a closed case** (`CASE_CLOSED`), by the same reasoning
+  `caseResponseService` refuses responses there. Notifying about a concluded case requires reopening
+  it first.
+- **The export artifact is not retained.** Its checksum and byte length are, which supports a later
+  integrity dispute but not reconstruction of the exact file if the analyst loses it. Re-exporting
+  the same unedited revision reproduces byte-identical content apart from the `Date:` header.
+- **No live mail-client integration and no delivery-receipt ingestion**, by design — both are the
+  out-of-scope "automatic notification sending" the build plan forbids.
+
+### Exact next task
+
+**Phase 5 — framework mappings and guarded optional AI assistance.**
+
+- **Manual framework mappings first.** A working manual mapping path is the deliverable; AI mapping
+  suggestions are additive on top of one, never a replacement for one (AGENTS.md).
+- **AI suggestions are off by default** (`AI_ENABLED=false`). Every core workflow must complete
+  correctly with AI off — the same standard Phases 1–4 already meet, since no AI provider exists in
+  the repository at all today.
+- **Human approval is required** for any AI-produced suggestion to become a stored mapping.
+- **AI cannot score, approve, send, close or resolve anything.** It cannot make a final framework
+  mapping, cannot approve or export a notification, cannot decide a case closure, and cannot
+  influence a Risk v1 number — risk scoring stays deterministic and explainable from stored factor
+  contributions, never AI-decided.
 
 ## Phase 3 COMPLETE — defensible analyst workflow (2026-08-01)
 
