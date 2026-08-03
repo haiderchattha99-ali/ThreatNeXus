@@ -1,14 +1,5 @@
 import React from 'react'
-import {
-  Drawer,
-  Box,
-  List,
-  ListItemButton,
-  ListItemIcon,
-  ListItemText,
-  Typography,
-  Chip,
-} from '@mui/material'
+import { Drawer, Box, List, ListItemButton, ListItemIcon, ListItemText } from '@mui/material'
 import { useLocation, useNavigate } from 'react-router-dom'
 import {
   FiGrid,
@@ -19,199 +10,171 @@ import {
   FiUsers,
   FiSettings,
   FiBarChart2,
-  FiActivity,
 } from 'react-icons/fi'
 
 import { useAuth } from '../hooks/useAuth'
 import { hasCapability, PAGE_CAPABILITIES } from '../utils/permissions'
+import { color, radius, type, layout } from '../theme/tokens'
+import { PkcertAttribution } from './ui/Brand'
 
-export const DRAWER_WIDTH = 252
+export const DRAWER_WIDTH = layout.sidebarWidth
 
-const menuItems = [
+// Grouped so the navigation communicates the workflow's shape rather than being
+// a flat list of eight equal things. The order follows the operational spine:
+// evidence in -> findings -> cases -> constituent notification -> oversight.
+export const NAV_GROUPS = [
   {
-    label: 'Command center',
-    path: '/dashboard',
-    icon: FiGrid,
-    permission: 'dashboard',
+    heading: 'Operations',
+    items: [
+      { label: 'Operations overview', path: '/dashboard', icon: FiGrid, permission: 'dashboard' },
+      { label: 'Findings', path: '/findings', icon: FiShield, permission: 'findings' },
+      { label: 'Report ingestion', path: '/upload', icon: FiUploadCloud, permission: 'upload' },
+    ],
   },
   {
-    label: 'Threat findings',
-    path: '/threats',
-    icon: FiShield,
-    permission: 'threats',
+    heading: 'Response',
+    items: [
+      { label: 'Cases', path: '/cases', icon: FiFileText, permission: 'cases' },
+      { label: 'Notifications', path: '/notifications', icon: FiBell, permission: 'notifications' },
+    ],
   },
   {
-    label: 'Intelligence upload',
-    path: '/upload',
-    icon: FiUploadCloud,
-    permission: 'upload',
-  },
-  {
-    label: 'Cases',
-    path: '/cases',
-    icon: FiFileText,
-    permission: 'cases',
-  },
-  {
-    label: 'Notifications',
-    path: '/notifications',
-    icon: FiBell,
-    permission: 'notifications',
-  },
-  {
-    label: 'Organizations',
-    path: '/organizations',
-    icon: FiUsers,
-    permission: 'organizations',
-  },
-  {
-    label: 'Analytics',
-    path: '/analytics',
-    icon: FiBarChart2,
-    permission: 'analytics',
-  },
-  {
-    label: 'Settings',
-    path: '/settings',
-    icon: FiSettings,
-    permission: 'settings',
+    heading: 'Administration',
+    items: [
+      { label: 'Analytics', path: '/analytics', icon: FiBarChart2, permission: 'analytics' },
+      { label: 'Organizations', path: '/organizations', icon: FiUsers, permission: 'organizations' },
+      { label: 'Settings', path: '/settings', icon: FiSettings, permission: 'settings' },
+    ],
   },
 ]
 
-export const Sidebar = () => {
+// Flat view, kept for anything that needs the whole list (tests, breadcrumbs).
+export const NAV_ITEMS = NAV_GROUPS.flatMap((g) => g.items)
+
+function isActive(pathname, path) {
+  if (path === '/dashboard') return pathname === '/' || pathname.startsWith('/dashboard')
+  return pathname === path || pathname.startsWith(`${path}/`)
+}
+
+/**
+ * The navigation list itself. Rendered inside a permanent drawer on desktop and
+ * a temporary drawer on small screens, so there is exactly one definition of
+ * what the navigation is and who may see each entry.
+ *
+ * Visibility uses the SAME decision source as route protection
+ * (PAGE_CAPABILITIES + the server-derived capability array). A link is never
+ * shown for a route that would render 403 — and the backend refuses the
+ * underlying request regardless of what is rendered here.
+ */
+export function SidebarNav({ onNavigate }) {
   const location = useLocation()
   const navigate = useNavigate()
   const { capabilities } = useAuth()
 
-  // Same decision source as route protection (App.jsx's ProtectedRoute):
-  // PAGE_CAPABILITIES + the capabilities array from the validated session.
-  // A page never appears in the sidebar unless the matching route would also
-  // render for this user.
-  const visibleMenu = menuItems.filter((item) =>
-    hasCapability(capabilities, PAGE_CAPABILITIES[item.permission])
-  )
+  const groups = NAV_GROUPS.map((group) => ({
+    ...group,
+    items: group.items.filter((item) =>
+      hasCapability(capabilities, PAGE_CAPABILITIES[item.permission])
+    ),
+  })).filter((group) => group.items.length > 0)
 
   return (
-    <Drawer
-      variant="permanent"
-      sx={{
-        width: DRAWER_WIDTH,
-        flexShrink: 0,
-        '& .MuiDrawer-paper': {
-          width: DRAWER_WIDTH,
-          mt: '72px',
-          height: 'calc(100% - 72px)',
-          border: 0,
-          borderRight: '1px solid #202d40',
-          bgcolor: '#0b101a',
-          color: '#b5c0d1',
-          px: 1.4,
-          py: 2.5,
-        },
-      }}
+    <Box
+      component="nav"
+      aria-label="Primary"
+      sx={{ display: 'flex', flexDirection: 'column', height: '100%', px: 1.5, py: 2 }}
     >
-      <Typography className="eyebrow" sx={{ px: 1.5, mb: 1.5 }}>
-        Workspace
-      </Typography>
-
-      <List disablePadding>
-        {visibleMenu.map((item) => {
-          const active = location.pathname === item.path
-          const Icon = item.icon
-
-          return (
-            <ListItemButton
-              key={item.path}
-              onClick={() => navigate(item.path)}
-              sx={{
-                minHeight: 45,
-                mb: 0.45,
-                px: 1.5,
-                borderRadius: 2.5,
-                color: active ? '#effff9' : '#9aa8ba',
-                bgcolor: active
-                  ? 'rgba(110,231,199,.12)'
-                  : 'transparent',
-                '&:hover': {
-                  bgcolor: active
-                    ? 'rgba(110,231,199,.15)'
-                    : '#151d2a',
-                },
-              }}
-            >
-              <ListItemIcon
-                sx={{
-                  minWidth: 35,
-                  color: active ? '#6ee7c7' : '#708098',
-                }}
-              >
-                <Icon size={18} />
-              </ListItemIcon>
-
-              <ListItemText
-                primary={item.label}
-                primaryTypographyProps={{
-                  fontSize: 13,
-                  fontWeight: active ? 700 : 600,
-                }}
-              />
-            </ListItemButton>
-          )
-        })}
-      </List>
-
-      <Box
-        sx={{
-          mt: 'auto',
-          m: 1,
-          p: 1.7,
-          border: '1px solid #253348',
-          borderRadius: 3,
-          bgcolor: '#101723',
-        }}
-      >
-        <Box
-          sx={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 1,
-            mb: 1,
-          }}
-        >
-          <FiActivity color="#6ee7c7" />
-          <Typography
-            sx={{
-              fontSize: 12,
-              fontWeight: 800,
-            }}
+      {groups.map((group) => (
+        <Box key={group.heading} sx={{ mb: 2 }}>
+          <Box
+            id={`nav-group-${group.heading}`}
+            sx={{ ...type.label, color: color.textFaint, px: 1.5, mb: 0.75 }}
           >
-            SYSTEM STATUS
-          </Typography>
+            {group.heading}
+          </Box>
+          <List disablePadding aria-labelledby={`nav-group-${group.heading}`}>
+            {group.items.map((item) => {
+              const active = isActive(location.pathname, item.path)
+              const Icon = item.icon
+              return (
+                <ListItemButton
+                  key={item.path}
+                  onClick={() => {
+                    navigate(item.path)
+                    if (onNavigate) onNavigate()
+                  }}
+                  // aria-current is what tells a screen-reader user which page
+                  // they are on. The accent bar beside it is the visual echo,
+                  // not the signal.
+                  aria-current={active ? 'page' : undefined}
+                  sx={{
+                    position: 'relative',
+                    minHeight: 40,
+                    mb: 0.25,
+                    px: 1.5,
+                    borderRadius: `${radius.sm}px`,
+                    color: active ? color.text : color.textMuted,
+                    backgroundColor: active ? color.accentQuiet : 'transparent',
+                    '&:hover': {
+                      backgroundColor: active ? color.accentQuiet : color.surfaceRaised,
+                      color: color.text,
+                    },
+                    '&::before': active
+                      ? {
+                          content: '""',
+                          position: 'absolute',
+                          left: 0,
+                          top: 8,
+                          bottom: 8,
+                          width: 2,
+                          borderRadius: 2,
+                          backgroundColor: color.accent,
+                        }
+                      : undefined,
+                  }}
+                >
+                  <ListItemIcon sx={{ minWidth: 32, color: active ? color.accent : color.textFaint }}>
+                    <Icon size={16} aria-hidden="true" />
+                  </ListItemIcon>
+                  <ListItemText
+                    primary={item.label}
+                    primaryTypographyProps={{ fontSize: 13.5, fontWeight: active ? 600 : 500 }}
+                  />
+                </ListItemButton>
+              )
+            })}
+          </List>
         </Box>
+      ))}
 
-        <Chip
-          size="small"
-          label="All systems operational"
-          sx={{
-            height: 24,
-            bgcolor: 'rgba(110,231,199,.1)',
-            color: '#78e7c9',
-            fontSize: 10,
-            fontWeight: 700,
-          }}
-        />
-
-        <Typography
-          className="mono"
-          sx={{
-            mt: 1.2,
-            fontSize: 9,
-            color: '#64748b',
-          }}
-        >
-          THREATNEXUS // V1.0.0
-        </Typography>
+      <Box sx={{ mt: 'auto', pt: 2, borderTop: `1px solid ${color.border}`, px: 0.5 }}>
+        <PkcertAttribution variant="compact" />
       </Box>
-    </Drawer>
+    </Box>
   )
 }
+
+/**
+ * Permanent desktop drawer. AppShell renders this at md and up; below that it
+ * renders SidebarNav inside a temporary drawer instead.
+ */
+export const Sidebar = () => (
+  <Drawer
+    variant="permanent"
+    sx={{
+      width: DRAWER_WIDTH,
+      flexShrink: 0,
+      '& .MuiDrawer-paper': {
+        width: DRAWER_WIDTH,
+        mt: `${layout.topBarHeight}px`,
+        height: `calc(100% - ${layout.topBarHeight}px)`,
+        backgroundColor: color.canvasAlt,
+        borderRight: `1px solid ${color.border}`,
+      },
+    }}
+  >
+    <SidebarNav />
+  </Drawer>
+)
+
+export default Sidebar

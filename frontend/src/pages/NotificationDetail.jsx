@@ -86,14 +86,14 @@ function Section({ title, subtitle, children, testId, action }) {
         sx={{ display: 'flex', gap: 2, alignItems: 'flex-start', justifyContent: 'space-between' }}
       >
         <Box>
-          <Typography sx={{ fontSize: 15, fontWeight: 700, color: '#e7eef9' }}>{title}</Typography>
+          <Typography sx={{ fontSize: 15, fontWeight: 700, color: '#EAF1F9' }}>{title}</Typography>
           {subtitle && (
-            <Typography sx={{ fontSize: 12, color: '#8290a5', mt: 0.5 }}>{subtitle}</Typography>
+            <Typography sx={{ fontSize: 12, color: '#9DAFC2', mt: 0.5 }}>{subtitle}</Typography>
           )}
         </Box>
         {action}
       </Box>
-      <Divider sx={{ my: 2, borderColor: '#233247' }} />
+      <Divider sx={{ my: 2, borderColor: '#243549' }} />
       {children}
     </Card>
   )
@@ -309,7 +309,7 @@ export const NotificationDetail = () => {
         <Button startIcon={<FiArrowLeft />} onClick={() => navigate('/notifications')}>
           Back to notifications
         </Button>
-        <Typography sx={{ mt: 3, color: '#8290a5' }}>This notification is unavailable.</Typography>
+        <Typography sx={{ mt: 3, color: '#9DAFC2' }}>This notification is unavailable.</Typography>
       </Box>
     )
   }
@@ -345,7 +345,7 @@ export const NotificationDetail = () => {
           >
             Back to notifications
           </Button>
-          <Typography sx={{ fontSize: 22, fontWeight: 700, color: '#e7eef9', mt: 1 }}>
+          <Typography sx={{ fontSize: 22, fontWeight: 700, color: '#EAF1F9', mt: 1 }}>
             {notification.notificationReference || `Notification ${notification.id}`}
           </Typography>
           <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mt: 1, flexWrap: 'wrap' }}>
@@ -359,7 +359,7 @@ export const NotificationDetail = () => {
               }}
               data-testid="lifecycle-state"
             />
-            <Typography sx={{ fontSize: 13, color: '#8290a5' }}>
+            <Typography sx={{ fontSize: 13, color: '#9DAFC2' }}>
               {notification.organization?.name || 'Unknown organization'}
             </Typography>
             {detail.case && (
@@ -403,15 +403,15 @@ export const NotificationDetail = () => {
           <>
             <Box sx={{ display: 'flex', gap: 3, flexWrap: 'wrap', mb: 2 }}>
               <Box>
-                <Typography sx={{ fontSize: 11, color: '#8290a5' }}>Recipient</Typography>
-                <Typography sx={{ fontSize: 13, color: '#e7eef9' }} data-testid="recipient">
+                <Typography sx={{ fontSize: 11, color: '#9DAFC2' }}>Recipient</Typography>
+                <Typography sx={{ fontSize: 13, color: '#EAF1F9' }} data-testid="recipient">
                   {currentRevision.recipientName || 'Unnamed'} ·{' '}
                   {currentRevision.recipientEmailMasked || 'no address'}
                 </Typography>
               </Box>
               <Box>
-                <Typography sx={{ fontSize: 11, color: '#8290a5' }}>Approved</Typography>
-                <Typography sx={{ fontSize: 13, color: '#e7eef9' }} data-testid="approval-summary">
+                <Typography sx={{ fontSize: 11, color: '#9DAFC2' }}>Approved</Typography>
+                <Typography sx={{ fontSize: 13, color: '#EAF1F9' }} data-testid="approval-summary">
                   {actions.approvedForCurrentRevision
                     ? `Yes — for this exact revision, ${formatInstant(notification.approvedAt)}`
                     : 'Not for this revision'}
@@ -499,7 +499,7 @@ export const NotificationDetail = () => {
               </Box>
             ) : (
               <Box data-testid="read-only-content">
-                <Typography sx={{ fontSize: 13, fontWeight: 700, color: '#e7eef9' }}>
+                <Typography sx={{ fontSize: 13, fontWeight: 700, color: '#EAF1F9' }}>
                   {currentRevision.subject}
                 </Typography>
                 <Typography
@@ -530,7 +530,7 @@ export const NotificationDetail = () => {
                 )}
                 {currentRevision.analystNotes && (
                   <Box sx={{ mt: 2, p: 1.5, borderRadius: 1, bgcolor: '#1a2536' }}>
-                    <Typography sx={{ fontSize: 11, color: '#8290a5' }}>
+                    <Typography sx={{ fontSize: 11, color: '#9DAFC2' }}>
                       Internal analyst notes — never exported
                     </Typography>
                     <Typography sx={{ fontSize: 12.5, color: '#c4d0e0' }}>
@@ -578,7 +578,7 @@ export const NotificationDetail = () => {
                 Approve
               </Button>
             </Box>
-            <Divider sx={{ borderColor: '#233247' }} />
+            <Divider sx={{ borderColor: '#243549' }} />
             <TextField
               label="Rejection reason (required)"
               size="small"
@@ -659,7 +659,7 @@ export const NotificationDetail = () => {
         testId="export-history"
       >
         {detail.exports.length === 0 ? (
-          <Typography sx={{ fontSize: 13, color: '#8290a5' }}>
+          <Typography sx={{ fontSize: 13, color: '#9DAFC2' }}>
             This notification has never been exported.
           </Typography>
         ) : (
@@ -763,7 +763,7 @@ export const NotificationDetail = () => {
         )}
 
         {detail.deliveryEvents.length === 0 ? (
-          <Typography sx={{ fontSize: 13, color: '#8290a5' }} data-testid="no-delivery-events">
+          <Typography sx={{ fontSize: 13, color: '#9DAFC2' }} data-testid="no-delivery-events">
             No delivery has been recorded. An export on its own is not evidence that anything was
             sent or received.
           </Typography>
@@ -879,7 +879,7 @@ export const NotificationDetail = () => {
         )}
 
         {detail.caseResponses.length === 0 ? (
-          <Typography sx={{ fontSize: 13, color: '#8290a5' }}>
+          <Typography sx={{ fontSize: 13, color: '#9DAFC2' }}>
             No organization response has been recorded on this case.
           </Typography>
         ) : (
@@ -948,7 +948,7 @@ export const NotificationDetail = () => {
                       <Chip
                         size="small"
                         label="Current"
-                        sx={{ ml: 1, bgcolor: '#7688ff22', color: '#7688ff', fontWeight: 700 }}
+                        sx={{ ml: 1, bgcolor: '#5AB6D922', color: '#5AB6D9', fontWeight: 700 }}
                       />
                     )}
                   </TableCell>

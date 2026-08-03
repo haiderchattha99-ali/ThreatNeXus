@@ -104,10 +104,10 @@ export const Notifications = () => {
         }}
       >
         <Box>
-          <Typography sx={{ fontSize: 22, fontWeight: 700, color: '#e7eef9' }}>
+          <Typography sx={{ fontSize: 22, fontWeight: 700, color: '#EAF1F9' }}>
             Notifications
           </Typography>
-          <Typography sx={{ fontSize: 13, color: '#8290a5', mt: 0.5 }}>
+          <Typography sx={{ fontSize: 13, color: '#9DAFC2', mt: 0.5 }}>
             Constituent notifications drafted from case evidence. ThreatNeXus never sends a
             message — an approved notification is exported manually and its delivery recorded by
             hand.
@@ -149,7 +149,7 @@ export const Notifications = () => {
             sx={{ px: 2.5, py: 1.5, minWidth: 150, flex: '1 1 150px' }}
             data-testid={`tile-${state}`}
           >
-            <Typography sx={{ fontSize: 12, color: '#8290a5' }}>
+            <Typography sx={{ fontSize: 12, color: '#9DAFC2' }}>
               {NOTIFICATION_STATE_LABELS[state]}
             </Typography>
             <Typography
@@ -168,10 +168,10 @@ export const Notifications = () => {
           </Box>
         ) : data.notifications.length === 0 ? (
           <Box sx={{ p: 6, textAlign: 'center' }} data-testid="empty-state">
-            <Typography sx={{ fontSize: 15, color: '#e7eef9', fontWeight: 600 }}>
+            <Typography sx={{ fontSize: 15, color: '#EAF1F9', fontWeight: 600 }}>
               No notifications yet
             </Typography>
-            <Typography sx={{ fontSize: 13, color: '#8290a5', mt: 1 }}>
+            <Typography sx={{ fontSize: 13, color: '#9DAFC2', mt: 1 }}>
               A notification is drafted from a case, so its content comes from that case&apos;s real
               linked evidence. Open a case and use &ldquo;Draft notification&rdquo;.
             </Typography>
@@ -224,7 +224,7 @@ export const Notifications = () => {
                         <Chip
                           size="small"
                           label="Exportable"
-                          sx={{ ml: 1, bgcolor: '#6ee7c722', color: '#6ee7c7', fontWeight: 700 }}
+                          sx={{ ml: 1, bgcolor: '#31C7B422', color: '#31C7B4', fontWeight: 700 }}
                           data-testid={`exportable-${row.id}`}
                         />
                       )}
@@ -263,7 +263,7 @@ export const Notifications = () => {
       </Card>
 
       {data.total > data.notifications.length && (
-        <Typography sx={{ fontSize: 12, color: '#8290a5', mt: 2 }} data-testid="page-note">
+        <Typography sx={{ fontSize: 12, color: '#9DAFC2', mt: 2 }} data-testid="page-note">
           Showing {data.notifications.length} of {data.total}. Refine the state filter to narrow the
           list.
         </Typography>

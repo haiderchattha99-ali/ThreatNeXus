@@ -1,18 +1,124 @@
-@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap');
+/* ThreatNeXus global stylesheet.
+ *
+ * Almost everything visual lives in the MUI theme (src/theme/). This file only
+ * carries what a theme cannot express: the font import, document-level
+ * defaults, and a small number of utility classes.
+ *
+ * IBM Plex Sans / IBM Plex Mono are fetched from Google Fonts. If that request
+ * fails (offline demo, restricted network) the stacks below fall back to system
+ * faces and the layout still holds — nothing here depends on the webfont having
+ * loaded.
+ */
 
-* { box-sizing: border-box; }
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
 
 :root {
-  font-family: 'Manrope', sans-serif;
-  color: #e8edf7;
-  background: #080c14;
+  --tnx-canvas: #0a1018;
+  --tnx-text: #eaf1f9;
+  --tnx-font-ui: 'IBM Plex Sans', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --tnx-font-mono: 'IBM Plex Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
+
+  color-scheme: dark;
+  font-family: var(--tnx-font-ui);
+  color: var(--tnx-text);
+  background-color: var(--tnx-canvas);
   font-synthesis: none;
+  -webkit-text-size-adjust: 100%;
 }
 
-html, body, #root { min-width: 320px; min-height: 100vh; }
-body { margin: 0; background: #080c14; }
+* {
+  box-sizing: border-box;
+}
 
-::selection { color: #071016; background: #6ee7c7; }
-::-webkit-scrollbar { width: 7px; height: 7px; }
-::-webkit-scrollbar-track { background: #080c14; }
-::-webkit-scrollbar-thumb { background: #293547; border-radius: 999px; }
+html,
+body,
+#root {
+  /* 320px is the narrowest viewport this application supports; below it the
+     layout scrolls horizontally rather than dropping evidence. */
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+body {
+  margin: 0;
+  background-color: var(--tnx-canvas);
+}
+
+/* Focus is never removed, only restyled. The MUI theme supplies the ring for
+   components; this covers plain elements (prose links, the skip link). */
+:focus-visible {
+  outline: 2px solid #5ad3c2;
+  outline-offset: 2px;
+}
+
+/* Visually hidden but available to assistive technology. Used for live-region
+   announcements that have a visible counterpart elsewhere. */
+.tnx-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.mono {
+  font-family: var(--tnx-font-mono);
+}
+
+/* Compatibility utilities.
+ *
+ * The Phase 3-5 workflow screens were written against three classes that used
+ * to live in App.css: `.surface`, `.eyebrow` and `.page-title`. App.css is gone
+ * in Phase 6, but the classes are kept here — re-pointed at the new tokens — so
+ * those screens adopt the new design language without every one of them having
+ * to be rewritten in the same change. New code should use the `Panel`,
+ * `SectionLabel` and `PageHeader` primitives in components/ui instead. */
+.surface {
+  background-color: #111c2a;
+  border: 1px solid #243549;
+  border-radius: 9px;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 40%);
+}
+
+.eyebrow {
+  color: #31c7b4;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
+.page-title {
+  font-size: clamp(1.75rem, 2.6vw, 2.15rem);
+  font-weight: 600;
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+  color: #eaf1f9;
+}
+
+/* Honour the OS setting for anything defined in plain CSS. The MUI theme
+   applies the equivalent rule to component transitions, and
+   hooks/useReducedMotion.js is what JavaScript animations consult. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@media print {
+  /* Case evidence is sometimes printed. Chrome is dropped and the page reverts
+     to ink on paper. */
+  body {
+    background: #fff;
+    color: #000;
+  }
+}

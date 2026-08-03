@@ -37,7 +37,7 @@ export const Profile = () => {
           display: "flex",
           justifyContent: "center",
           alignItems: "center",
-          bgcolor: "#0F172A",
+          bgcolor: "#0A1018",
         }}
       >
         <Typography color="white">
@@ -50,7 +50,7 @@ export const Profile = () => {
   return (
     <Box
       sx={{
-        bgcolor: "#0F172A",
+        bgcolor: "#0A1018",
         minHeight: "100vh",
         p: 4,
       }}
@@ -61,8 +61,8 @@ export const Profile = () => {
         onClick={() => navigate("/dashboard")}
         sx={{
           mb: 3,
-          color: "#2563EB",
-          borderColor: "#2563EB",
+          color: "#31C7B4",
+          borderColor: "#31C7B4",
           "&:hover": {
             borderColor: "#3B82F6",
             background: "rgba(37,99,235,.08)",
@@ -89,8 +89,8 @@ export const Profile = () => {
         <Grid item xs={12} md={4}>
           <Card
             sx={{
-              bgcolor: "#111827",
-              border: "1px solid #1E293B",
+              bgcolor: "#111C2A",
+              border: "1px solid #243549",
               borderRadius: 3,
               p: 4,
               textAlign: "center",
@@ -100,7 +100,7 @@ export const Profile = () => {
               sx={{
                 width: 130,
                 height: 130,
-                bgcolor: "#2563EB",
+                bgcolor: "#31C7B4",
                 mx: "auto",
                 mb: 3,
                 fontSize: 45,
@@ -122,7 +122,7 @@ export const Profile = () => {
 
             <Typography
               sx={{
-                color: "#94A3B8",
+                color: "#9DAFC2",
                 mt: 1,
               }}
             >
@@ -143,14 +143,14 @@ export const Profile = () => {
             <Divider
               sx={{
                 my: 4,
-                borderColor: "#1E293B",
+                borderColor: "#243549",
               }}
             />
 
             <Stack spacing={2}>
 
               <Box display="flex" alignItems="center">
-                <FiShield color="#2563EB" size={18} />
+                <FiShield color="#31C7B4" size={18} />
                 <Typography
                   sx={{
                     ml: 2,
@@ -195,8 +195,8 @@ export const Profile = () => {
 
           <Card
             sx={{
-              bgcolor: "#111827",
-              border: "1px solid #1E293B",
+              bgcolor: "#111C2A",
+              border: "1px solid #243549",
               borderRadius: 3,
               p: 4,
               mb: 3,
@@ -218,7 +218,7 @@ export const Profile = () => {
               <Grid item xs={12} md={6}>
                 <Box>
 
-                  <Typography color="#94A3B8">
+                  <Typography color="#9DAFC2">
                     Full Name
                   </Typography>
 
@@ -228,7 +228,7 @@ export const Profile = () => {
                     mt={1}
                     alignItems="center"
                   >
-                    <FiUser color="#2563EB" />
+                    <FiUser color="#31C7B4" />
                     <Typography color="white">
                       {user.name}
                     </Typography>
@@ -240,7 +240,7 @@ export const Profile = () => {
               <Grid item xs={12} md={6}>
                 <Box>
 
-                  <Typography color="#94A3B8">
+                  <Typography color="#9DAFC2">
                     Email
                   </Typography>
 
@@ -250,7 +250,7 @@ export const Profile = () => {
                     mt={1}
                     alignItems="center"
                   >
-                    <FiMail color="#2563EB" />
+                    <FiMail color="#31C7B4" />
                     <Typography color="white">
                       {user.email}
                     </Typography>
@@ -260,7 +260,7 @@ export const Profile = () => {
               </Grid>
 
               <Grid item xs={12} md={6}>
-                <Typography color="#94A3B8">
+                <Typography color="#9DAFC2">
                   User ID
                 </Typography>
 
@@ -273,7 +273,7 @@ export const Profile = () => {
               </Grid>
 
               <Grid item xs={12} md={6}>
-                <Typography color="#94A3B8">
+                <Typography color="#9DAFC2">
                   Role
                 </Typography>
 
@@ -283,14 +283,14 @@ export const Profile = () => {
                   mt={1}
                   alignItems="center"
                 >
-                  <FiBriefcase color="#2563EB" />
+                  <FiBriefcase color="#31C7B4" />
                   <Typography color="white">
                     {user.role}
                   </Typography>
                 </Stack>
               </Grid>
                             <Grid item xs={12} md={6}>
-                <Typography color="#94A3B8">
+                <Typography color="#9DAFC2">
                   Department
                 </Typography>
 
@@ -300,7 +300,7 @@ export const Profile = () => {
               </Grid>
 
               <Grid item xs={12} md={6}>
-                <Typography color="#94A3B8">
+                <Typography color="#9DAFC2">
                   Account Status
                 </Typography>
 
@@ -323,8 +323,8 @@ export const Profile = () => {
 
           <Card
             sx={{
-              bgcolor: "#111827",
-              border: "1px solid #1E293B",
+              bgcolor: "#111C2A",
+              border: "1px solid #243549",
               borderRadius: 3,
               p: 4,
               mb: 3,
@@ -355,7 +355,7 @@ export const Profile = () => {
                       display: "flex",
                       justifyContent: "space-between",
                       alignItems: "center",
-                      bgcolor: "#0F172A",
+                      bgcolor: "#0A1018",
                       p: 2,
                       borderRadius: 2,
                     }}
@@ -383,8 +383,8 @@ export const Profile = () => {
 
           <Card
             sx={{
-              bgcolor: "#111827",
-              border: "1px solid #1E293B",
+              bgcolor: "#111C2A",
+              border: "1px solid #243549",
               borderRadius: 3,
               p: 4,
               mb: 3,
@@ -425,7 +425,7 @@ export const Profile = () => {
                   <Box
                     sx={{
                       textAlign: "center",
-                      bgcolor: "#0F172A",
+                      bgcolor: "#0A1018",
                       borderRadius: 2,
                       p: 3,
                     }}
@@ -433,7 +433,7 @@ export const Profile = () => {
                     <Typography
                       variant="h4"
                       sx={{
-                        color: "#2563EB",
+                        color: "#31C7B4",
                         fontWeight: 700,
                       }}
                     >
@@ -443,7 +443,7 @@ export const Profile = () => {
                     <Typography
                       sx={{
                         mt: 1,
-                        color: "#94A3B8",
+                        color: "#9DAFC2",
                         fontSize: 14,
                       }}
                     >
@@ -460,8 +460,8 @@ export const Profile = () => {
 
           <Card
             sx={{
-              bgcolor: "#111827",
-              border: "1px solid #1E293B",
+              bgcolor: "#111C2A",
+              border: "1px solid #243549",
               borderRadius: 3,
               p: 4,
             }}

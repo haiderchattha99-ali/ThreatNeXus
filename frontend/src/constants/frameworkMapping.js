@@ -98,7 +98,7 @@ export const MAPPING_STATES = { ACTIVE: 'ACTIVE', REMOVED: 'REMOVED' }
 
 export const MAPPING_STATE_LABELS = { ACTIVE: 'Active', REMOVED: 'Removed' }
 
-export const MAPPING_STATE_COLORS = { ACTIVE: '#3fbf9f', REMOVED: '#8290a5' }
+export const MAPPING_STATE_COLORS = { ACTIVE: '#3fbf9f', REMOVED: '#9DAFC2' }
 
 export const MAPPING_SOURCES = { MANUAL: 'MANUAL', AI_SUGGESTION_PROMOTED: 'AI_SUGGESTION_PROMOTED' }
 
@@ -124,7 +124,7 @@ export const SUGGESTION_STATE_LABELS = {
 export const SUGGESTION_STATE_COLORS = {
   PENDING: '#b08bf0',
   APPROVED: '#3fbf9f',
-  REJECTED: '#8290a5',
+  REJECTED: '#9DAFC2',
 }
 
 // Closed reason codes the backend returns on a refused run. Rendered as
