@@ -20,7 +20,7 @@ import {
 import { FiArrowLeft, FiRefreshCw } from 'react-icons/fi'
 import toast from 'react-hot-toast'
 
-import { caseWorkflowService } from '../services/api'
+import { caseWorkflowService, notificationService } from '../services/api'
 import { useAuth } from '../hooks/useAuth'
 import { CAPABILITIES } from '../constants/capabilities'
 import { hasCapability } from '../utils/permissions'
@@ -40,6 +40,10 @@ import {
   describeWorkflowError,
   formatInstant,
 } from '../constants/caseWorkflow'
+import {
+  NOTIFICATION_STATE_COLORS,
+  NOTIFICATION_STATE_LABELS,
+} from '../constants/notificationWorkflow'
 
 // Formats a Date as the value an <input type="datetime-local"> expects, in
 // the browser's local timezone (not UTC — toISOString would silently shift
@@ -93,8 +97,14 @@ export const CaseDetail = () => {
   const capabilities = user?.capabilities
   const canManage = hasCapability(capabilities, CAPABILITIES.MANAGE_CASES)
   const canReviewClosure = hasCapability(capabilities, CAPABILITIES.REVIEW_CASE_CLOSURE)
+  // Phase 4 — drafting a notification is a notification-workflow grant, not a
+  // case one, so it is checked separately. An ANALYST holds both; a REVIEWER
+  // holds neither and sees only the read-only notification list below.
+  const canReadNotifications = hasCapability(capabilities, CAPABILITIES.READ_NOTIFICATIONS)
+  const canManageNotifications = hasCapability(capabilities, CAPABILITIES.MANAGE_NOTIFICATIONS)
 
   const [view, setView] = useState(null)
+  const [notifications, setNotifications] = useState([])
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [expandedFindingId, setExpandedFindingId] = useState(null)
@@ -130,9 +140,29 @@ export const CaseDetail = () => {
     }
   }, [id])
 
+  // The notifications drafted from THIS case. Loaded separately from the case
+  // workflow view because it is a different capability: a caller who may read
+  // the case but not notifications simply gets no list, rather than a failed
+  // case load.
+  const loadNotifications = useCallback(async () => {
+    if (!canReadNotifications) return
+    try {
+      const res = await notificationService.getNotifications({ caseId: Number(id), limit: 25 })
+      setNotifications(res.data?.data?.notifications || [])
+    } catch {
+      // Non-fatal and deliberately silent: the case screen must stay usable
+      // when the notification surface is unavailable to this caller.
+      setNotifications([])
+    }
+  }, [canReadNotifications, id])
+
   useEffect(() => {
     load()
   }, [load])
+
+  useEffect(() => {
+    loadNotifications()
+  }, [loadNotifications])
 
   // Every workflow mutation returns the refreshed view; this is the single
   // place that swaps it in, so no caller can leave the screen stale.
@@ -463,6 +493,106 @@ export const CaseDetail = () => {
       </Section>
 
       {/* ---------------- Organization responses ---------------- */}
+      {canReadNotifications && (
+        <Section
+          title="Notifications"
+          subtitle="Constituent notifications drafted from this case's evidence. ThreatNeXus never sends one — an approved notification is exported manually."
+          testId="case-notifications"
+        >
+          {canManageNotifications && (
+            <Box sx={{ mb: 2 }}>
+              <Button
+                variant="contained"
+                size="small"
+                disabled={busy || !permittedActions.isOrganizationBound}
+                onClick={async () => {
+                  setBusy(true)
+                  try {
+                    const res = await notificationService.createDraft(Number(id))
+                    toast.success('Notification draft created from this case.')
+                    navigate(`/notifications/${res.data.data.notification.id}`)
+                  } catch (error) {
+                    toast.error(
+                      describeWorkflowError(error, 'The notification draft could not be created.'),
+                    )
+                  } finally {
+                    setBusy(false)
+                  }
+                }}
+                data-testid="draft-notification"
+              >
+                Draft notification
+              </Button>
+              {!permittedActions.isOrganizationBound && (
+                <Typography sx={{ fontSize: 12, color: '#8290a5', mt: 1 }}>
+                  This legacy case has no organization, so a notification cannot be addressed from
+                  it.
+                </Typography>
+              )}
+            </Box>
+          )}
+
+          {notifications.length === 0 ? (
+            <Typography sx={{ fontSize: 13, color: '#8290a5' }} data-testid="no-case-notifications">
+              No notification has been drafted from this case.
+            </Typography>
+          ) : (
+            <TableContainer sx={{ overflowX: 'auto' }}>
+              <Table size="small">
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Reference</TableCell>
+                    <TableCell>Subject</TableCell>
+                    <TableCell>State</TableCell>
+                    <TableCell align="right">Rev</TableCell>
+                    <TableCell align="right">Exports</TableCell>
+                    <TableCell align="right">Actions</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {notifications.map((row) => (
+                    <TableRow key={row.id} data-testid={`case-notification-${row.id}`}>
+                      <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                        {row.notificationReference || '—'}
+                      </TableCell>
+                      <TableCell sx={{ maxWidth: 280 }}>
+                        {row.currentRevision?.subject || '—'}
+                      </TableCell>
+                      <TableCell>
+                        <Chip
+                          size="small"
+                          label={
+                            NOTIFICATION_STATE_LABELS[row.lifecycleState] || row.lifecycleState
+                          }
+                          sx={{
+                            bgcolor: `${NOTIFICATION_STATE_COLORS[row.lifecycleState]}22`,
+                            color: NOTIFICATION_STATE_COLORS[row.lifecycleState],
+                            fontWeight: 700,
+                          }}
+                        />
+                      </TableCell>
+                      <TableCell align="right">
+                        {row.currentRevision?.revisionNumber ?? '—'}
+                      </TableCell>
+                      <TableCell align="right">{row.exportCount}</TableCell>
+                      <TableCell align="right">
+                        <Button
+                          size="small"
+                          onClick={() => navigate(`/notifications/${row.id}`)}
+                          data-testid={`open-notification-${row.id}`}
+                        >
+                          Open
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          )}
+        </Section>
+      )}
+
       <Section
         title="Organization responses"
         subtitle="What the affected organization told us. A response is a claim, never proof — none of these closes anything on its own."

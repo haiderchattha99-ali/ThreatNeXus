@@ -124,23 +124,60 @@ export const findingTriageService = {
   updateTriage: (findingId, decision, reason) =>
     apiClient.put(`/findings/${findingId}/triage`, reason ? { decision, reason } : { decision }),
 }
+// Phase 4 — the notification workflow.
+//
+// Every mutation below returns the FULL refreshed notification detail (the
+// backend re-reads and re-serializes after each write), so a caller never has
+// to reconcile a local guess against the server's state — it just replaces
+// what it is holding. Same contract as caseWorkflowService above.
+//
+// There is deliberately no deleteNotification. A notification's approval
+// trail, export history and delivery claims are evidence that a constituent
+// was contacted; the backend answers 409 on DELETE and removes nothing.
 export const notificationService = {
+  // Bounded and paged. `state` and `caseId` are optional filters; an invalid
+  // value is REJECTED by the backend with the field named, never silently
+  // ignored, so callers must not pre-clamp.
+  getNotifications: (params) => apiClient.get("/notifications", { params }),
 
-  getNotifications: () =>
-    apiClient.get("/notifications"),
+  getNotification: (id) => apiClient.get(`/notifications/${id}`),
 
-  getNotification: (id) =>
-    apiClient.get(`/notifications/${id}`),
+  getHistory: (id) => apiClient.get(`/notifications/${id}/history`),
 
-  createNotification: (data) =>
-    apiClient.post("/notifications", data),
+  // Drafts from a case. The backend builds the content from that case's
+  // persisted evidence — no content crosses the wire here.
+  createDraft: (caseId) => apiClient.post("/notifications", { caseId }),
 
-  updateNotification: (id, data) =>
-    apiClient.put(`/notifications/${id}`, data),
+  // Only the six content fields are accepted. The backend REJECTS any other
+  // key rather than dropping it, so this must never widen to lifecycleState,
+  // approvedByUserId, contentChecksum or revisionNumber.
+  editRevision: (id, content) => apiClient.put(`/notifications/${id}`, content),
 
-  deleteNotification: (id) =>
-    apiClient.delete(`/notifications/${id}`),
+  submitForReview: (id) => apiClient.post(`/notifications/${id}/submit`, {}),
 
+  approve: (id, reviewNote) =>
+    apiClient.post(`/notifications/${id}/approve`, reviewNote ? { reviewNote } : {}),
+
+  reject: (id, reason) => apiClient.post(`/notifications/${id}/reject`, { reason }),
+
+  // Downloads the artifact as a blob. `responseType: 'blob'` matters: the
+  // response is an RFC 5322 message, not JSON, and letting axios parse it as
+  // text would corrupt the bytes whose checksum the backend recorded.
+  exportNotification: (id, format) =>
+    apiClient.get(`/notifications/${id}/export`, {
+      params: format ? { format } : undefined,
+      responseType: "blob",
+    }),
+
+  // occurredAt is REQUIRED and always analyst-supplied — the backend refuses
+  // to default it, because a delivery timeline the server timestamps for you
+  // is a fabricated timeline.
+  recordDelivery: (id, data) => apiClient.post(`/notifications/${id}/deliveries`, data),
+
+  // Records an organization response through the SHARED Phase 3 service. One
+  // CaseOrganizationResponse row is written, on the notification's case, and
+  // the case timeline shows the same row.
+  recordResponse: (id, data) => apiClient.post(`/notifications/${id}/responses`, data),
 };
 export const organizationService = {
 

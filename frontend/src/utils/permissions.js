@@ -25,7 +25,19 @@ export const PAGE_CAPABILITIES = {
   // every request regardless of what this table says.
   cases: CAPABILITIES.READ_CASES,
   caseDetail: CAPABILITIES.READ_CASES,
-  notifications: CAPABILITIES.REVIEW_NOTIFICATIONS,
+  // Phase 4 split the notification group's reads from its writes, exactly as
+  // Phase 3 did for cases. The PAGE capability is the READ one, because
+  // ANALYST (who drafts and exports) and REVIEWER (who approves) both need to
+  // reach the screen while holding disjoint write grants. Every mutation
+  // control inside the screen is gated separately on MANAGE_NOTIFICATIONS,
+  // REVIEW_NOTIFICATIONS, EXPORT_NOTIFICATIONS or
+  // RECORD_NOTIFICATION_DELIVERY — and the backend re-checks all of them on
+  // every request regardless of what this table says.
+  //
+  // VIEWER holds READ_NOTIFICATIONS nowhere, so this row also removes
+  // Notifications from VIEWER's navigation, which matches the backend.
+  notifications: CAPABILITIES.READ_NOTIFICATIONS,
+  notificationDetail: CAPABILITIES.READ_NOTIFICATIONS,
   organizations: CAPABILITIES.MANAGE_SYSTEM,
   settings: CAPABILITIES.MANAGE_SYSTEM,
   profile: null,
