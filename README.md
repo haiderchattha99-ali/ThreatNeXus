@@ -31,7 +31,7 @@ that leaves the system:
 - **AI decides nothing.** It is off by default, and when on it only drafts and
   suggests — see [AI assistance](#ai-assistance-optional-off-by-default).
 
-## Current status: Phase 5 complete
+## Current status: Phase 6 complete
 
 | Phase | Delivered |
 |---|---|
@@ -44,6 +44,83 @@ that leaves the system:
 
 Phase 6 (the dedicated analyst frontend and demonstration build) has not
 started.
+
+## Phase 6 — analyst frontend, truthful dashboards, Docker and CI
+
+Phase 6 rebuilt the presentation layer and the operational scaffolding around it.
+
+**A premium, consistent frontend.** A single design system (`frontend/src/theme/`)
+now owns colour, typography, spacing, radii, elevation, status semantics and
+breakpoints, and a set of primitives in `frontend/src/components/ui/` owns the
+panels, metrics, tables, timelines, badges and every non-happy state. The visual
+direction — *Modern Government CERT Operations*, IBM Plex Sans/Mono on a
+near-black navy foundation with a restrained teal accent — was chosen at a design
+checkpoint by rendering three complete candidates in a real browser and comparing
+them, not by reading descriptions.
+
+**A truthful dashboard.** This is the substantive change. The previous dashboard
+was largely fabricated: a hardcoded "78% ATT&CK coverage", invented service
+latencies, a live feed of made-up indicators, a seven-day trend built from a
+literal array, per-country attack percentages and a world map of invented
+coordinates. None of it came from the database. All of it is gone.
+
+Every figure now comes from one bounded, read-only, capability-guarded snapshot
+(`GET /api/dashboard/overview`) and arrives as a four-part tuple:
+
+```
+{ value, availability, source, asOf }
+```
+
+The rules that replaced the fabrication:
+
+- **Unknown is never zero.** A figure that could not be computed renders an em
+  dash and a reason. A section the caller's role may not read comes back
+  `RESTRICTED` — a VIEWER sees "Not available to your role" where notification
+  counts would be, never `0`.
+- **Every metric names its source.** The caption under each tile is the actual
+  table and column it was counted from.
+- **No live provider call.** Rendering the dashboard contacts nothing. Provider
+  status is derived from configuration flags plus rows earlier phases persisted,
+  and exposes no key, no base URL, no latency and no "all systems operational".
+- **No percentage without a denominator**, and the denominator is returned too.
+- **No map.** No provenance-backed coordinate is persisted anywhere, so the page
+  says *"Verified geographic observations are not currently available."*
+- **Framework counts are labelled "Analyst-associated framework context"** and
+  are never called coverage, compliance, maturity or posture.
+- **Export and delivery are counted separately** and never summed.
+
+**Findings became reachable.** Before Phase 6 a Finding could only be seen
+through a case that already cited it, which made triage unreachable from the UI.
+`GET /api/findings` and `GET /api/findings/:id` are new, bounded, read-only and
+gated on the existing `read:findings` capability — no new authority was created.
+The Finding detail screen renders the Risk v1 explanation from the stored factor
+contributions, keeping `APPLIED` / `NOT_AVAILABLE` / `NOT_APPLICABLE` distinct.
+
+**Accessibility and responsiveness.** Semantic landmarks and headings, a
+skip-to-content link, visible focus rings on every interactive element, status
+communicated by icon *and* words as well as colour, table headers, dense evidence
+that scrolls horizontally rather than being dropped, screen-reader announcements
+for loading and error states, and `prefers-reduced-motion` honoured in CSS, in
+the MUI theme and in JavaScript (`hooks/useReducedMotion.js`).
+
+**Motion, deliberately restrained.** A GSAP opening timeline on the login screen
+(~1.7s, once per session, interruptible, never blocking the form) and a short
+mount-time entrance for summary panels. Nothing animates behind an evidence
+table, nothing hijacks scrolling, and the ambient pulse pauses when the tab is
+hidden or the element leaves the viewport.
+
+**Docker, CI and a demonstration dataset.** `docker compose up` now runs
+PostgreSQL, the backend and the frontend, applying all 17 migrations from zero
+and refusing to start without a `JWT_SECRET`. A GitHub Actions pipeline
+(`.github/workflows/ci.yml`) checks for committed secrets and build output,
+validates the Prisma schema, applies migrations to an empty database, asserts the
+migration count and order, runs the backend suite against real PostgreSQL, lints,
+tests and builds the frontend, scans the built bundle for secret-shaped
+literals, and runs the core evaluators. `npm run seed:demo` builds a
+deterministic dataset by driving the application's own REST API with real
+per-role tokens, so no fixture can bypass a capability check or a workflow rule.
+
+Phase 6 added **no** Prisma migration. The count is still 17.
 
 ## The workflow, end to end
 
@@ -356,7 +433,11 @@ Shadowserver schema.
 | **CISA KEV** | Known-exploited status for analyst-asserted CVEs | No | Public catalogue. |
 | **FIRST EPSS** | Exploit-prediction score | No | Public API. |
 | **NVD** | CVE metadata | Optional (`NVD_API_KEY`) | Public rate limit applies without a key. |
+
 | **AI mapping assistance** | Framework mapping suggestions | **No live provider ships** | Disabled by default; offline mock for tests only. |
+
+> **NVD attribution.** This product uses the NVD API but is not endorsed or
+> certified by the NVD.
 
 Enrichment failure **never blocks ingestion** — the finding is still created and
 the enrichment row records `FAILED` or `RATE_LIMITED`. API keys are read from

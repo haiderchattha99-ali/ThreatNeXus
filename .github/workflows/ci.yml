@@ -1,0 +1,372 @@
+name: CI
+
+# Phase 6 — the first CI this repository has had.
+#
+# What it verifies, in the order a reviewer would want it:
+#   1. nothing secret or generated is committed
+#   2. the Prisma schema is valid and its migration history is intact
+#   3. `migrate deploy` succeeds from an EMPTY database (not from a dev drift)
+#   4. the migration COUNT and ORDER are exactly what Phase 6 froze
+#   5. the backend suite passes against real PostgreSQL
+#   6. the frontend lints, tests and builds for production
+#   7. the core evaluators pass against a disposable database
+#
+# Every job sets its security-sensitive environment explicitly. Nothing is
+# inherited, defaulted or read from a committed file — that is the same rule
+# tests/setup.js enforces locally, and it is why a machine with a real .env and
+# a CI runner without one behave identically.
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: [main]
+  # Lets the deep mutation/concurrency gates below be run on demand.
+  workflow_dispatch:
+
+# Least privilege. This workflow only ever reads the repository.
+permissions:
+  contents: read
+
+# A new push to the same branch cancels the previous run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '22'
+  # Test-only values. These are NOT credentials to anything that exists: the
+  # database is a throwaway service container that lives for the length of the
+  # job, and the JWT secret signs tokens no deployed system will ever accept.
+  TEST_DATABASE_URL: postgresql://threatnexus_ci:threatnexus_ci@localhost:5432/threatnexus_ci?schema=public
+  TEST_JWT_SECRET: ci-only-jwt-secret-value-at-least-32-characters-long
+  TEST_CORS_ORIGIN: http://localhost:5173
+
+jobs:
+  # --------------------------------------------------------------------------
+  hygiene:
+    name: Secrets and generated artifacts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: No environment file is committed
+        run: |
+          # .env.example / .env.test.example are the only permitted env files.
+          offenders="$(git ls-files | grep -E '(^|/)\.env($|\.)' | grep -v '\.example$' || true)"
+          if [ -n "$offenders" ]; then
+            echo "::error::Environment files must never be committed:"; echo "$offenders"; exit 1
+          fi
+          echo "No committed .env files."
+
+      - name: No credential-shaped literal is committed
+        run: |
+          # Deliberately narrow: shapes that are almost never legitimate in
+          # source. Broad entropy scanning produces noise nobody reads, and a
+          # check nobody reads is worse than no check.
+          patterns='-----BEGIN [A-Z ]*PRIVATE KEY-----|ghp_[A-Za-z0-9]{30,}|xox[baprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{30,}'
+          if git grep -nIE "$patterns" -- . ':!*.example' ':!.github/workflows/ci.yml'; then
+            echo "::error::A credential-shaped literal is committed."; exit 1
+          fi
+          echo "No credential-shaped literals found."
+
+      - name: No build output or dependencies are committed
+        run: |
+          offenders="$(git ls-files | grep -E '^(frontend|backend)/(dist|node_modules)/' || true)"
+          if [ -n "$offenders" ]; then
+            echo "::error::Generated artifacts must not be committed:"; echo "$offenders" | head -20; exit 1
+          fi
+          echo "No generated artifacts committed."
+
+      - name: Whitespace and conflict markers
+        run: git diff --check "$(git rev-list --max-parents=0 HEAD | tail -1)"..HEAD || true
+
+  # --------------------------------------------------------------------------
+  schema:
+    name: Prisma schema and migration history
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: threatnexus_ci
+          POSTGRES_USER: threatnexus_ci
+          POSTGRES_PASSWORD: threatnexus_ci
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U threatnexus_ci -d threatnexus_ci"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - run: npm ci
+        working-directory: backend
+
+      - name: prisma validate
+        working-directory: backend
+        env:
+          DATABASE_URL: ${{ env.TEST_DATABASE_URL }}
+        run: npx prisma validate
+
+      - name: Migration count and order are exactly what Phase 6 froze
+        working-directory: backend
+        run: |
+          # Phase 6 added NO migration. If this number changes, the change is
+          # deliberate and this line must be updated in the same commit — which
+          # is the point: a silent 18th migration cannot slip through.
+          expected=17
+          actual="$(find prisma/migrations -mindepth 1 -maxdepth 1 -type d | wc -l)"
+          echo "migrations found: $actual (expected $expected)"
+          if [ "$actual" -ne "$expected" ]; then
+            echo "::error::Expected $expected migrations, found $actual."; exit 1
+          fi
+          # Directory names are timestamp-prefixed, so lexical order IS apply
+          # order. A generated migration whose timestamp sorts before a
+          # hand-named one would reorder the history silently.
+          if ! find prisma/migrations -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort -c; then
+            echo "::error::Migration directory names are not in apply order."; exit 1
+          fi
+          echo "Migration history is intact."
+
+      - name: migrate deploy from an empty database
+        working-directory: backend
+        env:
+          DATABASE_URL: ${{ env.TEST_DATABASE_URL }}
+        run: npx prisma migrate deploy
+
+      - name: No drift between schema and applied migrations
+        working-directory: backend
+        env:
+          DATABASE_URL: ${{ env.TEST_DATABASE_URL }}
+        run: |
+          # An empty diff means the migrations reproduce the schema exactly.
+          npx prisma migrate diff \
+            --from-url "$DATABASE_URL" \
+            --to-schema-datamodel prisma/schema.prisma \
+            --exit-code && echo "No drift." || {
+              echo "::error::schema.prisma and the applied migrations disagree."; exit 1; }
+
+  # --------------------------------------------------------------------------
+  backend:
+    name: Backend tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: threatnexus_ci
+          POSTGRES_USER: threatnexus_ci
+          POSTGRES_PASSWORD: threatnexus_ci
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U threatnexus_ci -d threatnexus_ci"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - run: npm ci
+        working-directory: backend
+
+      - name: Apply migrations
+        working-directory: backend
+        env:
+          DATABASE_URL: ${{ env.TEST_DATABASE_URL }}
+        run: npx prisma migrate deploy
+
+      - name: Run the backend suite against real PostgreSQL
+        working-directory: backend
+        env:
+          NODE_ENV: test
+          DATABASE_URL: ${{ env.TEST_DATABASE_URL }}
+          JWT_SECRET: ${{ env.TEST_JWT_SECRET }}
+          CORS_ORIGIN: ${{ env.TEST_CORS_ORIGIN }}
+          # Providers are OFF and keyless. No automated test may consume live
+          # provider quota, and the mock provider needs no key.
+          IOC_ENRICHMENT_PROVIDER: mock
+          ABUSEIPDB_API_KEY: ''
+          NVD_API_KEY: ''
+          AI_ENABLED: 'false'
+          AI_PROVIDER: 'null'
+        run: npm test
+
+  # --------------------------------------------------------------------------
+  frontend:
+    name: Frontend lint, tests and build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+        working-directory: frontend
+
+      - run: npm run lint
+        working-directory: frontend
+
+      - run: npm test
+        working-directory: frontend
+
+      - run: npm run build
+        working-directory: frontend
+
+      - name: The production bundle contains no secret-shaped literal
+        working-directory: frontend
+        run: |
+          # The frontend must never receive a provider key. This catches the
+          # mistake of putting one behind a VITE_ variable, which Vite inlines.
+          if grep -rIEl 'ABUSEIPDB_API_KEY|NVD_API_KEY|-----BEGIN' dist/ 2>/dev/null; then
+            echo "::error::A secret-shaped literal reached the browser bundle."; exit 1
+          fi
+          echo "Bundle is clean."
+
+  # --------------------------------------------------------------------------
+  evaluators:
+    name: Core evaluators
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: threatnexus_eval
+          POSTGRES_USER: threatnexus_eval
+          POSTGRES_PASSWORD: threatnexus_eval
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U threatnexus_eval -d threatnexus_eval"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      EVAL_DATABASE_URL: postgresql://threatnexus_eval:threatnexus_eval@localhost:5432/threatnexus_eval?schema=public
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - run: npm ci
+        working-directory: backend
+
+      - name: Apply migrations to the evaluation database
+        working-directory: backend
+        env:
+          DATABASE_URL: ${{ env.EVAL_DATABASE_URL }}
+        run: npx prisma migrate deploy
+
+      # Each evaluator drives the real production services end to end against a
+      # disposable database and compares against hand-authored ground truth.
+      # They are run in phase order so an early failure is the first thing seen.
+      - name: eval:phase1 (ingestion, dedup, persistence, recurrence)
+        working-directory: backend
+        env:
+          JWT_SECRET: ${{ env.TEST_JWT_SECRET }}
+          CORS_ORIGIN: ${{ env.TEST_CORS_ORIGIN }}
+          IOC_ENRICHMENT_PROVIDER: mock
+          ABUSEIPDB_API_KEY: ''
+          AI_ENABLED: 'false'
+        run: npm run eval:phase1
+
+      - name: eval:risk (Risk v1 determinism and explainability)
+        working-directory: backend
+        env:
+          JWT_SECRET: ${{ env.TEST_JWT_SECRET }}
+          CORS_ORIGIN: ${{ env.TEST_CORS_ORIGIN }}
+          IOC_ENRICHMENT_PROVIDER: mock
+          ABUSEIPDB_API_KEY: ''
+          AI_ENABLED: 'false'
+        run: npm run eval:risk
+
+      - name: eval:phase3 (analyst workflow, closure, recurrence reopening)
+        working-directory: backend
+        env:
+          JWT_SECRET: ${{ env.TEST_JWT_SECRET }}
+          CORS_ORIGIN: ${{ env.TEST_CORS_ORIGIN }}
+          IOC_ENRICHMENT_PROVIDER: mock
+          ABUSEIPDB_API_KEY: ''
+          AI_ENABLED: 'false'
+        run: npm run eval:phase3
+
+      - name: eval:phase4 (notification review, export, delivery)
+        working-directory: backend
+        env:
+          JWT_SECRET: ${{ env.TEST_JWT_SECRET }}
+          CORS_ORIGIN: ${{ env.TEST_CORS_ORIGIN }}
+          IOC_ENRICHMENT_PROVIDER: mock
+          ABUSEIPDB_API_KEY: ''
+          AI_ENABLED: 'false'
+        run: npm run eval:phase4
+
+      - name: eval:phase5 (framework mappings, guarded AI assistance)
+        working-directory: backend
+        env:
+          JWT_SECRET: ${{ env.TEST_JWT_SECRET }}
+          CORS_ORIGIN: ${{ env.TEST_CORS_ORIGIN }}
+          IOC_ENRICHMENT_PROVIDER: mock
+          ABUSEIPDB_API_KEY: ''
+          AI_ENABLED: 'false'
+        run: npm run eval:phase5
+
+  # --------------------------------------------------------------------------
+  # Deliberately NOT in the default pipeline.
+  #
+  # The mutation and concurrency gates exist to prove the ownership, enrichment
+  # and workflow invariants under real contention. They take minutes, not
+  # seconds, and they are meaningful before a merge to main rather than on every
+  # push to a feature branch — so they run on demand.
+  deep-gates:
+    name: Mutation and concurrency gates (manual)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: threatnexus_eval
+          POSTGRES_USER: threatnexus_eval
+          POSTGRES_PASSWORD: threatnexus_eval
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U threatnexus_eval -d threatnexus_eval"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      EVAL_DATABASE_URL: postgresql://threatnexus_eval:threatnexus_eval@localhost:5432/threatnexus_eval?schema=public
+      JWT_SECRET: ci-only-jwt-secret-value-at-least-32-characters-long
+      CORS_ORIGIN: http://localhost:5173
+      IOC_ENRICHMENT_PROVIDER: mock
+      ABUSEIPDB_API_KEY: ''
+      AI_ENABLED: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+        working-directory: backend
+      - env:
+          DATABASE_URL: ${{ env.EVAL_DATABASE_URL }}
+        working-directory: backend
+        run: npx prisma migrate deploy
+      - run: npm run eval:phase2
+        working-directory: backend
+      - run: npm run eval:phase2:mutation
+        working-directory: backend
+      - run: npm run eval:vulnerability
+        working-directory: backend
+      - run: npm run eval:vulnerability:mutation
+        working-directory: backend

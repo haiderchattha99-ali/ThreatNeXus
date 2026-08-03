@@ -3942,3 +3942,100 @@ Non-blocking carry-overs from the Phase 1 audit (none gate Phase 2): add a
 `RawReport.rawContent` byte-preservation test; fix the `cleanupUpload`
 `close`-race; bound/redact file-derived text in `AuditLog.reason`; harden the
 `EVAL_DATABASE_URL` equality check.
+
+---
+
+# PHASE 6 — ANALYST FRONTEND, TRUTHFUL DASHBOARDS, DOCKER AND CI — **COMPLETE**
+
+**Branch:** `feat/phase-6-frontend-demo-hardening` · **Base:** `main` at `c4babc5`
+**Prisma migrations: 17 — UNCHANGED. Phase 6 added no migration.**
+Risk v1 (`risk-additive-bucketed-v1` / `v1.0.0`) is numerically and semantically
+untouched: no weight, band, bucket, cap, version, fingerprint or aggregation rule
+was modified, and no new code path can influence a score.
+
+## What Phase 6 changed, and why
+
+### 1. The fabricated dashboard was removed
+
+The committed dashboard presented as operational data: a hardcoded **"78% ATT&CK
+coverage"**, six invented service latencies with an "all systems operational"
+claim, a five-row **live threat feed** of made-up indicators, a seven-day
+**threat trend** built from a literal array, **per-country attack percentages**,
+a **world map** of hardcoded coordinates, fabricated "response readiness"
+percentages, four invented case rows with invented analyst names, and fabricated
+version strings. None of it came from the database.
+
+Deleted outright: `components/dashboard/{ThreatMap,MitreWidget,StatsCards,
+ThreatSeverityChart,ResponseReadiness,DashboardHeader}.jsx` and `pages/Threats.jsx`.
+
+### 2. One truthful snapshot replaced it
+
+`GET /api/dashboard/overview` (`read:dashboard`, read-only, bounded, N+1-free).
+Every figure is `{ value, availability, source, asOf }`.
+
+- `RESTRICTED` for a section the caller's role may not read — **never zero**.
+  VIEWER holds `read:dashboard` but not `read:notifications`, so the notification
+  section is restricted rather than counted.
+- `UNAVAILABLE` for a section whose query threw, with the other sections intact
+  and no exception text crossing the boundary.
+- Provider status derives from configuration flags plus persisted rows only;
+  `liveLookupPerformed: false` is asserted by test. No key, base URL or latency
+  is ever serialized.
+- Geographic data reports `UNAVAILABLE` with the exact required sentence.
+- Framework counts carry the label *Analyst-associated framework context* and a
+  disclaimer; no percentage of any catalogue is emitted.
+
+### 3. Findings became reachable
+
+`GET /api/findings` and `GET /api/findings/:id` (both `read:findings` — no new
+capability). Bounded pagination that refuses rather than clamps; filters rejected
+by field name; the indicator filter is an anchored prefix over `[0-9.]` only.
+The enrichment serializer is an allowlist that deliberately excludes
+`errorMessage`, `httpStatus`, `errorCode`, `claimToken`, `queryParams`.
+
+### 4. Real defects found and fixed
+
+| Defect | Effect | Fix |
+|---|---|---|
+| `user?.capabilities` read in 4 components | Capabilities are a **sibling** of `loggedInUser` in `GET /api/profile`, so this was always `undefined` — **every analyst write control was permanently hidden** (triage, case creation, framework mapping). Tests passed because their mocks supplied capabilities *both* ways. | Read from the `AuthContext` field; the redundant mock field removed so the regression cannot be masked again. |
+| Backend suite inherited the developer's `.env` | With a real `.env` present, three `env.test.js` cases asserting a *missing* required variable stopped failing correctly, and live provider keys leaked into every test process. The suite only passed on a machine with no `.env`. | `TNX_SKIP_DOTENV`, set by `tests/setup.js`. Production and local dev unaffected. |
+| ScrollTrigger reveals | **Six of fourteen dashboard sections stranded at `opacity: 0`** — verified in a real browser. A decorative effect could hide operational evidence. | Replaced with a mount-time reveal, not coupled to scroll position. |
+| `gsap.from` + `kill()` under StrictMode | The double-mount left elements stranded at `opacity: 0`. | `gsap.fromTo` with an explicit end state and `revert()` cleanup. |
+| `Analytics.jsx` hardcoded `http://localhost:5000/api/threats` | Bypassed the API client entirely: no `Authorization` header, ignored `VITE_API_BASE_URL`. | Rewritten against the same provenance-carrying overview snapshot. |
+| Login printed a demo credential | `DEMO // ali@example.com / password123` rendered in the UI. | Removed. |
+| Bundle shipped unminified | `minify: false` shipped a 2,091 kB single chunk. | Minification on, vendor chunking added: **~298 kB gzip** across cacheable chunks. |
+
+### 5. Dependency posture
+
+`chart.js`, `react-chartjs-2`, `leaflet`, `react-leaflet`, `recharts` and `terser`
+removed (49 packages). `gsap` + `@gsap/react` added for the opening timeline.
+`react-router-dom` pinned to **7.18.2**: production advisories went **15 → 1**,
+and the survivor (RSC-mode CSRF, fix ≥ 8.3.0 unpublished) is unreachable in a
+client-only SPA. A downgrade to 7.11.0 was tested and **rejected** — it trades one
+unreachable advisory for fourteen reachable ones including open redirect via
+`<Link>`/`useNavigate`.
+
+## Verification
+
+| Gate | Result |
+|---|---|
+| `prisma validate` | pass |
+| Migration count | **17**, no pending, `Database schema is up to date` |
+| Backend suite | **2717 passed / 177 skipped, 102 files** |
+| Frontend suite | **130 passed / 9 files** (serial; `fileParallelism: false`) |
+| Frontend lint | clean |
+| Frontend production build | pass |
+| New Phase 6 backend tests | 13 dashboard-integrity + 16 finding-read + 15 route/RBAC |
+| `docker compose config` | valid; fails fast without `JWT_SECRET` |
+| Live browser review | login, dashboard, sidebar, provenance, restricted sections |
+| `npm run seed:demo` | idempotent; both self-approval prohibitions refused with real 403s |
+
+## Honest gaps carried forward
+
+- **Finding closure has no production write path.** Nothing in `src/` writes
+  `Finding.status = CLOSED`. Recurrence and recurrence-driven case reopening are
+  proven by the evaluators but cannot be reached through the running application.
+  Phase 6 did not add one: that is locked lifecycle semantics.
+- **No committed Playwright suite.** Critical flows were verified interactively
+  in a real browser and through the API-driven demo seed.
+- **The demo does not include a recurrence-reopened case**, for the reason above.
