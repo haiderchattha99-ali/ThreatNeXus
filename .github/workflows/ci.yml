@@ -116,20 +116,47 @@ jobs:
       - name: Migration count and order are exactly what Phase 6 froze
         working-directory: backend
         run: |
-          # Phase 6 added NO migration. If this number changes, the change is
-          # deliberate and this line must be updated in the same commit — which
-          # is the point: a silent 18th migration cannot slip through.
-          expected=17
-          actual="$(find prisma/migrations -mindepth 1 -maxdepth 1 -type d | wc -l)"
-          echo "migrations found: $actual (expected $expected)"
-          if [ "$actual" -ne "$expected" ]; then
-            echo "::error::Expected $expected migrations, found $actual."; exit 1
+          # Phase 6 added NO migration. Raw filesystem enumeration order (what
+          # `find` returns before any explicit sort) is a directory-entry
+          # artifact of the underlying filesystem, not a stable contract — it
+          # can differ from lexical order on a given runner even though the
+          # directory names themselves are unchanged. So this check does not
+          # ask "is find's output already sorted"; it explicitly sorts the
+          # actual names and compares them against the frozen canonical list
+          # below. If this list changes, the change is deliberate and must be
+          # updated in the same commit — a silent 18th migration, a rename, or
+          # a reordering cannot slip through.
+          expected_migrations=(
+            20260718144049_init
+            20260718153420_add_threat_model
+            20260718170800_add_ioc_type
+            20260722111213_add_audit_log_foundation
+            20260722112538_convert_user_role_to_enum
+            20260722184642_add_cases_table
+            20260722192407_add_notifications
+            20260722195437_add_organizations
+            20260724123330_add_phase1_ingestion_finding_lifecycle
+            20260727073537_add_phase2_ownership_mapping
+            20260727210128_add_phase2_ioc_enrichment_cache_queue
+            20260728071624_add_phase2_enrichment_retry_dead_letter
+            20260728123013_add_phase2_risk_scoring
+            20260729111818_add_phase2_vulnerability_intelligence
+            20260731120000_add_phase3_analyst_workflow
+            20260803120000_add_phase4_notification_workflow
+            20260803140000_add_phase5_framework_mapping_ai_assistance
+          )
+          expected="$(printf '%s\n' "${expected_migrations[@]}")"
+          actual="$(find prisma/migrations -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort)"
+          expected_count="${#expected_migrations[@]}"
+          actual_count="$(echo "$actual" | wc -l)"
+          echo "migrations found: $actual_count (expected $expected_count)"
+          if [ "$actual_count" -ne "$expected_count" ]; then
+            echo "::error::Expected $expected_count migrations, found $actual_count."; exit 1
           fi
-          # Directory names are timestamp-prefixed, so lexical order IS apply
-          # order. A generated migration whose timestamp sorts before a
-          # hand-named one would reorder the history silently.
-          if ! find prisma/migrations -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort -c; then
-            echo "::error::Migration directory names are not in apply order."; exit 1
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::Migration directory names do not match the frozen Phase 6 history."
+            diff <(echo "$expected") <(echo "$actual") || true
+            exit 1
           fi
           echo "Migration history is intact."
 
