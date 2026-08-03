@@ -1,4 +1,35 @@
 const prisma = require("../config/prisma");
+const {
+  buildOperationalOverview,
+} = require("../services/dashboard/operationalOverviewService");
+
+// Phase 6 — the truthful operational overview.
+//
+// One bounded, read-only snapshot. Every figure it returns carries its own
+// availability, the persisted source it came from, and the single asOf instant
+// the whole snapshot was evaluated at. Sections the caller's role may not read
+// come back RESTRICTED — never absent, and never zero.
+//
+// This handler makes NO provider request. Provider status is derived from
+// configuration flags and from rows earlier phases already persisted.
+//
+// getDashboardStats/getDashboardCharts below are the pre-Phase-6 handlers over
+// the legacy `Threat` table. They are left in place because the legacy screens
+// still call them, and they are NOT what the Phase 6 dashboard reads.
+const getOperationalOverview = async (req, res, next) => {
+  try {
+    const overview = await buildOperationalOverview({
+      // The role the authenticated session resolved to. Section gating is done
+      // against the same capability table every route guard uses.
+      role: req.user && req.user.role,
+      asOf: new Date(),
+    });
+
+    return res.status(200).json({ success: true, data: overview });
+  } catch (error) {
+    return next(error);
+  }
+};
 
 const getDashboardStats = async (req, res) => {
 
@@ -141,6 +172,7 @@ const getDashboardCharts = async (req, res) => {
 
 };
 module.exports = {
+    getOperationalOverview,
     getDashboardStats,
     getDashboardCharts
 };

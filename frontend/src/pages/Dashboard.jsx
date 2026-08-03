@@ -1,852 +1,641 @@
-import React, { useEffect, useState, useMemo } from 'react'
-import DashboardHeader from '../components/dashboard/DashboardHeader'
-import ThreatMap from '../components/dashboard/ThreatMap'
-import {
-  Box,
-  Grid,
-  Card,
-  Typography,
-  LinearProgress,
-  Chip,
-  Button,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
-  Avatar,
-  Paper
-} from '@mui/material'
-import {
-  PieChart,
-  Pie,
-  Cell,
-  BarChart,
-  Bar,
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer
-} from 'recharts'
+// The operational overview.
+//
+// Everything on this page comes from ONE call to GET /api/dashboard/overview,
+// and every figure arrives as { value, availability, source, asOf }. This
+// component does no arithmetic on those figures, holds no constants that stand
+// in for data, and renders `—` plus a reason wherever the backend reported that
+// it could not compute or the caller may not read something.
+//
+// What this page deliberately does NOT contain, all of which the pre-Phase-6
+// dashboard did:
+//   - an ATT&CK "coverage" percentage
+//   - service latencies or an "all systems operational" claim
+//   - a live threat feed of invented indicators
+//   - a seven-day trend line built from a hardcoded array
+//   - per-country attack percentages, or a map of any kind
+
+import React from 'react'
+import { Link as RouterLink } from 'react-router-dom'
+import { Box, Button, Alert } from '@mui/material'
+import { FiRefreshCw, FiExternalLink } from 'react-icons/fi'
+
 import { dashboardService } from '../services/api'
-import toast from 'react-hot-toast'
 import {
-  FiAlertTriangle,
-  FiCrosshair,
-  FiDatabase,
-  FiArrowUpRight,
-  FiActivity,
-  FiRefreshCw,
-  FiGrid,
-  FiServer,
-  FiShield,
-  FiGlobe,
-  FiFileText,
-  FiSearch,
-  FiPlusCircle,
-  FiUploadCloud,
-  FiRadio,
-  FiTrendingUp,
-  FiUsers,
-  FiFolder,
-  FiClock,
-  FiCheckCircle,
-  FiAlertCircle
-} from 'react-icons/fi'
+  PageHeader,
+  Panel,
+  MetricTile,
+  MetricValue,
+  Provenance,
+  DistributionBars,
+  StatusBadge,
+  LoadingState,
+  ErrorState,
+  EmptyState,
+  DeniedState,
+  UnavailableState,
+  ScopeNote,
+  Timeline,
+  SectionLabel,
+  Reveal,
+  formatAsOf,
+} from '../components/ui'
+import { color, type, riskBandColor, font, radius } from '../theme/tokens'
 
-const COLORS = ['#ff6678', '#ffb768', '#7688ff', '#6ee7c7']
-const fallback = { totalThreats: 0, critical: 0, high: 0, iocCount: 0 }
-
-const mitreTactics = [
-  { name: 'Initial Access', status: 'Covered', count: '12/12' },
-  { name: 'Execution', status: 'Covered', count: '10/10' },
-  { name: 'Persistence', status: 'Partial', count: '7/12' },
-  { name: 'Privilege Escalation', status: 'Covered', count: '8/8' },
-  { name: 'Defense Evasion', status: 'Needs Review', count: '4/15' },
-  { name: 'Credential Access', status: 'Covered', count: '9/9' },
-  { name: 'Discovery', status: 'Partial', count: '5/10' },
-  { name: 'Lateral Movement', status: 'Needs Review', count: '3/11' },
-  { name: 'Collection', status: 'Covered', count: '6/6' },
-  { name: 'Command & Control', status: 'Covered', count: '14/14' },
-  { name: 'Exfiltration', status: 'Not Detected', count: '0/8' },
-  { name: 'Impact', status: 'Covered', count: '7/7' }
-]
-
-const socHealthServices = [
-  { name: 'Backend API', status: 'green', latency: '12ms' },
-  { name: 'Database', status: 'green', latency: '4ms' },
-  { name: 'IOC Queue', status: 'green', latency: '18ms' },
-  { name: 'Risk Engine', status: 'yellow', latency: '142ms' },
-  { name: 'Notification Service', status: 'green', latency: '8ms' },
-  { name: 'Authentication', status: 'green', latency: '15ms' }
-]
-
-const liveThreatFeed = [
-  { id: 1, type: 'Malicious IP', value: '185.220.101.5', severity: 'Critical', time: '2m ago' },
-  { id: 2, type: 'New Domain', value: 'auth-update-secure.com', severity: 'High', time: '5m ago' },
-  { id: 3, type: 'Malware Hash', value: 'e5d7a9b...c182f', severity: 'Critical', time: '12m ago' },
-  { id: 4, type: 'Phishing URL', value: 'https://login-verify.net/portal', severity: 'High', time: '18m ago' },
-  { id: 5, type: 'CVE Imported', value: 'CVE-2026-1184 (RCE)', severity: 'Medium', time: '25m ago' }
-]
-
-const threatTrendData = [
-  { day: 'Mon', threats: 142 },
-  { day: 'Tue', threats: 189 },
-  { day: 'Wed', threats: 165 },
-  { day: 'Thu', threats: 230 },
-  { day: 'Fri', threats: 210 },
-  { day: 'Sat', threats: 175 },
-  { day: 'Sun', threats: 248 }
-]
-
-const topThreatCountries = [
-  { country: 'Pakistan', percentage: 28, count: '1,240' },
-  { country: 'USA', percentage: 22, count: '980' },
-  { country: 'Germany', percentage: 18, count: '790' },
-  { country: 'China', percentage: 16, count: '710' },
-  { country: 'Russia', percentage: 16, count: '690' }
-]
-
-const latestInvestigations = [
-  { id: 'CASE-8092', threat: 'Cobalt Strike Beacon', severity: 'Critical', analyst: 'A. Khan', status: 'In Progress' },
-  { id: 'CASE-8091', threat: 'Suspicious PowerShell Script', severity: 'High', analyst: 'S. Vance', status: 'Pending Review' },
-  { id: 'CASE-8090', threat: 'Phishing Domain Exposure', severity: 'Medium', analyst: 'M. Chen', status: 'Investigating' },
-  { id: 'CASE-8089', threat: 'Unusual SSH Login Attempt', severity: 'Low', analyst: 'R. Taylor', status: 'Closed' }
-]
-
-const Stat = ({ label, value, delta, Icon, accent }) => (
-  <Card
-    className="surface"
-    sx={{
-      p: 2.3,
-      height: '100%',
-      borderRadius: '8px',
-      borderTop: `3px solid ${accent}`,
-      boxShadow: `0 4px 24px -6px ${accent}25`,
-      transition: 'transform 0.2s ease, box-shadow 0.2s ease',
-      '&:hover': {
-        transform: 'translateY(-3px)'
-      }
-    }}
-  >
-    <Box sx={{ display: 'flex', justifyContent: 'space-between', color: '#8290a5' }}>
-      <Typography sx={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-        {label}
-      </Typography>
-      <Icon color={accent} size={18} />
-    </Box>
-    <Typography sx={{ mt: 1.5, fontSize: 30, fontWeight: 800, letterSpacing: '-.06em' }}>
-      {value ?? '—'}
-    </Typography>
-    <Typography sx={{ mt: 0.8, fontSize: 11, color: '#708098' }}>
-      <span style={{ color: accent, fontWeight: 700 }}>{delta}</span> since last 24 hours
-    </Typography>
-  </Card>
-)
-
-const getMitreColor = (status) => {
-  switch (status) {
-    case 'Covered': return { bg: 'rgba(110, 231, 199, 0.12)', color: '#6ee7c7', border: 'rgba(110, 231, 199, 0.3)' }
-    case 'Partial': return { bg: 'rgba(118, 136, 255, 0.12)', color: '#7688ff', border: 'rgba(118, 136, 255, 0.3)' }
-    case 'Needs Review': return { bg: 'rgba(255, 183, 104, 0.12)', color: '#ffb768', border: 'rgba(255, 183, 104, 0.3)' }
-    case 'Not Detected': return { bg: 'rgba(255, 102, 120, 0.12)', color: '#ff6678', border: 'rgba(255, 102, 120, 0.3)' }
-    default: return { bg: 'rgba(255, 255, 255, 0.05)', color: '#8290a5', border: 'rgba(255, 255, 255, 0.1)' }
-  }
+const RISK_BAND_LABEL = {
+  CRITICAL: 'Critical',
+  HIGH: 'High',
+  MEDIUM: 'Medium',
+  LOW: 'Low',
+  INFORMATIONAL: 'Informational',
 }
 
-const getSeverityChip = (severity) => {
-  let color = '#7688ff'
-  let bg = 'rgba(118, 136, 255, 0.15)'
-  if (severity === 'Critical') { color = '#ff6678'; bg = 'rgba(255, 102, 120, 0.15)' }
-  if (severity === 'High') { color = '#ffb768'; bg = 'rgba(255, 183, 104, 0.15)' }
-  if (severity === 'Medium') { color = '#6ee7c7'; bg = 'rgba(110, 231, 199, 0.15)' }
+const OCCURRENCE_LABEL = {
+  CREATED: 'First observed',
+  PERSISTED: 'Seen again',
+  RECURRED: 'Recurred after closure',
+  HISTORICAL: 'Back-dated observation',
+}
+
+const AGEING_LABEL = {
+  LAST_24H: 'Last 24 hours',
+  '1_7_DAYS': '1–7 days',
+  '8_30_DAYS': '8–30 days',
+  OVER_30_DAYS: 'Over 30 days',
+}
+
+const FRAMEWORK_LABEL = {
+  MITRE_ATTACK: 'MITRE ATT&CK',
+  NIST_CSF: 'NIST CSF',
+  CIS_CONTROLS: 'CIS Controls',
+}
+
+const MAPPING_SOURCE_LABEL = {
+  MANUAL: 'Created manually',
+  AI_SUGGESTION_PROMOTED: 'Promoted from an AI suggestion',
+}
+
+const DELIVERY_LABEL = {
+  SENT_MANUALLY: 'Sent manually',
+  DELIVERED: 'Delivered',
+  FAILED: 'Failed',
+  BOUNCED: 'Bounced',
+  UNKNOWN: 'Unknown',
+}
+
+const PROVIDER_STATUS = {
+  MOCK_PROVIDER: { label: 'Mock provider (no external calls)', tone: 'neutral', icon: 'power' },
+  CONFIGURED: { label: 'Configured', tone: 'success', icon: 'check' },
+  NOT_CONFIGURED: { label: 'No API key configured', tone: 'neutral', icon: 'minus' },
+  CONFIGURED_WITH_KEY: { label: 'Configured with key', tone: 'success', icon: 'check' },
+  KEYLESS_PUBLIC_RATE_LIMIT: { label: 'Keyless (public rate limit)', tone: 'info', icon: 'dot' },
+  NO_KEY_REQUIRED: { label: 'No key required', tone: 'info', icon: 'dot' },
+  ENABLED: { label: 'Enabled', tone: 'warning', icon: 'power' },
+  DISABLED: { label: 'Disabled', tone: 'neutral', icon: 'power' },
+}
+
+const FRESHNESS_STATUS = {
+  FRESH: { label: 'Recent result stored', tone: 'success', icon: 'check' },
+  STALE: { label: 'Last stored result is stale', tone: 'warning', icon: 'clock' },
+  NO_SUCCESSFUL_LOOKUP_RECORDED: {
+    label: 'No successful lookup recorded',
+    tone: 'neutral',
+    icon: 'minus',
+  },
+}
+
+const LIFECYCLE_EVENT_LABEL = {
+  CREATED: 'Case created',
+  STATE_CHANGED: 'State changed',
+  CLOSURE_REQUESTED: 'Closure requested',
+  CLOSURE_APPROVED: 'Closure approved',
+  CLOSURE_REJECTED: 'Closure rejected',
+  REOPENED: 'Case reopened',
+}
+
+function labelled(items, dictionary) {
+  return (items || []).map((item) => ({
+    ...item,
+    label: dictionary[item.key] || item.key,
+  }))
+}
+
+/** Renders a section that the caller may not read, or that failed to compute. */
+function SectionFallback({ section, restrictedMessage }) {
+  if (section?.availability === 'RESTRICTED') {
+    return <DeniedState dense>{section.reason || restrictedMessage}</DeniedState>
+  }
   return (
-    <Chip
-      label={severity}
-      size="small"
-      sx={{
-        bgcolor: bg,
-        color: color,
-        fontWeight: 700,
-        fontSize: 10,
-        height: 20,
-        border: `1px solid ${color}33`
-      }}
-    />
+    <UnavailableState title="Not available" dense>
+      {section?.reason ||
+        'This section could not be computed. It is shown as unavailable rather than as zero.'}
+    </UnavailableState>
   )
+}
+
+function isReadable(section) {
+  return section?.availability === 'AVAILABLE'
 }
 
 export const Dashboard = () => {
-  const [stats, setStats] = useState(null)
-  const [charts, setCharts] = useState(null)
-  const [loading, setLoading] = useState(true)
+  const [overview, setOverview] = React.useState(null)
+  const [loading, setLoading] = React.useState(true)
+  const [error, setError] = React.useState(false)
 
-  const dashboardSettings = useMemo(() => {
-    const saved = localStorage.getItem('dashboardSettings')
-    return saved
-      ? JSON.parse(saved)
-      : {
-          threatMap: true,
-          mitre: true,
-          liveFeed: true,
-          recentCases: true,
-          iocStats: true
-        }
-  }, [])
-
-  useEffect(() => {
-    Promise.all([dashboardService.getStats(), dashboardService.getCharts()])
-      .then(([s, c]) => {
-        setStats(s.data.data)
-        setCharts(c.data.data)
-      })
-      .catch(() => toast.error('Unable to refresh live intelligence'))
+  const load = React.useCallback(() => {
+    setLoading(true)
+    setError(false)
+    dashboardService
+      .getOverview()
+      .then((res) => setOverview(res.data?.data || null))
+      .catch(() => setError(true))
       .finally(() => setLoading(false))
   }, [])
 
-  const values = stats || fallback
-  const severity = charts?.severity || [
-    { name: 'Critical', value: 0 },
-    { name: 'High', value: 0 },
-    { name: 'Medium', value: 0 },
-    { name: 'Low', value: 0 }
-  ]
-  const statuses = charts?.status || []
+  React.useEffect(() => {
+    load()
+  }, [load])
+
+  if (loading && !overview) {
+    return (
+      <>
+        <PageHeader
+          eyebrow="Analyst workspace / operations"
+          title="Operations overview"
+          description="Loading the current snapshot."
+        />
+        <LoadingState label="Loading the operations overview" />
+      </>
+    )
+  }
+
+  if (error || !overview) {
+    return (
+      <>
+        <PageHeader
+          eyebrow="Analyst workspace / operations"
+          title="Operations overview"
+        />
+        <Panel>
+          <ErrorState onRetry={load}>
+            The overview could not be loaded. Nothing is shown rather than a
+            partial or assumed figure.
+          </ErrorState>
+        </Panel>
+      </>
+    )
+  }
+
+  const { sections, generatedAt, datasetScope, geographic } = overview
+  const f = sections.findings
+  const c = sections.cases
+  const n = sections.notifications
+  const fw = sections.frameworkMappings
+  const p = sections.providers
+  const activity = sections.recentActivity
 
   return (
-    <Box sx={{ p: { xs: 2, md: 4 }, pb: 6, maxWidth: 1600, mx: 'auto' }}>
-      <DashboardHeader loading={loading} />
+    <>
+      <PageHeader
+        eyebrow="Analyst workspace / operations"
+        title="Operations overview"
+        description={datasetScope}
+        breadcrumbs={[{ label: 'ThreatNeXus' }, { label: 'Operations overview' }]}
+        actions={
+          <Button variant="outlined" size="small" startIcon={<FiRefreshCw />} onClick={load} disabled={loading}>
+            Refresh
+          </Button>
+        }
+        meta={
+          <Provenance
+            source="Single read-only snapshot · GET /api/dashboard/overview"
+            asOf={generatedAt}
+            note="no provider request is made to render this page"
+          />
+        }
+      />
 
-      {/* Top Stats Cards */}
-      <Grid container spacing={2}>
-        <Grid size={{ xs: 12, sm: 6, md: 3 }}>
-          <Stat label="Total signals" value={values.totalThreats} delta="+12.5%" Icon={FiActivity} accent="#7688ff" />
-        </Grid>
-
-        <Grid size={{ xs: 12, sm: 6, md: 3 }}>
-          <Stat label="Critical exposure" value={values.critical} delta="Needs attention" Icon={FiAlertTriangle} accent="#ff6678" />
-        </Grid>
-
-        <Grid size={{ xs: 12, sm: 6, md: 3 }}>
-          <Stat label="High priority" value={values.high} delta="+4.2%" Icon={FiCrosshair} accent="#ffb768" />
-        </Grid>
-
-        {dashboardSettings.iocStats && (
-          <Grid size={{ xs: 12, sm: 6, md: 3 }}>
-            <Stat label="Tracked IOCs" value={values.iocCount} delta="+18 new" Icon={FiDatabase} accent="#6ee7c7" />
-          </Grid>
-        )}
-      </Grid>
-
-      {/* Main Charts & Pipeline Section */}
-      <Grid container spacing={2} sx={{ mt: 0.5 }}>
-        {/* Threat Severity Chart */}
-        <Grid size={{ xs: 12, md: dashboardSettings.recentCases ? 5 : 12 }}>
-          <Card className="surface" sx={{ p: { xs: 2, md: 2.5 }, height: 380, borderRadius: 2 }}>
-            <Typography sx={{ fontWeight: 800 }}>Threat severity</Typography>
-            <Typography sx={{ fontSize: 12, color: '#75849a', mt: 0.5 }}>
-              Active signals by urgency level
-            </Typography>
-            <ResponsiveContainer width="100%" height={280}>
-              <PieChart>
-                <Pie data={severity} innerRadius={70} outerRadius={100} paddingAngle={5} dataKey="value">
-                  {severity.map((_, i) => (
-                    <Cell key={i} fill={COLORS[i % COLORS.length]} />
-                  ))}
-                </Pie>
-                <Tooltip contentStyle={{ background: '#101723', border: '1px solid #2b3a4f', borderRadius: 10 }} />
-                <text
-                  x="50%"
-                  y="48%"
-                  textAnchor="middle"
-                  fill="#eef4ff"
-                  fontSize="25"
-                  fontWeight="800"
-                >
-                  {values.totalThreats}
-                </text>
-                <text
-                  x="50%"
-                  y="56%"
-                  textAnchor="middle"
-                  fill="#75849a"
-                  fontSize="10"
-                >
-                  SIGNALS
-                </text>
-              </PieChart>
-            </ResponsiveContainer>
-          </Card>
-        </Grid>
-
-        {/* Investigation Pipeline */}
-        {dashboardSettings.recentCases && (
-          <Grid size={{ xs: 12, md: 7 }}>
-            <Card className="surface" sx={{ p: { xs: 2, md: 2.5 }, height: 380, borderRadius: 2 }}>
-              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                <Box>
-                  <Typography sx={{ fontWeight: 800 }}>Investigation pipeline</Typography>
-                  <Typography sx={{ fontSize: 12, color: '#75849a', mt: 0.5 }}>
-                    Cases grouped by current workflow stage
-                  </Typography>
-                </Box>
-                <FiArrowUpRight size={18} color="#70e5c8" />
-              </Box>
-              <ResponsiveContainer width="100%" height={280}>
-                <BarChart data={statuses} margin={{ top: 20, right: 8, left: -20, bottom: 0 }}>
-                  <CartesianGrid vertical={false} stroke="#243146" />
-                  <XAxis dataKey="name" tick={{ fill: '#8390a2', fontSize: 11 }} axisLine={false} tickLine={false} />
-                  <YAxis tick={{ fill: '#8390a2', fontSize: 11 }} axisLine={false} tickLine={false} />
-                  <Tooltip
-                    cursor={{ fill: 'rgba(110,231,199,.05)' }}
-                    contentStyle={{ background: '#101723', border: '1px solid #2b3a4f', borderRadius: 10 }}
-                  />
-                  <Bar dataKey="value" fill="#6ee7c7" radius={[5, 5, 0, 0]} maxBarSize={40} />
-                </BarChart>
-              </ResponsiveContainer>
-            </Card>
-          </Grid>
-        )}
-      </Grid>
-
-      {/* Response Readiness / Live Telemetry */}
-      {dashboardSettings.liveFeed && (
-        <Card className="surface" sx={{ mt: 2, p: { xs: 2, md: 2.5 }, borderRadius: 2 }}>
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-            <Box>
-              <Typography sx={{ fontWeight: 800 }}>Response readiness</Typography>
-              <Typography sx={{ fontSize: 12, color: '#75849a', mt: 0.35 }}>
-                Operational checks for the current workspace
-              </Typography>
-            </Box>
-            <FiRefreshCw color="#7688ff" />
-          </Box>
-          <Grid container spacing={2}>
-            {[
-              ['Intelligence feed', 94, '#6ee7c7'],
-              ['Automated enrichment', 78, '#7688ff'],
-              ['Case triage capacity', 63, '#ffb768']
-            ].map(([name, value, color]) => (
-              <Grid size={{ xs: 12, md: 4 }} key={name}>
-                <Box sx={{ p: 1.5, bgcolor: '#0b111c', borderRadius: 2, border: '1px solid #1a2638' }}>
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
-                    <Typography sx={{ fontSize: 12, fontWeight: 700 }}>{name}</Typography>
-                    <Typography className="mono" sx={{ fontSize: 11, fontWeight: 700, color }}>
-                      {value}%
-                    </Typography>
-                  </Box>
-                  <LinearProgress
-                    variant="determinate"
-                    value={value}
-                    sx={{
-                      height: 5,
-                      borderRadius: 3,
-                      bgcolor: '#233044',
-                      '& .MuiLinearProgress-bar': { bgcolor: color, borderRadius: 3 }
-                    }}
-                  />
-                </Box>
-              </Grid>
-            ))}
-          </Grid>
-        </Card>
-      )}
-
-      {/* Middle Row: SOC Health Card & SOC Overview Card */}
-      <Grid container spacing={2} sx={{ mt: 0.5 }}>
-        {/* SOC Health Card */}
-        <Grid size={{ xs: 12, md: 6 }}>
-          <Card className="surface" sx={{ p: { xs: 2, md: 2.5 }, height: 320, borderRadius: 2 }}>
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-              <Box>
-                <Typography sx={{ fontWeight: 800 }}>SOC Health Monitor</Typography>
-                <Typography sx={{ fontSize: 12, color: '#75849a', mt: 0.35 }}>
-                  Real-time status of critical internal services
-                </Typography>
-              </Box>
-              <FiServer size={18} color="#6ee7c7" />
-            </Box>
-            <Grid container spacing={1.5}>
-              {socHealthServices.map((svc) => (
-                <Grid size={{ xs: 12, sm: 6 }} key={svc.name}>
-                  <Box
-                    sx={{
-                      p: 1.5,
-                      bgcolor: '#0b111c',
-                      borderRadius: 2,
-                      border: '1px solid #1a2638',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between'
-                    }}
-                  >
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-                      <Box
-                        sx={{
-                          width: 8,
-                          height: 8,
-                          borderRadius: '50%',
-                          bgcolor: svc.status === 'green' ? '#6ee7c7' : svc.status === 'yellow' ? '#ffb768' : '#ff6678',
-                          boxShadow: `0 0 10px ${svc.status === 'green' ? '#6ee7c7' : svc.status === 'yellow' ? '#ffb768' : '#ff6678'}`
-                        }}
-                      />
-                      <Typography sx={{ fontSize: 12, fontWeight: 700 }}>{svc.name}</Typography>
-                    </Box>
-                    <Typography className="mono" sx={{ fontSize: 10, color: '#708098' }}>
-                      {svc.latency}
-                    </Typography>
-                  </Box>
-                </Grid>
-              ))}
-            </Grid>
-          </Card>
-        </Grid>
-
-        {/* SOC Overview Card */}
-        <Grid size={{ xs: 12, md: 6 }}>
-          <Card className="surface" sx={{ p: { xs: 2, md: 2.5 }, height: 320, borderRadius: 2 }}>
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-              <Box>
-                <Typography sx={{ fontWeight: 800 }}>SOC Operations Overview</Typography>
-                <Typography sx={{ fontSize: 12, color: '#75849a', mt: 0.35 }}>
-                  Active workload, capacity, and source tracking
-                </Typography>
-              </Box>
-              <FiShield size={18} color="#7688ff" />
-            </Box>
-            <Grid container spacing={1.5}>
-              {[
-                { label: 'Open Cases', val: '42', color: '#ff6678', icon: FiFolder },
-                { label: 'Closed Cases', val: '1,280', color: '#6ee7c7', icon: FiCheckCircle },
-                { label: 'Pending Review', val: '15', color: '#ffb768', icon: FiClock },
-                { label: 'Threat Sources', val: '28 Active', color: '#7688ff', icon: FiGlobe },
-                { label: 'Active Analysts', val: '8 Duty', color: '#6ee7c7', icon: FiUsers }
-              ].map((item, idx) => {
-                const IconComponent = item.icon
-                return (
-                  <Grid size={{ xs: 12, sm: idx === 4 ? 12 : 6 }} key={item.label}>
-                    <Box
-                      sx={{
-                        p: 1.5,
-                        bgcolor: '#0b111c',
-                        borderRadius: 2,
-                        border: '1px solid #1a2638',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between'
-                      }}
-                    >
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-                        <IconComponent size={16} color={item.color} />
-                        <Typography sx={{ fontSize: 12, fontWeight: 600, color: '#8290a5' }}>
-                          {item.label}
-                        </Typography>
-                      </Box>
-                      <Typography sx={{ fontSize: 14, fontWeight: 800, color: item.color }}>
-                        {item.val}
-                      </Typography>
-                    </Box>
-                  </Grid>
-                )
-              })}
-            </Grid>
-          </Card>
-        </Grid>
-      </Grid>
-
-      {/* Row: Live Threat Feed & Threat Trend Chart */}
-      <Grid container spacing={2} sx={{ mt: 0.5 }}>
-        {/* Live Threat Feed */}
-        <Grid size={{ xs: 12, md: 5 }}>
-          <Card className="surface" sx={{ p: { xs: 2, md: 2.5 }, height: 380, borderRadius: 2 }}>
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-              <Box>
-                <Typography sx={{ fontWeight: 800 }}>Live Threat Feed</Typography>
-                <Typography sx={{ fontSize: 12, color: '#75849a', mt: 0.35 }}>
-                  Real-time ingestion of newly identified signals
-                </Typography>
-              </Box>
-              <FiRadio size={18} color="#ff6678" />
-            </Box>
-            <Box
-              sx={{
-                maxHeight: 280,
-                overflowY: 'auto',
-                pr: 0.5,
-                borderRadius: 2,
-                '&::-webkit-scrollbar': { width: '4px' },
-                '&::-webkit-scrollbar-thumb': { bgcolor: '#233044', borderRadius: '4px' }
-              }}
-            >
-              {liveThreatFeed.map((item) => (
-                <Box
-                  key={item.id}
-                  sx={{
-                    p: 1.25,
-                    mb: 1,
-                    bgcolor: '#0b111c',
-                    borderRadius: 2,
-                    border: '1px solid #1a2638',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    transition: 'border-color 0.2s ease',
-                    '&:hover': { borderColor: '#2b3a4f' }
-                  }}
-                >
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-                    <Avatar sx={{ width: 28, height: 28, bgcolor: 'rgba(255,102,120,0.1)', color: '#ff6678', fontSize: 12 }}>
-                      <FiAlertCircle size={14} />
-                    </Avatar>
-                    <Box>
-                      <Typography sx={{ fontSize: 12, fontWeight: 700, color: '#eef4ff' }}>
-                        {item.type}
-                      </Typography>
-                      <Typography className="mono" sx={{ fontSize: 11, color: '#8290a5' }}>
-                        {item.value}
-                      </Typography>
-                    </Box>
-                  </Box>
-                  <Box sx={{ textAlign: 'right' }}>
-                    {getSeverityChip(item.severity)}
-                    <Typography sx={{ fontSize: 10, color: '#708098', mt: 0.5 }}>
-                      {item.time}
-                    </Typography>
-                  </Box>
-                </Box>
-              ))}
-            </Box>
-          </Card>
-        </Grid>
-
-        {/* Threat Trend Line Chart */}
-        <Grid size={{ xs: 12, md: 7 }}>
-          <Card className="surface" sx={{ p: { xs: 2, md: 2.5 }, height: 380, borderRadius: 2 }}>
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-              <Box>
-                <Typography sx={{ fontWeight: 800 }}>Threat Trend (7 Days)</Typography>
-                <Typography sx={{ fontSize: 12, color: '#75849a', mt: 0.35 }}>
-                  Weekly volume of detected hostile activity
-                </Typography>
-              </Box>
-              <FiTrendingUp size={18} color="#7688ff" />
-            </Box>
-            <ResponsiveContainer width="100%" height={280}>
-              <LineChart data={threatTrendData} margin={{ top: 10, right: 20, left: -20, bottom: 0 }}>
-                <CartesianGrid vertical={false} stroke="#243146" />
-                <XAxis dataKey="day" tick={{ fill: '#8390a2', fontSize: 11 }} axisLine={false} tickLine={false} />
-                <YAxis tick={{ fill: '#8390a2', fontSize: 11 }} axisLine={false} tickLine={false} />
-                <Tooltip contentStyle={{ background: '#101723', border: '1px solid #2b3a4f', borderRadius: 10 }} />
-                <Line
-                  type="monotone"
-                  dataKey="threats"
-                  stroke="#7688ff"
-                  strokeWidth={3}
-                  dot={{ fill: '#7688ff', r: 4 }}
-                  activeDot={{ fill: '#6ee7c7', r: 6 }}
-                />
-              </LineChart>
-            </ResponsiveContainer>
-          </Card>
-        </Grid>
-      </Grid>
-
-      {/* Row: Top Threat Countries & Quick Actions */}
-      <Grid container spacing={2} sx={{ mt: 0.5 }}>
-        {/* Top Threat Countries */}
-        <Grid size={{ xs: 12, md: 7 }}>
-          <Card className="surface" sx={{ p: { xs: 2, md: 2.5 }, height: 320, borderRadius: 2 }}>
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-              <Box>
-                <Typography sx={{ fontWeight: 800 }}>Top Origin Countries</Typography>
-                <Typography sx={{ fontSize: 12, color: '#75849a', mt: 0.35 }}>
-                  Geographic concentration of incoming hostile vectors
-                </Typography>
-              </Box>
-              <FiGlobe size={18} color="#6ee7c7" />
-            </Box>
-            <Box sx={{ mt: 1, display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-              {topThreatCountries.map((item) => (
-                <Box key={item.country}>
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-                    <Typography sx={{ fontSize: 12, fontWeight: 700, color: '#eef4ff' }}>
-                      {item.country}
-                    </Typography>
-                    <Typography className="mono" sx={{ fontSize: 11, color: '#8290a5' }}>
-                      {item.count} attacks ({item.percentage}%)
-                    </Typography>
-                  </Box>
-                  <LinearProgress
-                    variant="determinate"
-                    value={item.percentage}
-                    sx={{
-                      height: 6,
-                      borderRadius: 3,
-                      bgcolor: '#0b111c',
-                      '& .MuiLinearProgress-bar': { bgcolor: '#7688ff', borderRadius: 3 }
-                    }}
-                  />
-                </Box>
-              ))}
-            </Box>
-          </Card>
-        </Grid>
-
-        {/* Quick Actions Card */}
-        <Grid size={{ xs: 12, md: 5 }}>
-          <Card className="surface" sx={{ p: { xs: 2, md: 2.5 }, height: 320, borderRadius: 2 }}>
-            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-              <Box>
-                <Typography sx={{ fontWeight: 800 }}>Quick Actions</Typography>
-                <Typography sx={{ fontSize: 12, color: '#75849a', mt: 0.35 }}>
-                  Immediate operations and trigger shortcuts
-                </Typography>
-              </Box>
-              <FiPlusCircle size={18} color="#ffb768" />
-            </Box>
-            <Grid container spacing={1.5} sx={{ mt: 0.5 }}>
-              {[
-                { label: 'Upload Intelligence', icon: FiUploadCloud, color: '#7688ff' },
-                { label: 'Create Case', icon: FiPlusCircle, color: '#6ee7c7' },
-                { label: 'Search IOC', icon: FiSearch, color: '#ffb768' },
-                { label: 'Generate Report', icon: FiFileText, color: '#ff6678' }
-              ].map((act) => {
-                const IconComp = act.icon
-                return (
-                  <Grid size={{ xs: 6 }} key={act.label}>
-                    <Button
-                      variant="outlined"
-                      fullWidth
-                      onClick={() => toast.success(`Triggered: ${act.label}`)}
-                      sx={{
-                        height: 95,
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: 1,
-                        bgcolor: '#0b111c',
-                        borderColor: '#243146',
-                        color: '#eef4ff',
-                        textTransform: 'none',
-                        borderRadius: 2,
-                        transition: 'all 0.2s ease',
-                        '&:hover': {
-                          borderColor: act.color,
-                          bgcolor: 'rgba(118, 136, 255, 0.05)',
-                          transform: 'translateY(-2px)'
-                        }
-                      }}
-                    >
-                      <IconComp size={22} color={act.color} />
-                      <Typography sx={{ fontSize: 12, fontWeight: 700 }}>
-                        {act.label}
-                      </Typography>
-                    </Button>
-                  </Grid>
-                )
-              })}
-            </Grid>
-          </Card>
-        </Grid>
-      </Grid>
-
-      {/* Latest Investigations Table */}
-      <Card className="surface" sx={{ mt: 2, p: { xs: 2, md: 2.5 }, borderRadius: 2 }}>
-        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-          <Box>
-            <Typography sx={{ fontWeight: 800 }}>Latest Active Investigations</Typography>
-            <Typography sx={{ fontSize: 12, color: '#75849a', mt: 0.35 }}>
-              Current high-priority cases under analyst review
-            </Typography>
-          </Box>
-          <FiFolder size={18} color="#6ee7c7" />
-        </Box>
-        <TableContainer component={Paper} sx={{ bgcolor: 'transparent', boxShadow: 'none' }}>
-          <Table sx={{ minWidth: 650 }}>
-            <TableHead>
-              <TableRow sx={{ borderColor: '#243146', '& th': { color: '#75849a', fontSize: 12, fontWeight: 700 } }}>
-                <TableCell>Case ID</TableCell>
-                <TableCell>Threat Title</TableCell>
-                <TableCell>Severity</TableCell>
-                <TableCell>Assigned Analyst</TableCell>
-                <TableCell align="right">Status</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {latestInvestigations.map((row) => (
-                <TableRow
-                  key={row.id}
-                  sx={{
-                    borderColor: '#1a2638',
-                    '& td, & th': { color: '#eef4ff', fontSize: 13, border: 0 },
-                    '&:hover': { bgcolor: 'rgba(255,255,255,0.02)' }
-                  }}
-                >
-                  <TableCell className="mono" sx={{ color: '#7688ff !important', fontWeight: 700 }}>
-                    {row.id}
-                  </TableCell>
-                  <TableCell sx={{ fontWeight: 700 }}>{row.threat}</TableCell>
-                  <TableCell>{getSeverityChip(row.severity)}</TableCell>
-                  <TableCell>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                      <Avatar sx={{ width: 22, height: 22, bgcolor: '#243146', color: '#6ee7c7', fontSize: 10 }}>
-                        {row.analyst[0]}
-                      </Avatar>
-                      <Typography sx={{ fontSize: 12 }}>{row.analyst}</Typography>
-                    </Box>
-                  </TableCell>
-                  <TableCell align="right">
-                    <Chip
-                      label={row.status}
-                      size="small"
-                      variant="outlined"
-                      sx={{
-                        borderColor: '#243146',
-                        color: '#8290a5',
-                        fontSize: 11,
-                        height: 22
-                      }}
-                    />
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </TableContainer>
-      </Card>
-
-      {/* Threat Map Section */}
-      {dashboardSettings.threatMap && <ThreatMap />}
-
-      {/* MITRE ATT&CK Matrix Section */}
-      {dashboardSettings.mitre && (
-        <Card className="surface" sx={{ mt: 2, p: { xs: 2, md: 2.5 }, borderRadius: 2 }}>
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-            <Box>
-              <Typography sx={{ fontWeight: 800 }}>MITRE ATT&CK Framework Coverage</Typography>
-              <Typography sx={{ fontSize: 12, color: '#75849a', mt: 0.35 }}>
-                Active tactic detection capabilities & navigator grid
-              </Typography>
-            </Box>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <Typography sx={{ fontSize: 12, color: '#8290a5' }}>Coverage:</Typography>
-                <Typography sx={{ fontSize: 14, fontWeight: 800, color: '#6ee7c7' }}>78%</Typography>
-              </Box>
-              <FiGrid size={18} color="#ffb768" />
-            </Box>
-          </Box>
-
-          <Box sx={{ mb: 2.5 }}>
-            <LinearProgress
-              variant="determinate"
-              value={78}
-              sx={{
-                height: 8,
-                borderRadius: 4,
-                bgcolor: '#0b111c',
-                '& .MuiLinearProgress-bar': { bgcolor: '#6ee7c7', borderRadius: 4 }
-              }}
+      {/* ------------------------------------------------------- findings */}
+      {isReadable(f) ? (
+        <>
+          <Box
+            sx={{
+              display: 'grid',
+              gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr', lg: 'repeat(4, 1fr)' },
+              gap: 2,
+              mb: 2,
+            }}
+          >
+            <MetricTile label="Open findings" metric={f.metrics.open} description="Exposures currently unresolved." />
+            <MetricTile
+              label="Persistent findings"
+              metric={f.metrics.persistent}
+              description="Observed in more than one report."
+            />
+            <MetricTile
+              label="Findings that recurred"
+              metric={f.metrics.withRecurrence}
+              description="Observed again after being closed."
+            />
+            <MetricTile
+              label="Reports processed"
+              metric={f.metrics.reportsProcessed}
+              description="Uploads accepted and parsed."
             />
           </Box>
 
-          {/* ATT&CK Legend */}
-          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2.5, mb: 2 }}>
-            {['Covered', 'Partial', 'Needs Review', 'Not Detected'].map((st) => {
-              const style = getMitreColor(st)
-              return (
-                <Box key={st} sx={{ display: 'flex', alignItems: 'center', gap: 0.8 }}>
-                  <Box sx={{ width: 10, height: '2px', bgcolor: style.color, borderRadius: 1 }} />
-                  <Typography sx={{ fontSize: 11, color: '#8290a5' }}>{st}</Typography>
-                </Box>
-              )
-            })}
-          </Box>
-
-          {/* Navigator Grid */}
-          <Grid container spacing={1.5}>
-            {mitreTactics.map((tactic) => {
-              const style = getMitreColor(tactic.status)
-              return (
-                <Grid size={{ xs: 12, sm: 6, md: 3 }} key={tactic.name}>
-                  <Box
-                    sx={{
-                      p: 1.5,
-                      height: 75,
-                      borderRadius: 2,
-                      bgcolor: style.bg,
-                      border: `1px solid ${style.border}`,
-                      display: 'flex',
-                      flexDirection: 'column',
-                      justifyContent: 'space-between',
-                      transition: 'transform 0.15s ease',
-                      '&:hover': {
-                        transform: 'translateY(-2px)'
-                      }
-                    }}
-                  >
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                      <Typography sx={{ fontSize: 12, fontWeight: 700, color: '#eef4ff' }}>
-                        {tactic.name}
-                      </Typography>
-                      <Typography className="mono" sx={{ fontSize: 10, fontWeight: 700, color: style.color }}>
-                        {tactic.count}
-                      </Typography>
-                    </Box>
-                    <Chip
-                      label={tactic.status}
-                      size="small"
-                      sx={{
-                        alignSelf: 'flex-start',
-                        bgcolor: 'rgba(0,0,0,0.2)',
-                        color: style.color,
-                        fontWeight: 700,
-                        fontSize: 9,
-                        height: 18,
-                        border: `1px solid ${style.border}`
-                      }}
-                    />
+          <Reveal index={0}>
+            <Box
+              sx={{
+                display: 'grid',
+                gridTemplateColumns: { xs: '1fr', lg: '1.1fr 1fr' },
+                gap: 2,
+                mb: 2,
+              }}
+            >
+              <Panel
+                title="Risk v1 band distribution"
+                description="Current deterministic score for each Finding that has one. Findings with no current score are counted separately rather than folded into the lowest band."
+                footer={
+                  <Provenance
+                    source={f.distributions.riskBand.source}
+                    asOf={f.distributions.riskBand.asOf}
+                    note={`denominator ${f.distributions.riskBand.denominator} scored findings`}
+                  />
+                }
+              >
+                <DistributionBars
+                  items={labelled(f.distributions.riskBand.items, RISK_BAND_LABEL)}
+                  colorFor={(key) => riskBandColor[key]}
+                />
+                <Box
+                  sx={{
+                    mt: 2.5,
+                    pt: 2,
+                    borderTop: `1px solid ${color.border}`,
+                    display: 'flex',
+                    gap: 3,
+                    flexWrap: 'wrap',
+                  }}
+                >
+                  <Box>
+                    <SectionLabel>Scored</SectionLabel>
+                    <MetricValue metric={f.metrics.scored} size="small" />
                   </Box>
-                </Grid>
-              )
-            })}
-          </Grid>
-        </Card>
+                  <Box>
+                    <SectionLabel>Not yet scored</SectionLabel>
+                    <MetricValue metric={f.metrics.unscored} size="small" />
+                  </Box>
+                </Box>
+              </Panel>
+
+              <Panel
+                title="Observation outcomes"
+                description="What each ingestion did to a Finding, taken from the append-only occurrence ledger."
+                footer={
+                  <Provenance
+                    source={f.distributions.occurrenceOutcome.source}
+                    asOf={f.distributions.occurrenceOutcome.asOf}
+                    note={`denominator ${f.distributions.occurrenceOutcome.denominator} occurrences`}
+                  />
+                }
+              >
+                <DistributionBars
+                  items={labelled(f.distributions.occurrenceOutcome.items, OCCURRENCE_LABEL)}
+                />
+              </Panel>
+            </Box>
+          </Reveal>
+
+          <Reveal index={1}>
+            <Box
+              sx={{
+                display: 'grid',
+                gridTemplateColumns: { xs: '1fr', lg: '1fr 1fr' },
+                gap: 2,
+                mb: 2,
+              }}
+            >
+              <Panel
+                title="Ageing by last observation"
+                description="How recently each Finding was last seen in an ingested report."
+                footer={
+                  <Provenance
+                    source={f.distributions.ageing.source}
+                    asOf={f.distributions.ageing.asOf}
+                    note={`denominator ${f.distributions.ageing.denominator} findings`}
+                  />
+                }
+              >
+                <DistributionBars items={labelled(f.distributions.ageing.items, AGEING_LABEL)} />
+              </Panel>
+
+              <Panel
+                title="Report types loaded"
+                description="Only report types actually ingested into this instance appear here."
+                footer={
+                  <Provenance
+                    source={f.distributions.reportType.source}
+                    asOf={f.distributions.reportType.asOf}
+                  />
+                }
+                actions={
+                  <Button
+                    component={RouterLink}
+                    to="/findings"
+                    size="small"
+                    variant="text"
+                    endIcon={<FiExternalLink size={13} />}
+                  >
+                    Open findings
+                  </Button>
+                }
+              >
+                <DistributionBars
+                  items={(f.distributions.reportType.items || []).map((i) => ({
+                    ...i,
+                    label: i.key.replace(/_/g, ' '),
+                  }))}
+                  emptyLabel="No reports have been ingested into this instance yet."
+                />
+                <ScopeNote sx={{ mt: 2.5 }} />
+              </Panel>
+            </Box>
+          </Reveal>
+        </>
+      ) : (
+        <Panel title="Findings" sx={{ mb: 2 }}>
+          <SectionFallback section={f} />
+        </Panel>
       )}
 
-      {/* Enterprise Footer */}
-      <Box
-        sx={{
-          mt: 4,
-          pt: 2.5,
-          borderTop: '1px solid #1a2638',
-          display: 'flex',
-          flexDirection: { xs: 'column', sm: 'row' },
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          gap: 1.5,
-          color: '#708098',
-          fontSize: 12
-        }}
-      >
-        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2.5 }}>
-          <Typography sx={{ fontSize: 12, color: '#708098' }}>
-            ThreatNeXus Platform: <strong style={{ color: '#eef4ff' }}>v4.2.0-Enterprise</strong>
-          </Typography>
-          <Typography sx={{ fontSize: 12, color: '#708098' }}>
-            Backend API: <strong style={{ color: '#6ee7c7' }}>v2.18.4</strong>
-          </Typography>
-          <Typography sx={{ fontSize: 12, color: '#708098' }}>
-            Database: <strong style={{ color: '#eef4ff' }}>PostgreSQL 16.2 (Cluster Active)</strong>
-          </Typography>
-        </Box>
-        <Typography className="mono" sx={{ fontSize: 11, color: '#8290a5' }}>
-          Last Sync: {new Date().toLocaleTimeString()} UTC
-        </Typography>
-      </Box>
-    </Box>
+      {/* ---------------------------------------------------------- cases */}
+      <Reveal index={2}>
+        <Panel
+          title="Cases"
+          description="Organization-bound investigations and their current lifecycle state."
+          sx={{ mb: 2 }}
+          footer={
+            isReadable(c) ? (
+              <Provenance source="Case.lifecycleState and the closure/response ledgers" asOf={generatedAt} />
+            ) : null
+          }
+        >
+          {isReadable(c) ? (
+            <Box
+              sx={{
+                display: 'grid',
+                gridTemplateColumns: { xs: '1fr 1fr', md: 'repeat(3, 1fr)', lg: 'repeat(6, 1fr)' },
+                gap: 2.5,
+              }}
+            >
+              {[
+                ['Open', c.metrics.open],
+                ['Waiting for organization', c.metrics.waitingForOrganization],
+                ['Closure pending review', c.metrics.closurePending],
+                ['Closed', c.metrics.closed],
+                ['Reopened by recurrence', c.metrics.reopenedByRecurrence],
+                ['Organization responses', c.metrics.organizationResponses],
+              ].map(([label, m]) => (
+                <Box key={label}>
+                  <SectionLabel component="h3">{label}</SectionLabel>
+                  <Box sx={{ mt: 0.75 }}>
+                    <MetricValue metric={m} size="small" />
+                  </Box>
+                </Box>
+              ))}
+            </Box>
+          ) : (
+            <SectionFallback section={c} />
+          )}
+        </Panel>
+      </Reveal>
+
+      {/* -------------------------------------------------- notifications */}
+      <Reveal index={3}>
+        <Panel
+          title="Constituent notifications"
+          description="Drafting, review and what happened to the artifact afterwards."
+          sx={{ mb: 2 }}
+          footer={
+            isReadable(n) ? (
+              <Provenance source="Notification.lifecycleState, NotificationExport, NotificationDeliveryEvent" asOf={generatedAt} />
+            ) : null
+          }
+        >
+          {isReadable(n) ? (
+            <>
+              {/* Not a decoration. Keeping these two figures visually and
+                  verbally separate is the point: this system has no SMTP or
+                  webhook client, and an export is a file, not a send. */}
+              <Alert severity="info" sx={{ mb: 2.5 }}>
+                {n.disclaimer}
+              </Alert>
+              <Box
+                sx={{
+                  display: 'grid',
+                  gridTemplateColumns: { xs: '1fr 1fr', md: 'repeat(3, 1fr)', lg: 'repeat(6, 1fr)' },
+                  gap: 2.5,
+                }}
+              >
+                {[
+                  ['Draft', n.metrics.draft],
+                  ['Pending review', n.metrics.pendingReview],
+                  ['Approved', n.metrics.approved],
+                  ['Rejected', n.metrics.rejected],
+                  ['Exports produced', n.metrics.exports],
+                  ['Delivery observations', n.metrics.deliveryObservations],
+                ].map(([label, m]) => (
+                  <Box key={label}>
+                    <SectionLabel component="h3">{label}</SectionLabel>
+                    <Box sx={{ mt: 0.75 }}>
+                      <MetricValue metric={m} size="small" />
+                    </Box>
+                  </Box>
+                ))}
+              </Box>
+
+              {n.distributions?.deliveryStatus?.denominator > 0 && (
+                <Box sx={{ mt: 3, pt: 2.5, borderTop: `1px solid ${color.border}` }}>
+                  <SectionLabel component="h3" sx={{ mb: 1.5 }}>
+                    Recorded delivery observations
+                  </SectionLabel>
+                  <DistributionBars
+                    items={labelled(n.distributions.deliveryStatus.items, DELIVERY_LABEL)}
+                  />
+                </Box>
+              )}
+            </>
+          ) : (
+            <SectionFallback section={n} />
+          )}
+        </Panel>
+      </Reveal>
+
+      {/* ---------------------------------------------------- frameworks */}
+      <Reveal index={4}>
+        <Panel
+          title={fw?.label || 'Analyst-associated framework context'}
+          description={fw?.disclaimer}
+          sx={{ mb: 2 }}
+          footer={
+            isReadable(fw) ? (
+              <Provenance source="CaseFrameworkMapping current rows" asOf={generatedAt} />
+            ) : null
+          }
+        >
+          {isReadable(fw) ? (
+            <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' }, gap: 4 }}>
+              <Box>
+                <SectionLabel component="h3" sx={{ mb: 1.5 }}>
+                  Active mappings by framework
+                </SectionLabel>
+                <DistributionBars
+                  items={labelled(fw.distributions.byFramework.items, FRAMEWORK_LABEL)}
+                  emptyLabel="No framework mappings have been created yet."
+                />
+              </Box>
+              <Box>
+                <SectionLabel component="h3" sx={{ mb: 1.5 }}>
+                  How each active mapping was created
+                </SectionLabel>
+                <DistributionBars
+                  items={labelled(fw.distributions.bySource.items, MAPPING_SOURCE_LABEL)}
+                  emptyLabel="No framework mappings have been created yet."
+                />
+                <Box sx={{ mt: 2.5, display: 'flex', gap: 3, flexWrap: 'wrap' }}>
+                  <Box>
+                    <SectionLabel>History rows</SectionLabel>
+                    <MetricValue metric={fw.metrics.historyRows} size="small" />
+                  </Box>
+                  <Box>
+                    <SectionLabel>AI suggestions awaiting a human decision</SectionLabel>
+                    <MetricValue metric={fw.metrics.pendingAiSuggestions} size="small" />
+                  </Box>
+                </Box>
+              </Box>
+            </Box>
+          ) : (
+            <SectionFallback section={fw} />
+          )}
+        </Panel>
+      </Reveal>
+
+      {/* ----------------------------------------------------- providers */}
+      <Reveal index={5}>
+        <Panel
+          title="Provider and configuration status"
+          description={p?.disclaimer}
+          sx={{ mb: 2 }}
+        >
+          {isReadable(p) ? (
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+              {[
+                { ...p.ioc, group: 'IP reputation' },
+                ...p.vulnerability.map((v) => ({ ...v, group: 'Vulnerability context' })),
+              ].map((provider) => (
+                <Box
+                  key={provider.id}
+                  sx={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 2,
+                    flexWrap: 'wrap',
+                    px: 2,
+                    py: 1.5,
+                    borderRadius: `${radius.sm}px`,
+                    border: `1px solid ${color.border}`,
+                    backgroundColor: color.surfaceSunken,
+                  }}
+                >
+                  <Box sx={{ minWidth: 0 }}>
+                    <Box sx={{ ...type.bodyStrong, color: color.text }}>{provider.name}</Box>
+                    <Box sx={{ ...type.caption, color: color.textFaint, fontFamily: font.mono, mt: 0.4 }}>
+                      {provider.source}
+                    </Box>
+                  </Box>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+                    <StatusBadge dictionary={PROVIDER_STATUS} value={provider.status} size="small" />
+                    <StatusBadge dictionary={FRESHNESS_STATUS} value={provider.state} size="small" />
+                    {provider.lastSuccessAt && (
+                      <Box sx={{ ...type.caption, color: color.textMuted, fontFamily: font.mono }}>
+                        {formatAsOf(provider.lastSuccessAt)}
+                      </Box>
+                    )}
+                  </Box>
+                </Box>
+              ))}
+
+              <Box
+                sx={{
+                  px: 2,
+                  py: 1.5,
+                  borderRadius: `${radius.sm}px`,
+                  border: `1px solid ${color.border}`,
+                  backgroundColor: color.surfaceSunken,
+                }}
+              >
+                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2, flexWrap: 'wrap' }}>
+                  <Box sx={{ ...type.bodyStrong, color: color.text }}>{p.ai.name}</Box>
+                  <StatusBadge dictionary={PROVIDER_STATUS} value={p.ai.status} size="small" />
+                </Box>
+                <Box sx={{ ...type.caption, color: color.textMuted, mt: 0.75, maxWidth: '72ch' }}>
+                  {p.ai.note}
+                </Box>
+              </Box>
+            </Box>
+          ) : (
+            <SectionFallback section={p} />
+          )}
+        </Panel>
+      </Reveal>
+
+      {/* ---------------------------------------------------- geographic */}
+      <Reveal index={6}>
+        <Panel title="Geographic observations" sx={{ mb: 2 }}>
+          <UnavailableState title={geographic.message} dense>
+            {geographic.reason}
+          </UnavailableState>
+        </Panel>
+      </Reveal>
+
+      {/* ------------------------------------------------ recent activity */}
+      <Reveal index={7}>
+        <Panel
+          title="Recent case activity"
+          description={`The ${activity?.limit ?? 8} most recent case lifecycle events.`}
+          footer={
+            isReadable(activity) ? (
+              <Provenance source={activity.source} asOf={activity.asOf} />
+            ) : null
+          }
+        >
+          {isReadable(activity) ? (
+            activity.items.length ? (
+              <Timeline
+                items={activity.items.map((e) => ({
+                  id: e.id,
+                  title: LIFECYCLE_EVENT_LABEL[e.eventType] || e.eventType,
+                  at: e.occurredAt,
+                  detail:
+                    e.fromState && e.toState
+                      ? `${e.caseReference || `Case ${e.caseId}`} · ${e.fromState} → ${e.toState}`
+                      : e.caseReference || `Case ${e.caseId}`,
+                }))}
+              />
+            ) : (
+              <EmptyState title="No case activity recorded yet" dense>
+                Case lifecycle events appear here as soon as an analyst opens the
+                first case.
+              </EmptyState>
+            )
+          ) : (
+            <SectionFallback section={activity} />
+          )}
+        </Panel>
+      </Reveal>
+    </>
   )
 }
+
+export default Dashboard

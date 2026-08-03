@@ -32,7 +32,20 @@ const {
   validateMaxAttempts: validateVulnerabilityMaxAttempts,
 } = require("../services/vulnerability/vulnerabilityConfig");
 
-dotenv.config();
+// Loading a developer's .env is right for running the app and wrong for running
+// the tests. The automated suite constructs its own environment explicitly (see
+// tests/setup.js and each integration suite's BASE_ENV), and a .env on the
+// developer's machine silently leaked into it: with real DATABASE_URL and
+// ABUSEIPDB_API_KEY values present, three env.test.js cases that assert on a
+// MISSING variable stopped failing correctly. The suite therefore only passed
+// on a machine that had no .env at all.
+//
+// TNX_SKIP_DOTENV is set by tests/setup.js and by nothing else. Production and
+// local development are unaffected: the variable is absent, so the file loads
+// exactly as before.
+if (process.env.TNX_SKIP_DOTENV !== "true") {
+  dotenv.config();
+}
 
 class ConfigError extends Error {
   constructor(message) {

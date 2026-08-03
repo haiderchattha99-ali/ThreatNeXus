@@ -1,294 +1,244 @@
-import React, { useEffect, useState } from "react";
+// Analysis — the same persisted evidence as the overview, arranged for
+// comparison rather than for a first glance.
+//
+// This page was rewritten in Phase 6. The previous version fetched
+// `http://localhost:5000/api/threats` with a bare axios call: a hardcoded host
+// that ignored VITE_API_BASE_URL, and a request that carried no Authorization
+// header because it bypassed the configured client entirely. It then drew
+// severity/status charts from the legacy `Threat` table, which is not the
+// deduplicated Finding lifecycle the rest of the product reasons about.
+//
+// It now reads the same single, capability-guarded, provenance-carrying
+// snapshot the overview does, so the two screens can never disagree — and it
+// needs no charting library, which is why chart.js, react-chartjs-2, leaflet
+// and react-leaflet were removed from the bundle in this phase.
+
+import React from 'react'
+import { Box, Button } from '@mui/material'
+import { FiRefreshCw } from 'react-icons/fi'
+
+import { dashboardService } from '../services/api'
 import {
-  Box,
-  Typography,
-  Grid,
-  Card,
-  CardContent,
-  CircularProgress,
-} from "@mui/material";
+  PageHeader,
+  Panel,
+  DistributionBars,
+  LoadingState,
+  ErrorState,
+  DeniedState,
+  UnavailableState,
+  Provenance,
+  ScopeNote,
+  MetricValue,
+  SectionLabel,
+  Reveal,
+} from '../components/ui'
+import { riskBandColor, color, type } from '../theme/tokens'
 
-import {
-  Chart as ChartJS,
-  CategoryScale,
-  LinearScale,
-  PointElement,
-  LineElement,
-  ArcElement,
-  BarElement,
-  Title,
-  Tooltip,
-  Legend,
-} from "chart.js";
+const RISK_BAND_LABEL = {
+  CRITICAL: 'Critical',
+  HIGH: 'High',
+  MEDIUM: 'Medium',
+  LOW: 'Low',
+  INFORMATIONAL: 'Informational',
+}
+const OCCURRENCE_LABEL = {
+  CREATED: 'First observed',
+  PERSISTED: 'Seen again',
+  RECURRED: 'Recurred after closure',
+  HISTORICAL: 'Back-dated observation',
+}
+const AGEING_LABEL = {
+  LAST_24H: 'Last 24 hours',
+  '1_7_DAYS': '1–7 days',
+  '8_30_DAYS': '8–30 days',
+  OVER_30_DAYS: 'Over 30 days',
+}
+const CASE_STATE_LABEL = {
+  OPEN: 'Open',
+  WAITING_FOR_ORG: 'Waiting for organization',
+  CLOSURE_PENDING: 'Closure pending review',
+  CLOSED: 'Closed',
+}
 
-import { Line, Pie, Bar } from "react-chartjs-2";
-import axios from "axios";
+function labelled(items, dict) {
+  return (items || []).map((i) => ({ ...i, label: dict[i.key] || i.key }))
+}
 
-ChartJS.register(
-  CategoryScale,
-  LinearScale,
-  PointElement,
-  LineElement,
-  ArcElement,
-  BarElement,
-  Title,
-  Tooltip,
-  Legend
-);
+function SectionFallback({ section }) {
+  if (section?.availability === 'RESTRICTED') {
+    return <DeniedState dense>{section.reason}</DeniedState>
+  }
+  return <UnavailableState dense>{section?.reason}</UnavailableState>
+}
 
 const Analytics = () => {
-  const [threats, setThreats] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [overview, setOverview] = React.useState(null)
+  const [loading, setLoading] = React.useState(true)
+  const [error, setError] = React.useState(false)
 
-  useEffect(() => {
-    loadThreats();
-  }, []);
+  const load = React.useCallback(() => {
+    setLoading(true)
+    setError(false)
+    dashboardService
+      .getOverview()
+      .then((res) => setOverview(res.data?.data || null))
+      .catch(() => setError(true))
+      .finally(() => setLoading(false))
+  }, [])
 
-  const loadThreats = async () => {
-    try {
-      const res = await axios.get("http://localhost:5000/api/threats");
-      setThreats(res.data?.data || res.data || []);
-    } catch (err) {
-      console.error("Failed to load threats:", err);
-    } finally {
-      setLoading(false);
-    }
-  };
+  React.useEffect(() => {
+    load()
+  }, [load])
 
-  if (loading) {
+  if (loading && !overview) {
     return (
-      <Box
-        display="flex"
-        justifyContent="center"
-        alignItems="center"
-        height="70vh"
-      >
-        <CircularProgress />
-      </Box>
-    );
+      <>
+        <PageHeader eyebrow="Analyst workspace / analysis" title="Analysis" />
+        <LoadingState label="Loading analysis" />
+      </>
+    )
   }
 
-  if (threats.length === 0) {
+  if (error || !overview) {
     return (
-      <Box
-        display="flex"
-        justifyContent="center"
-        alignItems="center"
-        height="70vh"
-      >
-        <Typography variant="h5">No threat intelligence available</Typography>
-      </Box>
-    );
+      <>
+        <PageHeader eyebrow="Analyst workspace / analysis" title="Analysis" />
+        <Panel>
+          <ErrorState onRetry={load} />
+        </Panel>
+      </>
+    )
   }
 
-  // Calculate severity distributions
-  const severityCounts = {
-    Critical: 0,
-    High: 0,
-    Medium: 0,
-    Low: 0,
-  };
-
-  // Calculate threat type counts with fallback properties
-  const typeCounts = {};
-
-  // Calculate timeline counts based on createdAt
-  const timeline = {};
-
-  threats.forEach((t) => {
-    if (t.severity && severityCounts[t.severity] !== undefined) {
-      severityCounts[t.severity]++;
-    }
-
-    const type = t.type || t.threatType || t.category || "Unknown";
-    typeCounts[type] = (typeCounts[type] || 0) + 1;
-
-    const day = t.createdAt
-      ? new Date(t.createdAt).toLocaleDateString()
-      : "Unknown Date";
-    timeline[day] = (timeline[day] || 0) + 1;
-  });
-
-  // Chart datasets & configuration
-  const lineData = {
-    labels: Object.keys(timeline),
-    datasets: [
-      {
-        label: "Threats",
-        data: Object.values(timeline),
-        borderColor: "#4FD1C5",
-        backgroundColor: "rgba(79,209,197,.25)",
-        fill: true,
-        tension: 0.4,
-      },
-    ],
-  };
-
-  const pieData = {
-    labels: Object.keys(severityCounts),
-    datasets: [
-      {
-        data: Object.values(severityCounts),
-        backgroundColor: [
-          "#ef4444",
-          "#f59e0b",
-          "#3b82f6",
-          "#10b981",
-        ],
-      },
-    ],
-  };
-
-  const barData = {
-    labels: Object.keys(typeCounts),
-    datasets: [
-      {
-        label: "Threat Types",
-        data: Object.values(typeCounts),
-        backgroundColor: "#6366F1",
-      },
-    ],
-  };
-
-  const commonAnimation = {
-    duration: 1500,
-  };
+  const f = overview.sections.findings
+  const c = overview.sections.cases
+  const readable = (s) => s?.availability === 'AVAILABLE'
 
   return (
-    <Box p={3}>
-      <Typography variant="h3" fontWeight="bold" mb={4}>
-        Threat Intelligence Analytics
-      </Typography>
+    <>
+      <PageHeader
+        eyebrow="Analyst workspace / analysis"
+        title="Analysis"
+        description={overview.datasetScope}
+        breadcrumbs={[{ label: 'ThreatNeXus', to: '/dashboard' }, { label: 'Analysis' }]}
+        actions={
+          <Button variant="outlined" size="small" startIcon={<FiRefreshCw />} onClick={load}>
+            Refresh
+          </Button>
+        }
+        meta={<Provenance source="GET /api/dashboard/overview" asOf={overview.generatedAt} />}
+      />
 
-      {/* KPI Cards */}
-      <Grid container spacing={3} mb={4}>
-        <Grid item xs={12} sm={6} lg={3}>
-          <Card sx={{ borderRadius: 3 }}>
-            <CardContent>
-              <Typography color="text.secondary">Total Threats</Typography>
-              <Typography variant="h3" fontWeight="bold">
-                {threats.length}
-              </Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-
-        <Grid item xs={12} sm={6} lg={3}>
-          <Card sx={{ borderRadius: 3 }}>
-            <CardContent>
-              <Typography color="text.secondary">Critical Threats</Typography>
-              <Typography
-                variant="h3"
-                color="error.main"
-                fontWeight="bold"
-              >
-                {severityCounts.Critical}
-              </Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-
-        <Grid item xs={12} sm={6} lg={3}>
-          <Card sx={{ borderRadius: 3 }}>
-            <CardContent>
-              <Typography color="text.secondary">High Severity</Typography>
-              <Typography
-                variant="h3"
-                color="warning.main"
-                fontWeight="bold"
-              >
-                {severityCounts.High}
-              </Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-
-        <Grid item xs={12} sm={6} lg={3}>
-          <Card sx={{ borderRadius: 3 }}>
-            <CardContent>
-              <Typography color="text.secondary">Medium + Low</Typography>
-              <Typography
-                variant="h3"
-                color="success.main"
-                fontWeight="bold"
-              >
-                {severityCounts.Medium + severityCounts.Low}
-              </Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-      </Grid>
-
-      {/* Charts Layout */}
-      <Grid container spacing={3}>
-        <Grid item xs={12} lg={8}>
-          <Card sx={{ borderRadius: 3 }}>
-            <CardContent>
-              <Typography variant="h6" gutterBottom>
-                Threat Trend Over Time
-              </Typography>
-              <Line
-                data={lineData}
-                options={{
-                  responsive: true,
-                  animation: commonAnimation,
-                }}
+      {readable(f) ? (
+        <>
+          <Reveal index={0}>
+            <Panel
+              title="Where the risk sits"
+              description="Current Risk v1 band for every Finding that has a score. Findings with no current score are counted separately and are never folded into the lowest band."
+              sx={{ mb: 2 }}
+              footer={
+                <Provenance
+                  source={f.distributions.riskBand.source}
+                  asOf={f.distributions.riskBand.asOf}
+                  note={`denominator ${f.distributions.riskBand.denominator} scored findings`}
+                />
+              }
+            >
+              <DistributionBars
+                items={labelled(f.distributions.riskBand.items, RISK_BAND_LABEL)}
+                colorFor={(k) => riskBandColor[k]}
               />
-            </CardContent>
-          </Card>
-        </Grid>
+              <Box sx={{ mt: 3, display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                <Box>
+                  <SectionLabel component="h3">Total findings</SectionLabel>
+                  <MetricValue metric={f.metrics.total} size="small" />
+                </Box>
+                <Box>
+                  <SectionLabel component="h3">Scored</SectionLabel>
+                  <MetricValue metric={f.metrics.scored} size="small" />
+                </Box>
+                <Box>
+                  <SectionLabel component="h3">Not yet scored</SectionLabel>
+                  <MetricValue metric={f.metrics.unscored} size="small" />
+                </Box>
+              </Box>
+            </Panel>
+          </Reveal>
 
-        <Grid item xs={12} lg={4}>
-          <Card sx={{ borderRadius: 3 }}>
-            <CardContent>
-              <Typography variant="h6" gutterBottom>
-                Severity Distribution
-              </Typography>
-              <Pie
-                data={pieData}
-                options={{
-                  responsive: true,
-                  animation: commonAnimation,
-                  plugins: {
-                    legend: {
-                      position: "bottom",
-                    },
-                  },
-                }}
-              />
-            </CardContent>
-          </Card>
-        </Grid>
+          <Reveal index={1}>
+            <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', lg: '1fr 1fr' }, gap: 2, mb: 2 }}>
+              <Panel
+                title="Persistence and recurrence"
+                description="What repeated ingestion actually did, from the append-only occurrence ledger. This is the honest alternative to a trend line: it counts events that happened rather than interpolating a curve."
+                footer={
+                  <Provenance
+                    source={f.distributions.occurrenceOutcome.source}
+                    asOf={f.distributions.occurrenceOutcome.asOf}
+                  />
+                }
+              >
+                <DistributionBars items={labelled(f.distributions.occurrenceOutcome.items, OCCURRENCE_LABEL)} />
+              </Panel>
 
-        <Grid item xs={12}>
-          <Card sx={{ borderRadius: 3 }}>
-            <CardContent>
-              <Typography variant="h6" gutterBottom>
-                Threat Types
-              </Typography>
-              <Bar
-                data={barData}
-                options={{
-                  responsive: true,
-                  animation: commonAnimation,
-                  plugins: {
-                    legend: {
-                      display: false,
-                    },
-                  },
-                  scales: {
-                    y: {
-                      beginAtZero: true,
-                    },
-                  },
-                }}
-              />
-            </CardContent>
-          </Card>
-        </Grid>
-      </Grid>
-    </Box>
-  );
-};
+              <Panel
+                title="Ageing"
+                description="How long since each Finding was last observed."
+                footer={
+                  <Provenance source={f.distributions.ageing.source} asOf={f.distributions.ageing.asOf} />
+                }
+              >
+                <DistributionBars items={labelled(f.distributions.ageing.items, AGEING_LABEL)} />
+              </Panel>
+            </Box>
+          </Reveal>
+        </>
+      ) : (
+        <Panel title="Findings" sx={{ mb: 2 }}>
+          <SectionFallback section={f} />
+        </Panel>
+      )}
 
-export default Analytics;
+      <Reveal index={2}>
+        <Panel
+          title="Investigation load"
+          description="Cases by current lifecycle state."
+          sx={{ mb: 2 }}
+          footer={readable(c) ? <Provenance source="Case.lifecycleState" asOf={overview.generatedAt} /> : null}
+        >
+          {readable(c) ? (
+            <DistributionBars
+              items={labelled(c.distributions.lifecycleState.items, CASE_STATE_LABEL)}
+              emptyLabel="No cases have been opened yet."
+            />
+          ) : (
+            <SectionFallback section={c} />
+          )}
+        </Panel>
+      </Reveal>
+
+      <Panel title="What is deliberately not shown here">
+        <Box component="ul" sx={{ ...type.small, color: color.textMuted, pl: 2.5, m: 0 }}>
+          <li>
+            No geographic map or origin-country ranking. No provenance-backed
+            coordinate is persisted by any phase, and location is never inferred
+            from an address or an organization name.
+          </li>
+          <li>
+            No framework &ldquo;coverage&rdquo; percentage. Mappings are
+            analyst-asserted context, and no proportion of any catalogue is
+            implied by counting them.
+          </li>
+          <li>
+            No time-series trend line. This instance holds discretely ingested
+            reports, not a continuous feed, so a smooth curve over time would be
+            an interpolation rather than a measurement.
+          </li>
+          <li>No provider latency, uptime or &ldquo;all systems operational&rdquo; claim.</li>
+        </Box>
+        <ScopeNote sx={{ mt: 2 }} />
+      </Panel>
+    </>
+  )
+}
+
+export default Analytics
