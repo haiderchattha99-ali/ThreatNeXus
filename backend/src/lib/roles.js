@@ -83,6 +83,50 @@ const CAPABILITIES = Object.freeze({
   // unless they are an administrator" without ever knowing what a role is —
   // see caseClosureService.assertNotSelfApproval.
   OVERRIDE_CLOSURE_SELF_APPROVAL: "override:closure-self-approval",
+
+  // Phase 4 — notification drafting, review, manual export, delivery tracking.
+  // Four additive, non-hierarchical grants plus the existing
+  // REVIEW_NOTIFICATIONS, splitting read / write / review / export cleanly.
+  //
+  // READ_NOTIFICATIONS exists because Phase 4 is the first time ANALYST
+  // legitimately needs to SEE a notification: an analyst who drafts, edits,
+  // submits and exports one cannot do any of it through a surface they may not
+  // read. Before this, the whole /api/notifications router sat behind
+  // REVIEW_NOTIFICATIONS, which gated reads and writes together and therefore
+  // denied ANALYST any access at all.
+  //
+  // It is deliberately NOT granted to VIEWER. The approved pre-Phase-4
+  // notification-read policy excluded VIEWER (the router required
+  // review:notifications, held only by REVIEWER and ADMIN), and Phase 4 widens
+  // that policy only as far as the workflow actually requires — to the role
+  // that does the drafting. A notification is constituent-addressed
+  // correspondence carrying a recipient binding; read-only oversight of it was
+  // never granted and is not granted here.
+  READ_NOTIFICATIONS: "read:notifications",
+
+  // The analyst half of the separation of duties: create a draft, edit a
+  // revision, submit it for review. Held by ADMIN and ANALYST only —
+  // deliberately NOT by REVIEWER, which is what makes it impossible for the
+  // role that approves content to also author it.
+  MANAGE_NOTIFICATIONS: "manage:notifications",
+
+  // Producing the outbound artifact. Held by ADMIN and ANALYST, never by
+  // REVIEWER: a reviewer decides whether something may leave, and does not
+  // also perform the act of taking it out.
+  EXPORT_NOTIFICATIONS: "export:notifications",
+
+  // Recording what a human observed after sending the exported artifact by
+  // hand. Same holders as export for the same reason — the person who sent it
+  // is the only one who can honestly report what happened to it.
+  RECORD_NOTIFICATION_DELIVERY: "record:notification-delivery",
+
+  // Administrator-only escape hatch for the notification self-approval
+  // prohibition, exactly parallel to OVERRIDE_CLOSURE_SELF_APPROVAL. A
+  // dedicated capability rather than a role-name comparison, so the review
+  // service can enforce "the author or submitter may not approve their own
+  // revision unless they are an administrator" without ever knowing what a
+  // role is — see notificationReviewService.assertNotSelfApproval.
+  OVERRIDE_NOTIFICATION_SELF_APPROVAL: "override:notification-self-approval",
 });
 
 const CAPABILITY_VALUES = Object.freeze(Object.values(CAPABILITIES));
@@ -109,6 +153,13 @@ const ROLE_CAPABILITIES = Object.freeze({
     ...READ_ONLY_CAPABILITIES,
     CAPABILITIES.REVIEW_NOTIFICATIONS,
     CAPABILITIES.REVIEW_AI_SUGGESTIONS,
+    // Phase 4 — a reviewer may read a notification and its evidence in order
+    // to decide it, and may approve or reject. They deliberately hold neither
+    // MANAGE_NOTIFICATIONS, EXPORT_NOTIFICATIONS nor
+    // RECORD_NOTIFICATION_DELIVERY, so they cannot draft, edit, submit,
+    // export, record a delivery or record an organization response. Their only
+    // writes in this phase are the review decision itself.
+    CAPABILITIES.READ_NOTIFICATIONS,
     // Phase 3 — a reviewer may approve or reject a closure request and read
     // the case to decide. They deliberately hold neither TRIAGE_FINDINGS nor
     // MANAGE_CASES, so they cannot triage a Finding, link or unlink evidence,
@@ -146,6 +197,18 @@ const ROLE_CAPABILITIES = Object.freeze({
     // batch worker (that stays ADMIN-only below, via CAPABILITY_VALUES).
     CAPABILITIES.MANAGE_FINDING_VULNERABILITIES,
     CAPABILITIES.TRIGGER_VULNERABILITY_ENRICHMENT,
+    // Phase 4 — an analyst drafts, edits and submits a notification, exports
+    // an APPROVED one, and records what happened to it afterwards. ANALYST is
+    // deliberately NOT granted REVIEW_NOTIFICATIONS or
+    // OVERRIDE_NOTIFICATION_SELF_APPROVAL, which is what makes it structurally
+    // impossible for the role that writes a notification to also approve one —
+    // their own or anybody else's. Recording an organization response from the
+    // notification screen reuses MANAGE_CASES (granted above), because it is
+    // the same act, on the same table, as recording one from the case screen.
+    CAPABILITIES.READ_NOTIFICATIONS,
+    CAPABILITIES.MANAGE_NOTIFICATIONS,
+    CAPABILITIES.EXPORT_NOTIFICATIONS,
+    CAPABILITIES.RECORD_NOTIFICATION_DELIVERY,
   ]),
   ADMIN: Object.freeze([...CAPABILITY_VALUES]),
 });

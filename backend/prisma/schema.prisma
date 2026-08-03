@@ -73,6 +73,18 @@ model User {
   caseResponsesRecorded  CaseOrganizationResponse[] @relation("CaseResponseRecordedBy")
   closureRequestsMade    CaseClosureRequest[]       @relation("CaseClosureRequestedBy")
   closureRequestsDecided CaseClosureRequest[]       @relation("CaseClosureReviewedBy")
+
+  // Phase 4 — same SetNull-actor convention throughout. Drafting, editing,
+  // submitting, approving, rejecting, exporting and recording a delivery are
+  // all explicit human acts that always carry an actor at write time; the
+  // columns are nullable only so deleting a User nulls the attribution instead
+  // of destroying the record that justifies an approval or an export.
+  notificationsCreated    Notification[]               @relation("NotificationCreatedBy")
+  notificationsApproved   Notification[]               @relation("NotificationApprovedBy")
+  notificationRevisions   NotificationRevision[]       @relation("NotificationRevisionAuthor")
+  notificationLifecycle   NotificationLifecycleEvent[] @relation("NotificationLifecycleActor")
+  notificationExports     NotificationExport[]         @relation("NotificationExportActor")
+  notificationDeliveries  NotificationDeliveryEvent[]  @relation("NotificationDeliveryRecordedBy")
 }
 
 model Threat {
@@ -183,10 +195,35 @@ model Case {
   recurrenceReopens     CaseRecurrenceReopen[]
   triageDecisions       FindingTriage[]            @relation("FindingTriageCase")
 
+  // Phase 4 — a case is the ONLY thing a constituent notification may be
+  // drafted from, which is what binds every notification to exactly one
+  // organization and to real persisted evidence.
+  notifications Notification[] @relation("NotificationCase")
+
   @@index([lifecycleState])
   @@index([organizationId, lifecycleState])
 }
 
+// EXTENDED in Phase 4 (notification drafting -> review -> manual export) —
+// every Phase 4 column is additive and nullable or defaulted, so every
+// pre-existing row stays valid without a data migration.
+//
+// This is the SAME entity the Phase 0 UI already used; Phase 4 deliberately
+// does NOT introduce a second notification model. A row with a null `caseId`
+// is a legacy, non-workflow notification: it stays readable, and every Phase 4
+// workflow operation refuses it (see notificationRules.assertWorkflowBound).
+//
+// Two content concepts coexist deliberately and are NOT merged:
+//   - `title` / `message` — the legacy display projection the Phase 0 list
+//                           screen reads. `title` mirrors the current
+//                           revision's subject; `message` is a bounded status
+//                           line that deliberately carries NO incident content.
+//   - NotificationRevision — the authoritative, immutable, versioned content.
+//                            Everything reviewed, approved and exported comes
+//                            from a revision, never from these columns.
+// Same reasoning as Case.status vs Case.lifecycleState: collapsing them would
+// let an unversioned column become the thing a reviewer is deemed to have
+// approved.
 model Notification {
   id        Int      @id @default(autoincrement())
   title     String
@@ -195,6 +232,58 @@ model Notification {
   status    String   @default("Unread")
   type      String   @default("System")
   createdAt DateTime @default(now())
+
+  // --- Phase 4: case / organization binding -------------------------------
+  // Server-generated, human-readable, globally unique ("TNX-NOT-2026-000042").
+  // Nullable only because legacy rows have none; every notification drafted
+  // from now on receives one inside the creation transaction.
+  notificationReference String? @unique
+
+  // A Phase 4 notification belongs to exactly ONE Case and therefore to
+  // exactly one Organization. The organization is stored explicitly rather
+  // than only joined through the case, for the same reason CaseFinding stores
+  // it: a historical notification must stay explicable on its own, and a
+  // divergence introduced by any future change must be detectable rather than
+  // invisible. Both FKs are Restrict — a case or organization that has
+  // notification history must never be deleted out from under it.
+  caseId Int?
+  case   Case? @relation("NotificationCase", fields: [caseId], references: [id], onDelete: Restrict)
+
+  organizationId    Int?
+  ownerOrganization Organization? @relation("NotificationOrganization", fields: [organizationId], references: [id], onDelete: Restrict)
+
+  // --- Phase 4: authoritative lifecycle ------------------------------------
+  // Defaulted (rather than nullable) exactly like Case.lifecycleState: legacy
+  // rows become DRAFT, which is harmless because `caseId` null already
+  // excludes them from every workflow path.
+  lifecycleState NotificationLifecycleState @default(DRAFT)
+
+  createdByUserId Int?
+  createdBy       User? @relation("NotificationCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  // Current-approval projection. THE export guard reads these, and they are
+  // cleared the moment a new revision is created — that is the mechanism by
+  // which "a prior approval never authorizes export of a later edited
+  // revision" is enforced by stored state rather than by a comparison somebody
+  // might forget to write. The permanent record of every approval and
+  // rejection lives in NotificationLifecycleEvent, never only here.
+  //
+  // approvedRevisionId is Restrict: the revision an approval points at must
+  // not be removable while the approval stands.
+  approvedRevisionId Int?
+  approvedRevision   NotificationRevision? @relation("NotificationApprovedRevision", fields: [approvedRevisionId], references: [id], onDelete: Restrict)
+  approvedByUserId   Int?
+  approvedBy         User?                 @relation("NotificationApprovedBy", fields: [approvedByUserId], references: [id], onDelete: SetNull)
+  approvedAt         DateTime?
+
+  revisions       NotificationRevision[]      @relation("NotificationRevisions")
+  lifecycleEvents NotificationLifecycleEvent[]
+  exports         NotificationExport[]
+  deliveryEvents  NotificationDeliveryEvent[]
+
+  @@index([lifecycleState])
+  @@index([caseId])
+  @@index([organizationId, lifecycleState])
 }
 
 model Organization {
@@ -222,6 +311,10 @@ model Organization {
   // or link history must never be deleted out from under that history.
   cases            Case[]        @relation("CaseOrganization")
   caseFindingLinks CaseFinding[] @relation("CaseFindingOrganization")
+
+  // Phase 4 — same Restrict reasoning: an organization that has been notified
+  // must never be deleted out from under that notification's history.
+  notifications Notification[] @relation("NotificationOrganization")
 }
 
 // ===========================================================================
@@ -1642,4 +1735,284 @@ model CaseRecurrenceReopen {
   @@unique([findingOccurrenceId, caseId])
   @@index([caseId, processedAt])
   @@index([findingId])
+}
+
+// ===========================================================================
+// Phase 4 — Notification drafting, review, manual export, delivery tracking.
+//
+// Additive only. Nothing below alters, retypes or drops an existing column,
+// and the pre-existing Notification model is EXTENDED rather than replaced —
+// there is deliberately no second notification entity in this schema.
+//
+// ---------------------------------------------------------------------------
+// ThreatNeXus never sends anything
+// ---------------------------------------------------------------------------
+// There is no SMTP client, no webhook client, no messaging provider and no
+// scheduled dispatcher anywhere in this system, by design (AGENTS.md "out of
+// scope"). The ONLY outbound mechanism is an analyst manually downloading an
+// artifact. That is why NotificationExport and NotificationDeliveryEvent are
+// two different tables: exporting is something WE did and can prove, delivery
+// is something a human observed afterwards and must assert explicitly. An
+// export can never imply a delivery, and no elapsed time ever produces one.
+//
+// ---------------------------------------------------------------------------
+// Approval is bound to an exact revision, structurally
+// ---------------------------------------------------------------------------
+// Notification.approvedRevisionId points at the exact NotificationRevision a
+// reviewer approved, and creating any new revision clears the whole approval
+// projection in the same transaction. The export guard therefore compares the
+// approved revision id against the CURRENT revision id and re-verifies the
+// stored content checksum; a stale approval cannot authorize an export because
+// there is no stored state left saying it may.
+// ===========================================================================
+
+// The notification lifecycle. DRAFT is the only editable state; PENDING_REVIEW
+// is deliberately NOT editable (see notificationRules.EDITABLE_STATES) so an
+// analyst cannot change the content out from under a reviewer who is deciding
+// on it — the same "restrict the source, not only the target" lesson Phase 3
+// learned from the closure-withdrawal defect.
+enum NotificationLifecycleState {
+  DRAFT
+  PENDING_REVIEW
+  APPROVED
+  REJECTED
+}
+
+// Immutable lifecycle/review event kinds. DRAFT_CREATED is emitted once per
+// notification so the history is complete from the first instant.
+// REVISION_CREATED covers every later edit, including the edit that supersedes
+// an APPROVED or REJECTED revision and returns the notification to DRAFT.
+enum NotificationLifecycleEventType {
+  DRAFT_CREATED
+  REVISION_CREATED
+  SUBMITTED_FOR_REVIEW
+  APPROVED
+  REJECTED
+  EXPORTED
+  DELIVERY_RECORDED
+}
+
+// Manual export artifact format. EML is an RFC 5322 message the analyst opens
+// in their own mail client; TXT is the plain-text fallback. Neither is ever
+// transmitted by this system.
+enum NotificationExportFormat {
+  EML
+  TXT
+}
+
+// What a human observed AFTER exporting. SENT_MANUALLY is the analyst's own
+// act ("I sent this from my mail client"); DELIVERED is a claim about the
+// recipient's side and is never inferred from an export, a status code or
+// elapsed time. UNKNOWN is an explicit recorded observation ("we have no
+// information"), which is different from — and must never be confused with —
+// the absence of any delivery row at all.
+enum NotificationDeliveryStatus {
+  SENT_MANUALLY
+  DELIVERED
+  FAILED
+  BOUNCED
+  UNKNOWN
+}
+
+// Immutable, versioned notification content. Rows are NEVER updated or
+// deleted; the only mutation ever applied to a prior row is supersededAt +
+// currentForNotificationId -> null, in the same transaction that inserts its
+// replacement — exactly the FindingTriage / CaseFinding pattern.
+model NotificationRevision {
+  id             Int          @id @default(autoincrement())
+  notificationId Int
+  notification   Notification @relation("NotificationRevisions", fields: [notificationId], references: [id], onDelete: Restrict)
+
+  // 1-based, contiguous, assigned inside the creating transaction. The
+  // composite unique below is what makes two concurrent edits unable to
+  // produce two revision 4s.
+  revisionNumber Int
+
+  // --- Bounded content ----------------------------------------------------
+  // Single-line fields (subject, recipientName, recipientEmail) are rejected
+  // at the service boundary if they contain CR, LF or any other control
+  // character. That is the header-injection guard, enforced at WRITE time so a
+  // malicious value cannot be stored at all, not merely stripped on the way
+  // out (the export builder re-checks anyway).
+  subject             String
+  body                String
+  remediationGuidance String?
+
+  // Recipient information, populated from the bound Organization's contact
+  // record at drafting time where it exists. Deliberately snapshotted onto the
+  // revision rather than joined live: what a reviewer approved must include
+  // WHO it was addressed to, and a later edit of the organization registry
+  // must not silently re-target an approved notification.
+  //
+  // recipientEmail is never emitted verbatim by any read API — the serializer
+  // masks it (see notificationSerializers.maskEmail). It appears in full only
+  // inside the exported artifact, which requires the export capability.
+  recipientName  String?
+  recipientEmail String?
+
+  // INTERNAL analyst working notes. Never exported, never placed in the
+  // artifact, never audited verbatim. Part of the revision (and therefore of
+  // the checksum) because it is part of the record a reviewer sees.
+  analystNotes String?
+
+  // SHA-256 over the canonical bounded content fields only. Deliberately
+  // excludes row ids, timestamps, actor identity, row order and anything
+  // uncontrolled, so it is reproducible from the content alone and can be
+  // re-verified at export time. It is an integrity fingerprint, never a
+  // secret and never a uniqueness key.
+  contentChecksum String
+
+  createdByUserId Int?
+  createdBy       User? @relation("NotificationRevisionAuthor", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  createdAt    DateTime  @default(now())
+  supersededAt DateTime?
+
+  // notificationId while current, null once superseded — "at most one current
+  // revision per notification" as a database unique constraint, using the same
+  // distinct-NULLs mechanism as FindingTriage.currentForFindingId and
+  // CaseFinding.currentLinkKey. No raw SQL, no partial index.
+  currentForNotificationId Int? @unique
+
+  approvedNotifications Notification[]               @relation("NotificationApprovedRevision")
+  lifecycleEvents       NotificationLifecycleEvent[]
+  exports               NotificationExport[]
+  deliveryEvents        NotificationDeliveryEvent[]
+
+  @@unique([notificationId, revisionNumber])
+  @@index([notificationId, createdAt])
+}
+
+// Immutable lifecycle/review timeline. One row per accepted transition or
+// recorded act, written in the SAME transaction as the change it describes, so
+// a notification can never reach a state with no event explaining how it got
+// there. This table is also the permanent approval record: Notification's
+// approval projection is cleared on the next edit, this is not.
+model NotificationLifecycleEvent {
+  id             Int          @id @default(autoincrement())
+  notificationId Int
+  notification   Notification @relation(fields: [notificationId], references: [id], onDelete: Restrict)
+
+  eventType NotificationLifecycleEventType
+  // Null only for DRAFT_CREATED (there is no prior state).
+  fromState NotificationLifecycleState?
+  toState   NotificationLifecycleState
+
+  // THE revision this event concerns. Restrict, and required for every event
+  // type in this phase: an approval that did not name a revision would be the
+  // exact defect this phase exists to prevent.
+  revisionId Int
+  revision   NotificationRevision @relation(fields: [revisionId], references: [id], onDelete: Restrict)
+
+  // Closed machine-readable vocabulary (notificationRules.LIFECYCLE_REASON_CODES)
+  // — never free text, never an exception message.
+  reasonCode String
+
+  // Bounded analyst/reviewer note: the review note on approval, the required
+  // rejection reason on rejection. Stored in full here (it is the defensible
+  // record) but never copied into AuditLog, which records only its length.
+  note String?
+
+  actorUserId Int?
+  actor       User? @relation("NotificationLifecycleActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  occurredAt DateTime
+  createdAt  DateTime @default(now())
+
+  @@index([notificationId, occurredAt])
+  @@index([eventType])
+  @@index([revisionId])
+}
+
+// Immutable record that an artifact was generated and handed to an analyst.
+//
+// The artifact BYTES are deliberately not stored. Persisting the generated
+// message would put constituent-addressed content and a recipient address into
+// a second table with a different retention story, for no gain: the revision
+// it was built from is immutable, the builder is deterministic, and the
+// checksum below proves the bytes an analyst holds are the bytes we produced.
+model NotificationExport {
+  id             Int          @id @default(autoincrement())
+  notificationId Int
+  notification   Notification @relation(fields: [notificationId], references: [id], onDelete: Restrict)
+
+  // The EXACT revision that was exported. Restrict: the content an export was
+  // built from must not vanish while the export record stands.
+  revisionId Int
+  revision   NotificationRevision @relation(fields: [revisionId], references: [id], onDelete: Restrict)
+
+  format NotificationExportFormat
+
+  // SHA-256 over the exact artifact bytes, and the byte length. Together they
+  // let a later dispute establish whether a file someone holds is the one this
+  // system produced, without this system retaining the file.
+  artifactChecksum   String
+  artifactByteLength Int
+
+  // Sanitized download filename ([A-Za-z0-9._-] only, see the export service).
+  // Stored so the audit record and the served Content-Disposition can never
+  // disagree.
+  filename String
+
+  exportedByUserId Int?
+  exportedBy       User? @relation("NotificationExportActor", fields: [exportedByUserId], references: [id], onDelete: SetNull)
+
+  exportedAt DateTime
+  createdAt  DateTime @default(now())
+
+  deliveryEvents NotificationDeliveryEvent[]
+
+  @@index([notificationId, exportedAt])
+  @@index([revisionId])
+}
+
+// Append-only delivery timeline. Rows are never updated or deleted: correcting
+// a mistaken delivery claim means recording a further event, so the original
+// claim and the correction both stay visible.
+//
+// Nothing in this system ever writes a row here on its own. Every row is an
+// explicit human assertion with an explicitly supplied occurredAt — there is no
+// default, no inference from an export, and no time-based transition.
+model NotificationDeliveryEvent {
+  id             Int          @id @default(autoincrement())
+  notificationId Int
+  notification   Notification @relation(fields: [notificationId], references: [id], onDelete: Restrict)
+
+  // The export this observation is about, and the revision that export
+  // carried. Both optional at the schema level (an analyst may record an
+  // observation they cannot tie to one specific download) and both Restrict so
+  // a linked export can never be removed out from under the claim.
+  exportId Int?
+  export   NotificationExport? @relation(fields: [exportId], references: [id], onDelete: Restrict)
+
+  revisionId Int?
+  revision   NotificationRevision? @relation(fields: [revisionId], references: [id], onDelete: Restrict)
+
+  status NotificationDeliveryStatus
+
+  // When the observation actually happened, which is not when it was recorded.
+  // occurredAt is REQUIRED and always caller-supplied (a delivery timeline the
+  // server timestamps for you is a fabricated timeline); recordedAt is
+  // server-captured. Both are kept and never conflated.
+  occurredAt DateTime
+  recordedAt DateTime @default(now())
+
+  // Optional safe reference — an internal ticket id, a mail-client identifier
+  // the analyst chose to record. Stored and displayed as an opaque string and
+  // NEVER dereferenced, fetched or followed by anything in this system, the
+  // same rule as CaseOrganizationResponse.reference. This system never
+  // fabricates a message id of its own.
+  reference String?
+
+  // Bounded analyst note.
+  note String?
+
+  recordedByUserId Int?
+  recordedBy       User? @relation("NotificationDeliveryRecordedBy", fields: [recordedByUserId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([notificationId, occurredAt])
+  @@index([exportId])
+  @@index([status])
 }
