@@ -80,6 +80,7 @@ function createFakeClient() {
   let nextOccurrenceId = 1;
   let nextAuditId = 1;
   let nextIocEnrichmentId = 1;
+  let nextWorkflowId = 1;
 
   const rawReports = new Map();
   const rawReportRows = new Map();
@@ -87,6 +88,11 @@ function createFakeClient() {
   const occurrences = new Map();
   const auditLogs = [];
   const iocEnrichments = new Map();
+  const cases = new Map();
+  const caseFindings = new Map();
+  const caseLifecycleEvents = [];
+  const findingTriages = new Map();
+  const recurrenceReopens = new Map();
 
   const findRawReportBySha = (sha) =>
     [...rawReports.values()].find((r) => r.sourceFileSha256 === sha) || null;
@@ -232,10 +238,96 @@ function createFakeClient() {
         return { ...row };
       }),
     },
+    // Phase 3 — the recurrence-reopen hook that runs after every write above
+    // has committed. Modelled far enough to exercise the real code path
+    // (current links, case state, the composite idempotency key and the
+    // guarded transition), because leaving these tables off the fake would
+    // make every recurrence silently classify as FAILED and the tests below
+    // would then prove only that ingestion survives a broken client.
+    caseFinding: {
+      findMany: vi.fn(async ({ where = {} } = {}) =>
+        [...caseFindings.values()].filter(
+          (row) =>
+            (where.findingId === undefined || row.findingId === where.findingId) &&
+            (where.caseId === undefined || row.caseId === where.caseId) &&
+            (where.state === undefined || row.state === where.state) &&
+            (where.supersededAt === undefined || row.supersededAt === where.supersededAt)
+        )
+      ),
+    },
+    case: {
+      findUnique: vi.fn(async ({ where }) => cases.get(where.id) || null),
+      updateMany: vi.fn(async ({ where, data }) => {
+        const row = cases.get(where.id);
+        if (!row || (where.lifecycleState && row.lifecycleState !== where.lifecycleState)) {
+          return { count: 0 };
+        }
+        applyUpdateData(row, data);
+        return { count: 1 };
+      }),
+    },
+    caseLifecycleEvent: {
+      create: vi.fn(async ({ data }) => {
+        const row = { id: nextWorkflowId++, createdAt: new Date(), ...data };
+        caseLifecycleEvents.push(row);
+        return { ...row };
+      }),
+    },
+    findingTriage: {
+      findUnique: vi.fn(async ({ where }) =>
+        [...findingTriages.values()].find(
+          (row) => row.currentForFindingId === where.currentForFindingId
+        ) || null
+      ),
+      update: vi.fn(async ({ where, data }) => {
+        const row = findingTriages.get(where.id);
+        applyUpdateData(row, data);
+        return { ...row };
+      }),
+      create: vi.fn(async ({ data }) => {
+        const row = { id: nextWorkflowId++, createdAt: new Date(), ...data };
+        findingTriages.set(row.id, row);
+        return { ...row };
+      }),
+    },
+    caseRecurrenceReopen: {
+      findUnique: vi.fn(async ({ where }) => {
+        const key = where.findingOccurrenceId_caseId;
+        return (
+          [...recurrenceReopens.values()].find(
+            (row) =>
+              row.findingOccurrenceId === key.findingOccurrenceId && row.caseId === key.caseId
+          ) || null
+        );
+      }),
+      create: vi.fn(async ({ data }) => {
+        const clash = [...recurrenceReopens.values()].some(
+          (row) =>
+            row.findingOccurrenceId === data.findingOccurrenceId && row.caseId === data.caseId
+        );
+        if (clash) throw prismaError("P2002", "Unique constraint failed on recurrence identity");
+        const row = { id: nextWorkflowId++, createdAt: new Date(), ...data };
+        recurrenceReopens.set(row.id, row);
+        return { ...row };
+      }),
+    },
     $transaction: vi.fn(async (fn) => fn(client)),
   };
 
-  return { client, rawReports, rawReportRows, findings, occurrences, auditLogs, iocEnrichments };
+  return {
+    client,
+    rawReports,
+    rawReportRows,
+    findings,
+    occurrences,
+    auditLogs,
+    iocEnrichments,
+    cases,
+    caseFindings,
+    caseLifecycleEvents,
+    findingTriages,
+    recurrenceReopens,
+  };
 }
 
 const HEADER = "timestamp,ip,port,protocol,hostname,asn,as_name,country_code";
@@ -1148,5 +1240,258 @@ describe("RowEvidenceIntegrityError", () => {
     expect(error).toBeInstanceOf(Error);
     expect(error.name).toBe("RowEvidenceIntegrityError");
     expect(error.message).toMatch(/report 1, row 5/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 3 — recurrence-driven case reopening, integrated into ingestion
+// ---------------------------------------------------------------------------
+//
+// The hook runs LAST, after every RawReport / RawReportRow / Finding /
+// FindingOccurrence write has committed and outside every transaction this
+// pipeline opened. The claims defended here are the isolation contract:
+// ingestion never depends on the reopen succeeding, and re-processing the same
+// report can never reopen a case twice.
+
+const IP_PHASE3 = "203.0.113.70";
+
+/** Seeds one Finding, then closes it so a later report classifies as RECURRED. */
+async function seedClosedFinding(client, findings, ip = IP_PHASE3) {
+  const seedBytes = buildCsv([
+    { timestamp: "2026-01-01T00:00:00Z", ip, port: "3389", protocol: "tcp" },
+  ]);
+  await ingestAccessibleRdpReport(
+    { fileBytes: seedBytes, ...baseUpload({ sourceFileName: "p3-day-1.csv" }) },
+    { client }
+  );
+  const finding = [...findings.values()].find((f) => f.indicatorValue === ip);
+  Object.assign(finding, {
+    status: "CLOSED",
+    closedAt: new Date("2026-01-02T00:00:00Z"),
+    closureReason: "remediated",
+    closedThroughObservedAt: new Date("2026-01-01T00:00:00Z"),
+  });
+  return finding;
+}
+
+/** Links the Finding into a case closed with the given Phase 3 closure reason. */
+function seedLinkedClosedCase(fake, finding, closureReason) {
+  const caseId = 900 + fake.cases.size + 1;
+  fake.cases.set(caseId, {
+    id: caseId,
+    title: "Phase 3 case",
+    organizationId: 1,
+    lifecycleState: "CLOSED",
+    closureReason,
+    closedAt: new Date("2026-01-02T00:00:00Z"),
+    closedByUserId: 7,
+    reopenedCount: 0,
+    lastReopenedAt: null,
+    lastReopenTrigger: null,
+  });
+  const linkId = 800 + fake.caseFindings.size + 1;
+  fake.caseFindings.set(linkId, {
+    id: linkId,
+    caseId,
+    findingId: finding.id,
+    state: "LINKED",
+    organizationId: 1,
+    supersededAt: null,
+    currentLinkKey: caseId + ":" + finding.id,
+  });
+  return caseId;
+}
+
+function laterReport(client, name = "p3-day-2.csv", ip = IP_PHASE3) {
+  const bytes = buildCsv([
+    { timestamp: "2026-01-10T00:00:00Z", ip, port: "3389", protocol: "tcp" },
+  ]);
+  return ingestAccessibleRdpReport(
+    { fileBytes: bytes, ...baseUpload({ sourceFileName: name }) },
+    { client }
+  );
+}
+
+describe("ingestAccessibleRdpReport — Phase 3 recurrence-driven case reopening", () => {
+  it("reopens a REMEDIATED-closed case linked to the recurring Finding", async () => {
+    const fake = createFakeClient();
+    const finding = await seedClosedFinding(fake.client, fake.findings);
+    const caseId = seedLinkedClosedCase(fake, finding, "REMEDIATED");
+
+    const result = await laterReport(fake.client);
+
+    expect(result.outcome).toBe(INGESTION_OUTCOMES.PROCESSED);
+    expect(result.findingCounts.RECURRED).toBe(1);
+
+    const reopened = fake.cases.get(caseId);
+    expect(reopened).toMatchObject({
+      lifecycleState: "OPEN",
+      closureReason: null,
+      closedAt: null,
+      lastReopenTrigger: "RECURRENCE",
+      reopenedCount: 1,
+    });
+
+    // The ledger row is keyed by the SPECIFIC occurrence that caused it.
+    const ledger = [...fake.recurrenceReopens.values()];
+    expect(ledger).toHaveLength(1);
+    expect(ledger[0]).toMatchObject({ caseId, findingId: finding.id, outcome: "REOPENED" });
+
+    const occurrence = [...fake.occurrences.values()].find((o) => o.action === "RECURRED");
+    expect(ledger[0].findingOccurrenceId).toBe(occurrence.id);
+
+    // And the lifecycle event that explains it, with no actor: this is a
+    // consequence of new evidence, not the uploading analyst's decision.
+    const event = fake.caseLifecycleEvents.find((e) => e.eventType === "REOPENED");
+    expect(event).toMatchObject({
+      caseId,
+      fromState: "CLOSED",
+      toState: "OPEN",
+      reasonCode: "REOPENED_BY_RECURRENCE",
+      actorUserId: null,
+    });
+  });
+
+  it("escalates the recurring Finding when that records a real change", async () => {
+    const fake = createFakeClient();
+    const finding = await seedClosedFinding(fake.client, fake.findings);
+    seedLinkedClosedCase(fake, finding, "REMEDIATED");
+
+    await laterReport(fake.client);
+
+    const triage = [...fake.findingTriages.values()];
+    expect(triage).toHaveLength(1);
+    expect(triage[0]).toMatchObject({
+      findingId: finding.id,
+      decision: "ESCALATED",
+      source: "RECURRENCE_REOPEN",
+    });
+  });
+
+  it("never auto-reopens a FALSE_POSITIVE closure, and ledgers the refusal", async () => {
+    const fake = createFakeClient();
+    const finding = await seedClosedFinding(fake.client, fake.findings);
+    const caseId = seedLinkedClosedCase(fake, finding, "FALSE_POSITIVE");
+
+    await laterReport(fake.client);
+
+    expect(fake.cases.get(caseId)).toMatchObject({
+      lifecycleState: "CLOSED",
+      closureReason: "FALSE_POSITIVE",
+      reopenedCount: 0,
+    });
+    const ledger = [...fake.recurrenceReopens.values()];
+    expect(ledger[0].outcome).toBe("SKIPPED_CLOSURE_REASON_NOT_REMEDIATED");
+    expect(fake.caseLifecycleEvents.filter((e) => e.eventType === "REOPENED")).toHaveLength(0);
+  });
+
+  // Re-uploading the identical file short-circuits as a duplicate long before
+  // the reopen hook ever runs, so it cannot reopen a second time.
+  it("is idempotent: re-uploading the same report reopens nothing further", async () => {
+    const fake = createFakeClient();
+    const finding = await seedClosedFinding(fake.client, fake.findings);
+    const caseId = seedLinkedClosedCase(fake, finding, "REMEDIATED");
+
+    await laterReport(fake.client);
+    // Re-close it so a second reopen would be plainly visible if one happened.
+    Object.assign(fake.cases.get(caseId), {
+      lifecycleState: "CLOSED",
+      closureReason: "REMEDIATED",
+    });
+
+    const replay = await laterReport(fake.client);
+
+    expect(replay.outcome).toBe(INGESTION_OUTCOMES.DUPLICATE_COMPLETED);
+    expect(fake.cases.get(caseId).lifecycleState).toBe("CLOSED");
+    expect(fake.cases.get(caseId).reopenedCount).toBe(1);
+    expect([...fake.recurrenceReopens.values()]).toHaveLength(1);
+  });
+
+  it("audits the aggregate with counts only — never an indicator", async () => {
+    const fake = createFakeClient();
+    const finding = await seedClosedFinding(fake.client, fake.findings);
+    seedLinkedClosedCase(fake, finding, "REMEDIATED");
+
+    await laterReport(fake.client);
+
+    const [completed] = fake.auditLogs.filter(
+      (e) => e.action === "case.recurrence.reopen.completed"
+    );
+    expect(completed.outcome).toBe("SUCCESS");
+    expect(completed.after).toMatchObject({
+      evaluatedPairCount: 1,
+      reopenedCaseCount: 1,
+      failedCount: 0,
+    });
+    expect(JSON.stringify(completed)).not.toContain(IP_PHASE3);
+  });
+
+  // The isolation contract. A total reopen failure must leave a fully valid
+  // ingested report with fully valid recurrence evidence and simply no reopen.
+  it("never rolls back ingestion or recurrence evidence when reopening fails", async () => {
+    const fake = createFakeClient();
+    const finding = await seedClosedFinding(fake.client, fake.findings);
+    const caseId = seedLinkedClosedCase(fake, finding, "REMEDIATED");
+
+    const leak = 'relation "CaseRecurrenceReopen" does not exist';
+    fake.client.caseRecurrenceReopen.create.mockImplementation(async () => {
+      throw new Error(leak);
+    });
+
+    const result = await laterReport(fake.client);
+
+    // Ingestion completed in full.
+    expect(result.outcome).toBe(INGESTION_OUTCOMES.PROCESSED);
+    expect(result.findingCounts.RECURRED).toBe(1);
+    expect([...fake.rawReports.values()].every((r) => r.status === "COMPLETED")).toBe(true);
+    expect(fake.findings.get(finding.id).status).toBe("OPEN");
+    expect([...fake.occurrences.values()].some((o) => o.action === "RECURRED")).toBe(true);
+
+    // No ledger row was written, so a later re-run is free to re-evaluate this
+    // pair rather than being permanently suppressed by a failed attempt.
+    expect([...fake.recurrenceReopens.values()]).toHaveLength(0);
+    expect(caseId).toBeGreaterThan(0);
+    // NOTE: this fake's $transaction does not roll back (it simply invokes the
+    // callback), so the case's own state after a mid-transaction failure is not
+    // assertable here. That the whole reopen transaction rolls back as a unit
+    // is proven against a real engine in
+    // tests/integration/caseWorkflowConcurrency.test.js, and against a
+    // rollback-modelling fake in tests/unit/caseRecurrenceReopenService.test.js.
+
+    // The failure is audited, and the raw error text never reaches AuditLog.
+    const [failure] = fake.auditLogs.filter((e) => e.action === "case.recurrence.reopen.failed");
+    expect(failure.outcome).toBe("FAILURE");
+    expect(failure.after.failedCount).toBe(1);
+    expect(JSON.stringify(fake.auditLogs)).not.toContain(leak);
+  });
+
+  it("survives a Finding that is evidence in no case at all", async () => {
+    const fake = createFakeClient();
+    await seedClosedFinding(fake.client, fake.findings);
+
+    const result = await laterReport(fake.client);
+
+    expect(result.outcome).toBe(INGESTION_OUTCOMES.PROCESSED);
+    expect([...fake.recurrenceReopens.values()]).toHaveLength(0);
+    const [completed] = fake.auditLogs.filter(
+      (e) => e.action === "case.recurrence.reopen.completed"
+    );
+    expect(completed.after).toMatchObject({ evaluatedPairCount: 0, reopenedCaseCount: 0 });
+  });
+
+  it("runs no reopen processing at all for a report with no recurrence", async () => {
+    const fake = createFakeClient();
+    const bytes = buildCsv([
+      { timestamp: "2026-01-01T00:00:00Z", ip: "203.0.113.71", port: "3389", protocol: "tcp" },
+    ]);
+
+    await ingestAccessibleRdpReport(
+      { fileBytes: bytes, ...baseUpload({ sourceFileName: "p3-fresh.csv" }) },
+      { client: fake.client }
+    );
+
+    expect(fake.auditLogs.filter((e) => e.action.startsWith("case.recurrence.reopen"))).toHaveLength(
+      0
+    );
   });
 });

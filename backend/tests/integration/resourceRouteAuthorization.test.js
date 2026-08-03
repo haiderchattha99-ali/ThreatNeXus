@@ -59,10 +59,54 @@ function tableStub(key) {
   };
 }
 
+// Phase 3 added six append-only workflow tables that the case READ path
+// (caseWorkflowReadService) and the case DELETE guard both query. They are
+// empty in this file — its subject is the authorization matrix, not the
+// workflow — so each is stubbed to the shape those callers actually use.
+// Returning empty results is honest here: a legacy, non-organization-bound
+// case genuinely has no workflow history.
+function emptyWorkflowTableStub() {
+  return {
+    findMany: async () => [],
+    findUnique: async () => null,
+    findFirst: async () => null,
+    count: async () => 0,
+    groupBy: async () => [],
+    create: async ({ data }) => ({ id: store.nextId++, ...data }),
+    update: async ({ where, data }) => ({ id: where.id, ...data }),
+    updateMany: async () => ({ count: 0 }),
+  };
+}
+
+// Phase 3 requires every new case to name an existing Organization. This row is
+// resolvable by id WITHOUT living in store.organizations, deliberately: the
+// organizations group's own tests assert exact table lengths, and seeding a
+// real row for the case group to point at would silently change every one of
+// them.
+const CASE_ORGANIZATION = Object.freeze({
+  id: 9001,
+  name: "Acme Bank",
+  sector: "FINANCE",
+});
+
+const organizationTable = tableStub("organizations");
+
 const prismaStub = {
   case: tableStub("cases"),
   notification: tableStub("notifications"),
-  organization: tableStub("organizations"),
+  organization: {
+    ...organizationTable,
+    findUnique: async (args) =>
+      args.where.id === CASE_ORGANIZATION.id
+        ? { ...CASE_ORGANIZATION }
+        : organizationTable.findUnique(args),
+  },
+  caseFinding: emptyWorkflowTableStub(),
+  caseLifecycleEvent: emptyWorkflowTableStub(),
+  caseOrganizationResponse: emptyWorkflowTableStub(),
+  caseClosureRequest: emptyWorkflowTableStub(),
+  caseRecurrenceReopen: emptyWorkflowTableStub(),
+  findingTriage: emptyWorkflowTableStub(),
   auditLog: {
     create: async ({ data }) => {
       const row = { id: store.auditLogs.length + 1, ...data };
@@ -70,6 +114,13 @@ const prismaStub = {
       return row;
     },
   },
+  // Phase 3 routes case creation through caseLifecycleService.createCase so
+  // every case gets its server-generated reference and CREATED lifecycle event
+  // atomically. That runs inside runSerializable, so the stub needs a
+  // transaction that simply hands back itself — there is nothing to roll back
+  // in an in-memory store, and this file asserts authorization, not atomicity
+  // (the real-PostgreSQL suites cover that).
+  $transaction: async (fn) => fn(prismaStub),
 };
 
 let originalEnv;
@@ -133,11 +184,15 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+// Phase 3 makes organizationId required on create — a case belongs to exactly
+// one Organization. The legacy free-text `organization` column is preserved
+// alongside it, unchanged, so pre-Phase-3 consumers see no difference.
 const VALID_CASE = {
   title: "Exposed RDP on constituent host",
   threatType: "Accessible RDP",
   organization: "Acme Bank",
   analyst: "a.analyst",
+  organizationId: CASE_ORGANIZATION.id,
 };
 
 const VALID_NOTIFICATION = {
@@ -155,6 +210,15 @@ const VALID_ORGANIZATION = {
 
 // Each group: the mounted path, the capability that gates it, the roles that
 // hold that capability, a valid create body, and a seeder for the stub table.
+//
+// Two optional per-group overrides exist for Phase 3:
+//   readDenied      — roles refused the READ actions, when that differs from
+//                     `denied`. The case group splits reads (read:cases, held
+//                     by every role) from writes (manage:cases, ADMIN/ANALYST),
+//                     so its read-denied set is empty.
+//   refusedActions  — actions that are refused for a NON-authorization reason
+//                     even to a role holding the capability. DELETE /api/cases
+//                     is a compatibility tombstone answering 409.
 const GROUPS = [
   {
     name: "cases",
@@ -162,10 +226,18 @@ const GROUPS = [
     capability: "manage:cases",
     allowed: ["ADMIN", "ANALYST"],
     denied: ["REVIEWER", "VIEWER"],
+    readDenied: [],
+    refusedActions: { delete: 409 },
     body: VALID_CASE,
     table: "cases",
     seed: () => {
-      const row = { id: store.nextId++, ...VALID_CASE, priority: "Medium", status: "Open" };
+      const row = {
+        id: store.nextId++,
+        ...VALID_CASE,
+        priority: "Medium",
+        status: "Open",
+        lifecycleState: "OPEN",
+      };
       store.cases.push(row);
       return row;
     },
@@ -262,12 +334,26 @@ describe.each(GROUPS)("$name routes", (group) => {
     });
   });
 
+  const refusedActions = group.refusedActions || {};
+  const readDenied = group.readDenied === undefined ? group.denied : group.readDenied;
+
   describe("roles holding the capability", () => {
     it.each(
       group.allowed.flatMap((role) => ALL_ACTIONS.map((action) => [role, action]))
-    )("%s can %s", async (role, action) => {
+    )("%s reaches %s", async (role, action) => {
       const seeded = group.seed();
       const res = await callAs(role, group, action, seeded.id);
+
+      const refusalStatus = refusedActions[action];
+      if (refusalStatus) {
+        // Not an authorization failure — the role DOES hold the capability and
+        // still cannot perform the action, because the record is permanent.
+        // The row must survive.
+        expect(res.status).toBe(refusalStatus);
+        expect(res.body.success).toBe(false);
+        expect(store[group.table]).toHaveLength(1);
+        return;
+      }
 
       expect([200, 201]).toContain(res.status);
       expect(res.body.success).toBe(true);
@@ -276,7 +362,7 @@ describe.each(GROUPS)("$name routes", (group) => {
 
   describe("roles without the capability", () => {
     it.each(
-      group.denied.flatMap((role) => ALL_ACTIONS.map((action) => [role, action]))
+      group.denied.flatMap((role) => WRITE_ACTIONS.map((action) => [role, action]))
     )("%s is denied %s with 403", async (role, action) => {
       const seeded = group.seed();
       const res = await callAs(role, group, action, seeded.id);
@@ -284,6 +370,35 @@ describe.each(GROUPS)("$name routes", (group) => {
       expect(res.status).toBe(403);
       expect(res.body.message).toBe("Forbidden.");
     });
+
+    if (readDenied.length > 0) {
+      it.each(
+        readDenied.flatMap((role) => READ_ACTIONS.map((action) => [role, action]))
+      )("%s is denied %s with 403", async (role, action) => {
+        const seeded = group.seed();
+        const res = await callAs(role, group, action, seeded.id);
+
+        expect(res.status).toBe(403);
+        expect(res.body.message).toBe("Forbidden.");
+      });
+    } else {
+      // Phase 3: read:cases is a read-only grant held by every role, so the
+      // roles refused every WRITE above can still read. This is the whole point
+      // of splitting the router's single manage:cases guard — a REVIEWER must
+      // be able to read a case in order to decide its closure, and a VIEWER
+      // gets read-only oversight.
+      it("roles refused every write may still read", async () => {
+        const seeded = group.seed();
+
+        // eslint-disable-next-line no-restricted-syntax
+        for (const role of group.denied) {
+          // eslint-disable-next-line no-await-in-loop
+          expect((await callAs(role, group, "list", seeded.id)).status).toBe(200);
+          // eslint-disable-next-line no-await-in-loop
+          expect((await callAs(role, group, "read", seeded.id)).status).toBe(200);
+        }
+      });
+    }
 
     it("leaves stored data untouched when denied", async () => {
       const seeded = group.seed();
@@ -344,16 +459,27 @@ describe("separation of duties across the three groups", () => {
     expect((await callAs("ANALYST", GROUPS[2], "list")).status).toBe(403);
   });
 
-  it("REVIEWER reaches notifications but not cases or organizations", async () => {
+  // Phase 3 changed exactly one cell of this matrix: REVIEWER and VIEWER can now
+  // READ cases. Neither gained any case WRITE — that stays manage:cases, which
+  // neither holds.
+  it("REVIEWER reaches notifications, reads cases, and writes neither cases nor organizations", async () => {
     expect((await callAs("REVIEWER", GROUPS[1], "list")).status).toBe(200);
-    expect((await callAs("REVIEWER", GROUPS[0], "list")).status).toBe(403);
+    expect((await callAs("REVIEWER", GROUPS[0], "list")).status).toBe(200);
+    expect((await callAs("REVIEWER", GROUPS[0], "create")).status).toBe(403);
     expect((await callAs("REVIEWER", GROUPS[2], "list")).status).toBe(403);
   });
 
-  it("VIEWER reaches none of the three", async () => {
+  it("VIEWER reads cases only, and writes nothing anywhere", async () => {
+    expect((await callAs("VIEWER", GROUPS[0], "list")).status).toBe(200);
+    expect((await callAs("VIEWER", GROUPS[1], "list")).status).toBe(403);
+    expect((await callAs("VIEWER", GROUPS[2], "list")).status).toBe(403);
+
+    // eslint-disable-next-line no-restricted-syntax
     for (const group of GROUPS) {
-      expect((await callAs("VIEWER", group, "list")).status).toBe(403);
+      // eslint-disable-next-line no-await-in-loop
+      expect((await callAs("VIEWER", group, "create")).status).toBe(403);
     }
+    expect(store.cases).toHaveLength(0);
   });
 
   it("ADMIN reaches all three", async () => {
@@ -364,25 +490,88 @@ describe("separation of duties across the three groups", () => {
 });
 
 describe("write actions are audited", () => {
-  it("records case.create / case.update / case.delete with SUCCESS", async () => {
+  // Phase 3 adds `case.created` (written by caseLifecycleService inside the
+  // creation transaction, alongside the server-generated reference and the
+  // CREATED lifecycle event) and turns `case.delete` into a DENIED tombstone.
+  // The legacy `case.create` event is deliberately still emitted so
+  // pre-Phase-3 audit consumers see no change.
+  it("records case.created / case.create / case.update with SUCCESS", async () => {
     const created = await callAs("ANALYST", GROUPS[0], "create");
     expect(created.status).toBe(201);
 
     const id = created.body.data.id;
     await callAs("ANALYST", GROUPS[0], "update", id);
-    await callAs("ANALYST", GROUPS[0], "delete", id);
 
     const actions = store.auditLogs
       .filter((entry) => entry.outcome === "SUCCESS")
       .map((entry) => entry.action);
 
-    expect(actions).toEqual(["case.create", "case.update", "case.delete"]);
+    expect(actions).toEqual(["case.created", "case.create", "case.update"]);
     store.auditLogs
       .filter((entry) => entry.action.startsWith("case."))
       .forEach((entry) => {
         expect(entry.entityType).toBe("Case");
         expect(entry.entityId).toBe(String(id));
       });
+  });
+
+  it("records a DENIED audit for the case-deletion tombstone and deletes nothing", async () => {
+    const seeded = GROUPS[0].seed();
+
+    const res = await callAs("ADMIN", GROUPS[0], "delete", seeded.id);
+
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({
+      success: false,
+      code: "CASE_DELETION_NOT_SUPPORTED",
+    });
+    expect(store.cases).toHaveLength(1);
+
+    const [refusal] = store.auditLogs.filter((entry) => entry.action === "case.delete");
+    expect(refusal.outcome).toBe("DENIED");
+    expect(refusal.entityId).toBe(String(seeded.id));
+    expect(refusal.reason).toContain("never hard-deleted");
+  });
+
+  // The refusal must be identical for a case that does not exist, or the
+  // endpoint becomes an existence oracle for anyone holding manage:cases.
+  it("refuses deletion of an unknown case identically, disclosing nothing", async () => {
+    const seeded = GROUPS[0].seed();
+
+    const known = await callAs("ADMIN", GROUPS[0], "delete", seeded.id);
+    const unknown = await callAs("ADMIN", GROUPS[0], "delete", 424242);
+
+    expect(unknown.status).toBe(known.status);
+    expect(unknown.body).toEqual(known.body);
+  });
+
+  it("rejects a create with no organizationId, writing nothing", async () => {
+    const { organizationId, ...withoutOrganizationId } = VALID_CASE;
+    expect(organizationId).toBe(CASE_ORGANIZATION.id);
+
+    const res = await request(app)
+      .post("/api/cases")
+      .set("Authorization", `Bearer ${tokens.ANALYST}`)
+      .send(withoutOrganizationId);
+
+    expect(res.status).toBe(400);
+    expect(res.body.fields).toEqual(["organizationId"]);
+    expect(store.cases).toHaveLength(0);
+
+    const [failure] = store.auditLogs.filter((entry) => entry.action === "case.create");
+    expect(failure.outcome).toBe("FAILURE");
+    expect(failure.reason).toContain("organizationId");
+  });
+
+  it("rejects a create naming an organization that does not exist", async () => {
+    const res = await request(app)
+      .post("/api/cases")
+      .set("Authorization", `Bearer ${tokens.ANALYST}`)
+      .send({ ...VALID_CASE, organizationId: 777777 });
+
+    expect(res.status).toBe(400);
+    expect(res.body.fields).toEqual(["organizationId"]);
+    expect(store.cases).toHaveLength(0);
   });
 
   it("records notification write events", async () => {
@@ -426,13 +615,14 @@ describe("write actions are audited", () => {
 
   it("records a FAILURE audit for a write against a missing record", async () => {
     const res = await request(app)
-      .delete("/api/cases/999")
-      .set("Authorization", `Bearer ${tokens.ADMIN}`);
+      .put("/api/cases/999")
+      .set("Authorization", `Bearer ${tokens.ADMIN}`)
+      .send({ status: "Closed" });
 
     expect(res.status).toBe(404);
 
     const [failure] = store.auditLogs.filter(
-      (entry) => entry.action === "case.delete"
+      (entry) => entry.action === "case.update"
     );
     expect(failure.outcome).toBe("FAILURE");
     expect(failure.reason).toContain("not found");

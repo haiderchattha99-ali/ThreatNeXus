@@ -59,6 +59,20 @@ model User {
   // column is nullable only so deleting a user cannot destroy the history.
   vulnerabilityAssociations FindingVulnerability[]       @relation("FindingVulnerabilityActor")
   vulnerabilityJobs         VulnerabilityEnrichmentJob[] @relation("VulnerabilityJobActor")
+
+  // Phase 3 — same SetNull-actor convention throughout. Every analyst-workflow
+  // act (triage, link, lifecycle transition, organization response, closure
+  // request, closure review) always carries an actor at write time; the
+  // columns are nullable only so deleting a User nulls the attribution instead
+  // of destroying the defensible history that justifies a closure.
+  triageDecisions        FindingTriage[]            @relation("FindingTriageActor")
+  casesCreated           Case[]                     @relation("CaseCreatedBy")
+  casesClosed            Case[]                     @relation("CaseClosedBy")
+  caseFindingLinks       CaseFinding[]              @relation("CaseFindingActor")
+  caseLifecycleEvents    CaseLifecycleEvent[]       @relation("CaseLifecycleActor")
+  caseResponsesRecorded  CaseOrganizationResponse[] @relation("CaseResponseRecordedBy")
+  closureRequestsMade    CaseClosureRequest[]       @relation("CaseClosureRequestedBy")
+  closureRequestsDecided CaseClosureRequest[]       @relation("CaseClosureReviewedBy")
 }
 
 model Threat {
@@ -99,6 +113,20 @@ model AuditLog {
   @@index([action])
 }
 
+// EXTENDED in Phase 3 (analyst workflow) — every Phase 3 column is additive
+// and nullable or defaulted, so every pre-existing row stays valid without a
+// data migration and the legacy free-text `organization`/`status`/`analyst`
+// columns keep working exactly as before.
+//
+// Two status concepts now coexist deliberately and are NOT merged:
+//   - `status`         — the legacy free-text label the Phase 0 UI writes
+//                        ("Open"/"Investigating"/"Resolved"/"Closed"). Kept
+//                        for backwards compatibility; never authoritative.
+//   - `lifecycleState` — the Phase 3 enum the defensible workflow is driven
+//                        by. Every transition of THIS column is guarded and
+//                        writes an immutable CaseLifecycleEvent.
+// Collapsing them would silently let a free-text UI edit close a case without
+// reviewer approval, which is exactly what Phase 3 exists to prevent.
 model Case {
   id           Int      @id @default(autoincrement())
   title        String
@@ -110,6 +138,53 @@ model Case {
   description  String?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
+
+  // --- Phase 3: organization binding -------------------------------------
+  // Server-generated, human-readable, globally unique ("TNX-2026-000042").
+  // Nullable only because rows created before Phase 3 have none; every case
+  // created from now on receives one inside the creation transaction.
+  caseReference String? @unique
+
+  // A Phase 3 case belongs to exactly ONE Organization. Restrict: an
+  // organization that owns case history must never be deleted out from under
+  // it. Null means a legacy, non-organization-bound case — such a case is
+  // readable but every Phase 3 workflow operation refuses it.
+  // Named `ownerOrganization` rather than `organization` because the legacy
+  // free-text `organization` String column already owns that name and must be
+  // preserved verbatim for backwards compatibility.
+  organizationId    Int?
+  ownerOrganization Organization? @relation("CaseOrganization", fields: [organizationId], references: [id], onDelete: Restrict)
+
+  // --- Phase 3: authoritative lifecycle ----------------------------------
+  lifecycleState CaseLifecycleState @default(OPEN)
+
+  createdByUserId Int?
+  createdBy       User? @relation("CaseCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  // Current-closure projection. These describe the case's CURRENT closure and
+  // are cleared on reopen — the permanent record of every closure lives in
+  // CaseLifecycleEvent + CaseClosureRequest, never only here.
+  closedAt       DateTime?
+  closureReason  CaseClosureReason?
+  closedByUserId Int?
+  closedBy       User?              @relation("CaseClosedBy", fields: [closedByUserId], references: [id], onDelete: SetNull)
+
+  // Reopen projection, same rule: evidence lives in CaseLifecycleEvent and
+  // CaseRecurrenceReopen; these exist so a list view can badge a case without
+  // joining history.
+  lastReopenedAt    DateTime?
+  lastReopenTrigger CaseReopenTrigger?
+  reopenedCount     Int                @default(0)
+
+  findingLinks          CaseFinding[]
+  lifecycleEvents       CaseLifecycleEvent[]
+  organizationResponses CaseOrganizationResponse[]
+  closureRequests       CaseClosureRequest[]
+  recurrenceReopens     CaseRecurrenceReopen[]
+  triageDecisions       FindingTriage[]            @relation("FindingTriageCase")
+
+  @@index([lifecycleState])
+  @@index([organizationId, lifecycleState])
 }
 
 model Notification {
@@ -141,6 +216,12 @@ model Organization {
 
   assetMappings     AssetMapping[]
   findingOwnerships FindingOwnership[]
+
+  // Phase 3 — an organization-bound case and the ownership snapshot each link
+  // was accepted under. Both FKs are Restrict: an Organization that owns case
+  // or link history must never be deleted out from under that history.
+  cases            Case[]        @relation("CaseOrganization")
+  caseFindingLinks CaseFinding[] @relation("CaseFindingOrganization")
 }
 
 // ===========================================================================
@@ -301,6 +382,17 @@ model Finding {
   // CVE-X, and why" is evidence, not a cache.
   vulnerabilityAssociations FindingVulnerability[]
 
+  // Phase 3 — append-only analyst triage history and append-only case-link
+  // history. Restrict, for the same reason as every other Phase 1/2 history
+  // table hanging off Finding: "an analyst decided this was escalated /
+  // dismissed, and why" and "this Finding was the evidence in that case" are
+  // the record that makes a closure defensible, and must never be orphaned.
+  triageHistory FindingTriage[]
+  caseLinks     CaseFinding[]
+
+  // Phase 3 — the recurrence-driven reopen ledger keyed on this Finding.
+  caseRecurrenceReopens CaseRecurrenceReopen[]
+
   // The locked identity key. Its index also covers indicatorValue-prefixed
   // lookups, so no separate indicatorValue index is added.
   @@unique([indicatorValue, port, protocol, reportType], name: "finding_identity")
@@ -322,6 +414,11 @@ model FindingOccurrence {
   createdAt   DateTime                @default(now())
 
   rows RawReportRow[]
+
+  // Phase 3 — the recurrence-driven case-reopen ledger keyed on this exact
+  // occurrence (see CaseRecurrenceReopen). Restrict: the reopen decision is
+  // only defensible while the occurrence that caused it still exists.
+  caseRecurrenceReopens CaseRecurrenceReopen[]
 
   // One lifecycle occurrence per finding per report. The composite covers
   // findingId-prefixed lookups; rawReportId needs its own index.
@@ -1154,4 +1251,395 @@ model VulnerabilityProviderResult {
   @@unique([jobId, provider])
   // Freshness lookup for the risk snapshot.
   @@index([provider, status, expiresAt])
+}
+
+// ===========================================================================
+// Phase 3 — Defensible analyst workflow.
+//
+// Additive only. Six new models and ten new enums. The existing Case model
+// is EXTENDED (nullable/defaulted columns only), never duplicated; Notification
+// is untouched entirely. No column on any Phase 0/1/2 model is altered or
+// removed — the only edits elsewhere are the additive Case columns above and
+// virtual back-relations on User / Organization / Finding / FindingOccurrence.
+//
+// ---------------------------------------------------------------------------
+// The whole phase is append-only evidence with one-current-row projections
+// ---------------------------------------------------------------------------
+// FindingTriage.currentForFindingId, CaseFinding.currentLinkKey and
+// CaseClosureRequest.activeCaseId are all the SAME distinct-NULLs mechanism
+// already used by FindingOwnership.currentForFindingId (D-006),
+// IocEnrichment.activeCacheKey (D-007), RiskScore.currentForFindingId and
+// FindingVulnerability.currentAssociationKey: PostgreSQL treats multiple NULLs
+// in a unique index as distinct, so unlimited history rows coexist while at
+// most one row is "current". No raw SQL, no partial index.
+//
+// CaseLifecycleEvent, CaseOrganizationResponse and CaseRecurrenceReopen have no
+// current-row pointer at all because nothing about them is ever superseded —
+// they are pure immutable timelines.
+//
+// ---------------------------------------------------------------------------
+// Nothing here closes a case on its own
+// ---------------------------------------------------------------------------
+// A REMEDIATED organization response is a CLAIM by the affected party, not
+// proof. It can never close a case by itself: closure always requires an
+// explicit CaseClosureRequest by an ADMIN/ANALYST and an explicit approval by a
+// REVIEWER/ADMIN, and a REMEDIATED closure additionally requires that such a
+// response actually exists (recorded as supportingResponseId). This is the
+// separation of duties BUILD_PLAN.md requires, expressed in the schema.
+//
+// ---------------------------------------------------------------------------
+// There is no hard-delete path
+// ---------------------------------------------------------------------------
+// Every FK from this section onto Case / Finding / FindingOccurrence /
+// Organization is Restrict; every actor FK is SetNull. Deleting a user nulls
+// attribution but never destroys the record that justified a decision, and a
+// case carrying any workflow history simply cannot be removed.
+// ===========================================================================
+
+// Analyst triage decision on a Finding. Deliberately SEPARATE from
+// FindingStatus (OPEN/CLOSED): FindingStatus is the exposure state driven by
+// observation evidence, triage is the analyst judgement about what to do with
+// it. A Finding can be OPEN and DISMISSED, or CLOSED and ESCALATED —
+// collapsing the two would make "we decided to ignore this" indistinguishable
+// from "it stopped being observed".
+//
+// The absence of any FindingTriage row means UNTRIAGED. That is deliberately
+// NOT an enum value: an enum member would need a row to express it, and
+// writing a row would mean every Finding ever ingested acquires triage history
+// it never actually received.
+enum FindingTriageDecision {
+  IN_REVIEW
+  ESCALATED
+  DISMISSED
+}
+
+// What caused a triage row. ANALYST_DECISION is an explicit human act through
+// the triage endpoint; the other two are system consequences of a human act
+// elsewhere (linking evidence into a case, a recurrence reopening one) and are
+// kept distinguishable so an audit can tell an analyst own judgement from a
+// workflow side effect.
+enum FindingTriageSource {
+  ANALYST_DECISION
+  CASE_LINK
+  RECURRENCE_REOPEN
+}
+
+// The authoritative case lifecycle. CLOSURE_PENDING is a real state, not a
+// flag: while a case sits in it the closure is neither in force nor discarded,
+// and only a reviewer decision moves it out.
+enum CaseLifecycleState {
+  OPEN
+  WAITING_FOR_ORG
+  CLOSURE_PENDING
+  CLOSED
+}
+
+// Immutable lifecycle event kinds. CREATED is emitted once per case so the
+// timeline is complete from the first instant and never starts mid-story.
+enum CaseLifecycleEventType {
+  CREATED
+  STATE_CHANGED
+  CLOSURE_REQUESTED
+  CLOSURE_APPROVED
+  CLOSURE_REJECTED
+  REOPENED
+}
+
+// Whether a Finding is currently evidence in a case. UNLINKED is a retraction,
+// never a delete: the history row survives so "this Finding was evidence in
+// that case between these two instants" stays answerable after the fact.
+enum CaseFindingLinkState {
+  LINKED
+  UNLINKED
+}
+
+// What the affected organization told us. NO_RESPONSE is an explicit recorded
+// observation ("we chased, nothing came back"), which is different from — and
+// must never be confused with — the absence of any response row at all.
+enum OrganizationResponseType {
+  ACKNOWLEDGED
+  INVESTIGATING
+  REMEDIATED
+  DISPUTED
+  NO_RESPONSE
+  OTHER
+}
+
+// Why a case was closed. Only REMEDIATED is treated as "the exposure was
+// actually fixed", which is why it is the ONLY reason a later recurrence may
+// automatically reopen: reopening a FALSE_POSITIVE or ACCEPTED_RISK closure on
+// the next observation would re-litigate a decision that was already made
+// knowing the finding would keep being observed.
+enum CaseClosureReason {
+  REMEDIATED
+  FALSE_POSITIVE
+  ACCEPTED_RISK
+  DUPLICATE
+  OTHER
+}
+
+// Closure-request review state. Terminal states are never rewritten — a case
+// that is reopened later gets a NEW request if it is to be closed again.
+enum CaseClosureRequestState {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+// How a case came to be reopened. RECURRENCE is the automatic path (a newer
+// RECURRED FindingOccurrence on linked evidence); MANUAL is an explicit
+// analyst act with its own recorded reason.
+enum CaseReopenTrigger {
+  MANUAL
+  RECURRENCE
+}
+
+// Outcome of evaluating ONE (recurrence occurrence, case) pair. Every
+// evaluation is recorded, including the ones that decided NOT to reopen —
+// that is what makes repeated processing idempotent AND leaves evidence that
+// the rule was actually applied rather than silently skipped.
+enum CaseRecurrenceReopenOutcome {
+  REOPENED
+  SKIPPED_NOT_CLOSED
+  SKIPPED_CLOSURE_REASON_NOT_REMEDIATED
+}
+
+// Append-only triage history for a Finding. Every decision inserts a new row;
+// existing rows are NEVER updated or deleted (only supersededAt /
+// currentForFindingId change on the row being superseded, in the same
+// transaction that inserts its replacement).
+model FindingTriage {
+  id        Int     @id @default(autoincrement())
+  findingId Int
+  finding   Finding @relation(fields: [findingId], references: [id], onDelete: Restrict)
+
+  decision FindingTriageDecision
+  source   FindingTriageSource   @default(ANALYST_DECISION)
+
+  // Required by the service layer for DISMISSED (a dismissal with no stated
+  // reason is not defensible) and bounded for every decision. Analyst free
+  // text — never provider output, never an exception message.
+  reason String?
+
+  // The case whose link or recurrence produced a CASE_LINK /
+  // RECURRENCE_REOPEN row. Null for an ordinary ANALYST_DECISION. Restrict
+  // rather than SetNull, matching every other Phase 3 FK: a case is never
+  // hard-deleted once it has history, so nulling attribution is unnecessary
+  // and would quietly erase which case escalated this Finding.
+  caseId Int?
+  case   Case? @relation("FindingTriageCase", fields: [caseId], references: [id], onDelete: Restrict)
+
+  actorUserId Int?
+  actor       User? @relation("FindingTriageActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  decidedAt    DateTime
+  supersededAt DateTime?
+
+  // findingId while current, null once superseded — "at most one current
+  // triage decision per Finding" with no raw SQL and no partial index.
+  currentForFindingId Int? @unique
+
+  createdAt DateTime @default(now())
+
+  @@index([findingId, decidedAt])
+  @@index([decision])
+  @@index([caseId])
+}
+
+// Append-only evidence-link history between one Case and one Finding.
+//
+// Linking copies NOTHING from the Finding. The Finding indicator, ports,
+// occurrences, ownership, enrichment and risk stay exactly where they are and
+// are read through their own services; this table records only that a link
+// exists (or existed) and the ownership basis on which it was accepted.
+model CaseFinding {
+  id     Int  @id @default(autoincrement())
+  caseId Int
+  case   Case @relation(fields: [caseId], references: [id], onDelete: Restrict)
+
+  findingId Int
+  finding   Finding @relation(fields: [findingId], references: [id], onDelete: Restrict)
+
+  state CaseFindingLinkState
+
+  // The organization the link was accepted against — always equal to the
+  // case organizationId at link time. Stored explicitly (rather than joined
+  // through the case) so a historical link stays explicable on its own, and
+  // so a mismatch introduced by any future change is detectable rather than
+  // invisible.
+  organizationId Int
+  organization   Organization @relation("CaseFindingOrganization", fields: [organizationId], references: [id], onDelete: Restrict)
+
+  // Snapshot of WHY the ownership check passed at link time. Deliberately
+  // scalar enum values, not a FindingOwnership foreign key: a Restrict FK onto
+  // the append-only ownership history would make that history undeletable by
+  // every existing real-database cleanup path, and the link justification
+  // only needs the decision, not the row.
+  ownershipStatusAtLink     OwnershipResolutionStatus
+  ownershipConfidenceAtLink OwnershipConfidence?
+
+  // Bounded analyst note, required by the service layer on UNLINK (removing
+  // evidence from a case must state why).
+  reason String?
+
+  actorUserId Int?
+  actor       User? @relation("CaseFindingActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  effectiveAt  DateTime
+  supersededAt DateTime?
+
+  // "<caseId>:<findingId>" while current, null once superseded — at most one
+  // current link row per (Case, Finding) pair, same distinct-NULLs mechanism.
+  currentLinkKey String? @unique
+
+  createdAt DateTime @default(now())
+
+  @@index([caseId, state])
+  @@index([findingId, effectiveAt])
+  @@index([organizationId])
+}
+
+// Immutable case lifecycle timeline. One row per accepted transition, written
+// in the SAME transaction as the guarded state change it describes, so a case
+// can never reach a state with no event explaining how it got there.
+model CaseLifecycleEvent {
+  id     Int  @id @default(autoincrement())
+  caseId Int
+  case   Case @relation(fields: [caseId], references: [id], onDelete: Restrict)
+
+  eventType CaseLifecycleEventType
+  // Null only for CREATED (there is no prior state).
+  fromState CaseLifecycleState?
+  toState   CaseLifecycleState
+
+  // Closed machine-readable vocabulary (see caseLifecycleRules.js
+  // LIFECYCLE_REASON_CODES) — never free text, never an exception message.
+  reasonCode String
+
+  // Bounded analyst-supplied note. Optional, trimmed and length-capped at the
+  // service boundary.
+  note String?
+
+  actorUserId Int?
+  actor       User? @relation("CaseLifecycleActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  occurredAt DateTime
+  createdAt  DateTime @default(now())
+
+  @@index([caseId, occurredAt])
+  @@index([eventType])
+}
+
+// Immutable append-only timeline of what the affected organization said.
+// Never treated as proof of anything on its own — see the section header.
+model CaseOrganizationResponse {
+  id     Int  @id @default(autoincrement())
+  caseId Int
+  case   Case @relation(fields: [caseId], references: [id], onDelete: Restrict)
+
+  responseType OrganizationResponseType
+
+  // Bounded analyst-authored summary of what was communicated. Deliberately a
+  // SUMMARY column and not a verbatim-message column: storing complete
+  // correspondence would put third-party contact detail and potentially
+  // victim data into a table the whole workflow reads.
+  summary String
+
+  // Optional safe reference — a ticket id, an internal case number. Stored and
+  // displayed as an opaque string and NEVER dereferenced, fetched or followed
+  // by anything in this system, exactly like FindingVulnerability
+  // .sourceReference, so it cannot become an SSRF or auto-discovery path.
+  reference String?
+
+  // When the organization actually responded, which is not when we recorded
+  // it. Both are kept.
+  occurredAt DateTime
+  recordedAt DateTime @default(now())
+
+  recordedByUserId Int?
+  recordedBy       User? @relation("CaseResponseRecordedBy", fields: [recordedByUserId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  supportedClosureRequests CaseClosureRequest[] @relation("ClosureSupportingResponse")
+
+  @@index([caseId, occurredAt])
+  @@index([caseId, responseType])
+}
+
+// One closure request and its review. Append-only: an APPROVED or REJECTED
+// row is never rewritten, and a case that is reopened and re-closed later
+// accumulates a second request rather than mutating the first.
+model CaseClosureRequest {
+  id     Int  @id @default(autoincrement())
+  caseId Int
+  case   Case @relation(fields: [caseId], references: [id], onDelete: Restrict)
+
+  state         CaseClosureRequestState @default(PENDING)
+  closureReason CaseClosureReason
+
+  // Bounded, required. The analyst stated case for closing.
+  justification String
+
+  requestedByUserId Int?
+  requestedBy       User?    @relation("CaseClosureRequestedBy", fields: [requestedByUserId], references: [id], onDelete: SetNull)
+  requestedAt       DateTime
+
+  reviewedByUserId Int?
+  reviewedBy       User?     @relation("CaseClosureReviewedBy", fields: [reviewedByUserId], references: [id], onDelete: SetNull)
+  reviewedAt       DateTime?
+  // Bounded reviewer note. Required by the service layer on rejection.
+  reviewNote       String?
+
+  // The specific REMEDIATED organization response this closure rests on.
+  // Populated only for closureReason REMEDIATED, and required there — that is
+  // how "REMEDIATED closure requires a recorded REMEDIATED response" becomes a
+  // durable fact rather than a check that happened once. Restrict: the
+  // evidence a closure was approved on must not vanish.
+  supportingResponseId Int?
+  supportingResponse   CaseOrganizationResponse? @relation("ClosureSupportingResponse", fields: [supportingResponseId], references: [id], onDelete: Restrict)
+
+  // caseId while PENDING, null once APPROVED/REJECTED — "at most one open
+  // closure request per case", same distinct-NULLs mechanism as everywhere
+  // else in this repository. No raw SQL, no partial index.
+  activeCaseId Int? @unique
+
+  createdAt DateTime @default(now())
+
+  @@index([caseId, requestedAt])
+  @@index([state])
+}
+
+// The recurrence-reopen ledger. Exactly one row per (recurrence occurrence,
+// case) pair, which is what makes repeated processing of the same occurrence
+// idempotent.
+//
+// FindingOccurrence own (findingId, rawReportId) identity is NOT sufficient on
+// its own: one recurrence can fan out to several linked cases, each of which
+// needs its own decision recorded, and each of which must be re-runnable
+// exactly once. The composite unique below is that missing identity.
+model CaseRecurrenceReopen {
+  id     Int  @id @default(autoincrement())
+  caseId Int
+  case   Case @relation(fields: [caseId], references: [id], onDelete: Restrict)
+
+  findingId Int
+  finding   Finding @relation(fields: [findingId], references: [id], onDelete: Restrict)
+
+  findingOccurrenceId Int
+  findingOccurrence   FindingOccurrence @relation(fields: [findingOccurrenceId], references: [id], onDelete: Restrict)
+
+  outcome CaseRecurrenceReopenOutcome
+
+  // The recurrence observation time, and when this evaluation ran. Both
+  // explicit, never a wall-clock read inside the service.
+  observedAt  DateTime
+  processedAt DateTime
+
+  createdAt DateTime @default(now())
+
+  // THE idempotency key.
+  @@unique([findingOccurrenceId, caseId])
+  @@index([caseId, processedAt])
+  @@index([findingId])
 }

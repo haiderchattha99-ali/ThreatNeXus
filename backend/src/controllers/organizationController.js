@@ -99,6 +99,113 @@ function validateCounters(source, invalid) {
   return values;
 }
 
+// Phase 3 completeness patch — safe bounded organization-options list.
+//
+// GET /api/organizations is ADMIN-only (manage:system), so an ANALYST could
+// not list the registry to bind a new case to an organization. This endpoint
+// is gated on manage:cases instead (see organizationRoutes.js, registered
+// before the manage:system gate below) and returns only what a case-creation
+// picker needs: organizationId, name and sector. No contact detail, no
+// counters, no audit data — see optionSummary.
+const MAX_ORGANIZATION_OPTIONS_LIMIT = 50;
+const DEFAULT_ORGANIZATION_OPTIONS_LIMIT = 25;
+const MAX_ORGANIZATION_OPTIONS_SEARCH_LENGTH = 100;
+
+// Returns null on anything that is not a non-negative-bounded integer, so the
+// caller can answer 400 rather than silently clamping a malformed value.
+function parseBoundedLimit(raw) {
+  if (raw === undefined || raw === null || raw === "") {
+    return DEFAULT_ORGANIZATION_OPTIONS_LIMIT;
+  }
+  const parsed = typeof raw === "string" ? Number(raw.trim()) : raw;
+  if (!Number.isSafeInteger(parsed) || parsed < 1) return null;
+  return Math.min(parsed, MAX_ORGANIZATION_OPTIONS_LIMIT);
+}
+
+function parseBoundedPage(raw) {
+  if (raw === undefined || raw === null || raw === "") return 0;
+  const parsed = typeof raw === "string" ? Number(raw.trim()) : raw;
+  if (!Number.isSafeInteger(parsed) || parsed < 0) return null;
+  return parsed;
+}
+
+// Only these three fields ever leave this endpoint. Built as a fresh object
+// from named fields, never by deleting keys off the Prisma row, so a future
+// migration adding a column cannot silently start leaking it here.
+function organizationOptionSummary(record) {
+  return {
+    organizationId: record.id,
+    name: record.name,
+    sector: record.sector,
+  };
+}
+
+exports.getOrganizationOptions = async (req, res) => {
+  try {
+    const query = req.query && typeof req.query === "object" ? req.query : {};
+
+    const limit = parseBoundedLimit(query.limit);
+    if (limit === null) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid limit.",
+        fields: ["limit"],
+      });
+    }
+
+    const page = parseBoundedPage(query.page);
+    if (page === null) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid page.",
+        fields: ["page"],
+      });
+    }
+
+    let search = null;
+    if (query.search !== undefined && query.search !== null && query.search !== "") {
+      if (typeof query.search !== "string") {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid search.",
+          fields: ["search"],
+        });
+      }
+      const trimmed = query.search.trim();
+      if (trimmed.length > MAX_ORGANIZATION_OPTIONS_SEARCH_LENGTH) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid search.",
+          fields: ["search"],
+        });
+      }
+      search = trimmed.length > 0 ? trimmed : null;
+    }
+
+    const where = search
+      ? { name: { contains: search, mode: "insensitive" } }
+      : {};
+
+    // Deterministic ordering (name, then id as a stable tiebreaker) so a
+    // paginated caller never sees a row shift between pages, and an unknown or
+    // empty result is simply an empty array — never a fabricated option.
+    const organizations = await prisma.organization.findMany({
+      where,
+      select: { id: true, name: true, sector: true },
+      orderBy: [{ name: "asc" }, { id: "asc" }],
+      skip: page * limit,
+      take: limit,
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: organizations.map(organizationOptionSummary),
+    });
+  } catch (error) {
+    return serverError(res, "Failed to fetch organization options", error);
+  }
+};
+
 // Get all organizations
 exports.getOrganizations = async (req, res) => {
   try {

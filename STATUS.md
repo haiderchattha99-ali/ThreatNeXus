@@ -44,9 +44,329 @@ _Operational status / handoff note. Authoritative plan lives in
 - **PHASE 2 — COMPLETE AND COMBINED-GATE VERIFIED.** The closing packet landed ownership
   re-resolution, PostgreSQL candidate pushdown, safe sector exposure, ownership consistency
   detection, the combined `eval:phase2` integration gate and its mutation gate — see "Phase 2
-  COMPLETE AND COMBINED-GATE VERIFIED" immediately below. **Migration count remains 14 and
-  `backend/prisma/` is byte-identical to its §2B state.** Exact next task is **Phase 3 — defensible
-  analyst workflow**.
+  COMPLETE AND COMBINED-GATE VERIFIED" below. **Migration count reached 14 there and
+  `backend/prisma/` was byte-identical to its §2B state.**
+- **PHASE 3 — COMPLETE. The defensible analyst workflow is delivered end to end**: Finding triage →
+  organization-bound case → `CaseFinding` evidence linkage → case lifecycle → organization-response
+  tracking → reviewer-approved closure → recurrence-driven reopening, with backend APIs, capability
+  RBAC, cross-cutting audits, functional frontend screens and the `eval:phase3` evaluator. See
+  "Phase 3 COMPLETE" immediately below. **Exactly one additive migration; migration count 14 → 15.**
+  Branch `feat/phase-3-analyst-workflow`. Exact next task is **Phase 4 — notification drafting,
+  analyst approval/edit/reject, manual export, and delivery/response tracking integration**.
+
+## Phase 3 COMPLETE — defensible analyst workflow (2026-08-01)
+
+Branch `feat/phase-3-analyst-workflow`, built on `8945ae6` (Phase 2 complete and combined-gate
+verified). **Exactly one additive migration; migration count 14 → 15.**
+
+    Finding triage
+      → organization-bound case
+        → CaseFinding evidence linkage
+          → case lifecycle
+            → organization-response tracking
+              → reviewer-approved closure
+                → recurrence-driven reopening
+
+### Schema and migration
+
+`20260731120000_add_phase3_analyst_workflow` — strictly additive: 10 `CREATE TYPE`, 6 `CREATE
+TABLE`, one `ALTER TABLE` adding only nullable or defaulted `Case` columns, and indexes. No `DROP`,
+no column retype, no raw SQL, no partial index. `Notification` is untouched and every pre-existing
+`Case` row stays valid.
+
+Six append-only models: `FindingTriage`, `CaseFinding`, `CaseLifecycleEvent`,
+`CaseOrganizationResponse`, `CaseClosureRequest`, `CaseRecurrenceReopen`. The existing `Case` model
+is **extended**, never duplicated — `caseReference`, `organizationId`/`ownerOrganization`,
+`lifecycleState`, `createdByUserId`, the current-closure projection and the reopen projection are
+all new nullable/defaulted columns. The legacy free-text `Case.organization` String column is
+preserved verbatim, which is why the Phase 3 relation is named `ownerOrganization`.
+
+**Three one-current-row invariants reuse the repository's established distinct-NULLs mechanism**
+(D-006/D-007): `FindingTriage.currentForFindingId`, `CaseFinding.currentLinkKey`
+(`"<caseId>:<findingId>"`) and `CaseClosureRequest.activeCaseId`. PostgreSQL treats multiple NULLs
+in a unique index as distinct, so unlimited history rows coexist while at most one row is current —
+no raw SQL, no partial index.
+
+**`CaseRecurrenceReopen`'s composite unique `(findingOccurrenceId, caseId)` is the recurrence
+idempotency key.** `FindingOccurrence`'s own identity is not sufficient: one recurrence fans out to
+several linked cases, each of which needs its own decision recorded and each of which must be
+re-runnable exactly once.
+
+Every FK onto `Case` / `Finding` / `FindingOccurrence` / `Organization` is `Restrict` so evidence can
+never be orphaned; every actor FK is `SetNull` so deleting a user nulls attribution without
+destroying the record that justified a closure.
+
+### Two real defects found while building (both fixed, both now covered by tests)
+
+**D-P3-a — the analyst state endpoint could silently withdraw a pending closure.**
+`changeCaseState` originally constrained only the TARGET state to `{OPEN, WAITING_FOR_ORG}`. But
+`CLOSURE_PENDING → OPEN` is a legitimate transition — it is exactly how a REVIEWER *rejects* a
+closure — so an analyst posting `{toState: "OPEN"}` on a `CLOSURE_PENDING` case moved it back to
+OPEN without any reviewer decision, leaving an orphaned `PENDING` `CaseClosureRequest` still holding
+its `activeCaseId`. Fixed by constraining the SOURCE as tightly as the target
+(`ANALYST_SETTABLE_FROM_STATES` + `assertAnalystSettableFrom`), enforced both before and inside the
+transaction, and by deriving `permittedActions.availableStates` from the same
+`analystAvailableStates()` helper the service guards with — one rule, two consumers, so the UI can
+neither offer a transition the service would refuse nor hide one it would accept.
+`ANALYST_SETTABLE_FROM_STATES` is deliberately a separate constant from `ANALYST_SETTABLE_STATES`:
+they answer different questions ("where may this end up" vs "where may this start").
+
+**General lesson: when a state machine's transition table is shared by more than one actor,
+restricting the target is not enough — restrict the source too.**
+
+**D-P3-b — SERIALIZABLE was the wrong isolation level for case creation.** Six concurrent
+`createCase` calls exhausted the bounded whole-transaction retry budget and surfaced a raw P2034,
+with and without backoff. The creation transaction only INSERTs, and its `caseReference` is derived
+from the primary key the database itself assigns, so no interleaving can produce a duplicate — but
+SERIALIZABLE takes predicate locks on the `caseReference` unique index, making concurrent creations
+conflict on index-page adjacency rather than on any data dependency. Fixed by adding `runAtomic`
+(connection-default isolation, same bounded retry) alongside `runSerializable`, and using it for
+creation only.
+
+**The rule is now written into `workflowTransaction.js`: if the callback re-reads state and then
+writes based on it, use `runSerializable`; if it only inserts, use `runAtomic`.** Bounded jittered
+backoff (25 ms × attempt, capped at 200 ms, plus jitter) was added to both — retrying a serialization
+failure instantly makes every loser wake at the same instant and re-collide in lockstep until the
+budget is gone.
+
+### Locked workflow semantics, as implemented
+
+- **Triage is separate from exposure state.** Nothing in `findingTriageService` reads or writes
+  `Finding.status`. `UNTRIAGED` is the *absence* of a `FindingTriage` row, never a stored enum value
+  — an enum member would need a row, and writing one would give every Finding ever ingested triage
+  history it never received. Append-only: the only mutation ever applied to a prior row is
+  `supersededAt` + `currentForFindingId → null`, in the same transaction that inserts its
+  replacement.
+- **Workflow-driven escalation is guarded.** Linking evidence and a recurrence reopening a case both
+  escalate a Finding, but only when `isEscalationMeaningful` — a re-link or a repeated recurrence on
+  an already-`ESCALATED` Finding writes nothing. Without that guard, triage history would stop being
+  a record of decisions and become a log of system activity.
+- **The organization-matching rule is the load-bearing safety property.** A Finding may be linked
+  only when its current ownership settled on exactly the case's organization by a mechanism that
+  identifies the constituent (`RESOLVED` or `OVERRIDDEN`, and not ISP-attributed). Ambiguous,
+  unresolved, ISP-attributed and mismatched ownership are all refused with a closed reason code
+  telling the analyst to resolve ownership first. **ISP attribution is checked *before* the
+  organization comparison** — an ISP row can name the right organization id and still be the wrong
+  answer, and reporting "mismatch" there would send the analyst to fix the wrong thing. Ownership is
+  re-read *inside* the transaction so a concurrent `clearOverride` cannot be raced past.
+- **Linking copies nothing.** A `CaseFinding` row records only that a link exists (or existed) and
+  the ownership basis on which it was accepted. Indicator, occurrences, ownership, enrichment and
+  risk all stay in their own tables and are read from there.
+- **A REMEDIATED organization response never closes anything.** It is a claim by the affected party,
+  and `caseResponseService` performs no lifecycle transition of any kind. It becomes load-bearing
+  only as a *precondition*: a REMEDIATED closure is refused without one, and the specific supporting
+  row is persisted as `CaseClosureRequest.supportingResponseId` (Restrict), so the rule leaves
+  durable evidence rather than merely having been true once.
+- **Closure takes two authorities.** ADMIN/ANALYST request (`manage:cases`); REVIEWER/ADMIN decide
+  (`review:case-closure`). The requester may not approve their own request unless they hold
+  `override:closure-self-approval` (ADMIN only). The service enforces this from a **capability-derived
+  boolean supplied by the controller, never a role string**, so the service holds no role knowledge
+  at all. An unattributed request (`requestedByUserId` null) is not self-approval — the check
+  requires a real integer on both sides, or deleting the requesting user would lock the review out.
+- **Only a REMEDIATED closure is auto-reopened by a recurrence.** `FALSE_POSITIVE`, `ACCEPTED_RISK`,
+  `DUPLICATE` and `OTHER` were all decided in full knowledge that the finding would keep being
+  observed; reopening them on the next report would silently overturn a human decision on a
+  schedule. **Every evaluation is ledgered, including the ones that decline** — that is what makes
+  re-processing idempotent *and* leaves proof the rule was applied rather than silently skipped. The
+  reopen lifecycle event carries `actorUserId: null` deliberately: it is a consequence of new
+  evidence, not the uploading analyst's decision.
+- **Recurrence reopening never touches ingestion.** `processRecurrenceReopensSafely` runs last in
+  `ingestAccessibleRdpReport`, after every RawReport / RawReportRow / Finding / FindingOccurrence
+  write has committed and outside every transaction the pipeline opened — the same isolation
+  contract as ownership resolution, enrichment scheduling and risk scoring before it. It never
+  throws: every failure is classified into a closed outcome vocabulary and reported in an aggregate.
+  A total reopen failure leaves a fully valid ingested report with fully valid recurrence evidence
+  and simply no reopen.
+- **There is no hard-delete production route.** `DELETE /api/cases/:id` is a compatibility tombstone:
+  it always answers `409` with `code: CASE_DELETION_NOT_SUPPORTED`, deletes nothing, and deliberately
+  does **not** look the case up first — answering 404 for an unknown id and 409 for a known one would
+  turn the endpoint into an existence oracle for any holder of `manage:cases`.
+
+### APIs and RBAC
+
+Three additive, non-hierarchical capabilities in `lib/roles.js`:
+
+| Capability | ADMIN | ANALYST | REVIEWER | VIEWER |
+| --- | --- | --- | --- | --- |
+| `read:cases` | yes | yes | yes | yes |
+| `manage:cases` (existing) | yes | yes | no | no |
+| `triage:findings` (existing) | yes | yes | no | no |
+| `review:case-closure` | yes | no | yes | no |
+| `override:closure-self-approval` | yes | no | no | no |
+
+`/api/cases` moved from a single router-level `requireCapability(MANAGE_CASES)` to router-wide
+`authenticate` plus a per-route capability. That split is what lets a REVIEWER read the case whose
+closure they are deciding, and gives VIEWER read-only oversight, while neither gains any case write.
+
+    read:cases           GET  /api/cases   /:id   /:id/workflow
+    manage:cases         POST /api/cases                      (create)
+                         PUT  /api/cases/:id                  (legacy fields only)
+                         POST /api/cases/:id/findings          (link evidence)
+                         POST /api/cases/:id/findings/:fid/unlink
+                         POST /api/cases/:id/state             (OPEN <-> WAITING_FOR_ORG)
+                         POST /api/cases/:id/responses
+                         POST /api/cases/:id/closure-requests
+                         POST /api/cases/:id/reopen            (explicit manual reopen)
+    review:case-closure  POST /api/cases/:id/closure-requests/:rid/approve
+                         POST /api/cases/:id/closure-requests/:rid/reject
+    read:findings        GET  /api/findings/:id/triage
+    triage:findings      PUT  /api/findings/:id/triage
+
+No role name appears in any Phase 3 controller. Authorization is entirely the routes'
+`requireCapability` middleware, so **a denied request is answered before any service is reached and
+creates no rows** — asserted directly by counting durable rows across the whole denied matrix.
+
+`caseWorkflowSerializers.js` is the single allow-list choke point every Phase 3 row crosses. It
+constructs fresh objects from named fields rather than deleting keys from a database row, so a
+future migration that adds a column cannot silently start leaking it. Never emitted: current-row
+keys (`currentForFindingId`, `currentLinkKey`, `activeCaseId`), the internal recurrence key
+(`findingOccurrenceId`), organization contacts (`contactPerson`, `email`, `phone`, `industry`,
+`location`), Phase 1/2 fingerprints, audit rows, or raw database errors.
+
+### Auditing
+
+Bounded events on every write path, emitted by the services themselves (controllers pass
+`auditContext` through and never audit twice): `finding.triage.recorded`, `case.created`,
+`case.finding.linked` / `.unlinked`, `case.state.changed`, `case.response.recorded`,
+`case.closure.requested` / `.approved` / `.rejected`, `case.reopened`,
+`case.recurrence.reopen.completed` / `.failed`.
+
+Every payload is an explicit allow-list. Analyst free text (triage reason, closure justification,
+review note, response summary) is reduced to a boolean or a length, never copied. `Error.message`,
+stacks, raw requests and complete response text never reach `AuditLog` — failure reasons are closed
+vocabulary strings, and a `CaseWorkflowStateError`'s own `code` is the only variable part. The
+aggregate recurrence event carries **counts only**, no indicator, no Finding id, no occurrence id
+and no case reference. Audit failure never rolls back domain state.
+
+### Frontend
+
+Backend-connected workflow screens on the existing design system:
+
+- `pages/Cases.jsx` (rewritten) — reference, organization, priority, **authoritative
+  `lifecycleState`** (not the legacy free-text `status`), linked-evidence count, analyst, and a
+  recurrence-reopened badge. Status tiles are counted off `lifecycleState` so they cannot disagree
+  with the workflow. No delete control for any role.
+- `pages/CaseDetail.jsx` (new) — linked findings (expandable to the triage panel), lifecycle
+  timeline, organization-response timeline, the closure workflow, the recurrence ledger including
+  the evaluations that declined to reopen, and a recurrence-reopened indicator.
+- `components/FindingTriagePanel.jsx` (new) — current triage decision, append-only history, current
+  ownership, the cases the Finding is evidence in, and the permitted triage actions.
+- `constants/caseWorkflow.js` (new) — the presentation vocabulary plus `describeWorkflowError`,
+  which renders the backend's closed rejection codes as advice an analyst can act on
+  ("resolve its ownership first") rather than an error code.
+
+Every control is rendered from the intersection of two independent facts: `permittedActions`, which
+the backend derives from the case's **durable state alone** and which says nothing about the caller,
+and the caller's own capability list. **This is UX only** — the backend re-checks the capability
+(route middleware) and the state (service) on every request regardless.
+
+The page gate moved from `MANAGE_CASES` to `READ_CASES` so REVIEWER and VIEWER reach the screen.
+Frontend `testTimeout` was raised to 20 s in `vite.config.js`: a single MUI Select interaction
+through `userEvent` opens a portal, runs a transition and re-renders a full page, and several test
+files run in parallel jsdom environments — the tests are fast, the environment is not.
+
+### Verification (all re-run at commit time)
+
+**222 new/changed backend tests.** Every one of them reads the database's durable rows rather than a
+service return value, because the properties under test are about what was *written*: a test that
+only inspected the return could not tell an UPDATE of a prior row from an INSERT of a new one.
+
+| Suite | Tests | What it proves |
+| --- | ---: | --- |
+| `tests/unit/caseWorkflowRules.test.js` | 34 | the closed vocabularies, the complete transition table, `analystAvailableStates`, link eligibility including the ISP-before-mismatch ordering, bounded text, the case-reference format |
+| `tests/unit/caseWorkflowServices.test.js` | 52 | creation, guarded transitions, the source-state guard, linking/unlinking, the organization-matching rule, responses, closure request/approve/reject, self-approval, manual reopen, audit isolation, transactional atomicity |
+| `tests/unit/findingTriageService.test.js` | 20 | the append-only supersede chain, one current row, DISMISSED requiring a reason, meaningful-only workflow escalation, audit failure isolation |
+| `tests/unit/caseRecurrenceReopenService.test.js` | 20 | only-REMEDIATED auto-reopen, ledgering of declined evaluations, idempotency, fan-out across linked cases, never throwing into ingestion |
+| `tests/unit/caseWorkflowSerializerSafety.test.js` | 26 | the exclusion proof the serializer's own header promises, against contaminated real row shapes |
+| `tests/unit/workflowTransaction.test.js` | 11 | retry classification, whole-transaction re-run, bounded budget, backoff, and the two isolation levels |
+| `tests/unit/reportIngestionService.test.js` | +8 | the ingestion hook, its isolation contract and its idempotent replay |
+| `tests/integration/caseWorkflowRouteAuthorization.test.js` | 34 | the whole HTTP surface end to end, and that a denied request creates no rows |
+| `tests/integration/caseWorkflowConcurrency.test.js` | 17 | the same invariants against real PostgreSQL under genuine concurrency |
+
+The real-PostgreSQL suite uses **separate pre-connected `PrismaClient` instances** throughout.
+`Promise.all` over one shared client serializes enough to hide the race, so such a test passes even
+against an implementation with no invariant at all — measured directly during P2-T2b and unchanged
+here.
+
+Three existing suites were amended for the Phase 3 grants rather than worked around:
+`tests/integration/auth.test.js` and `tests/unit/roles.test.js` (VIEWER's read-only set now includes
+`read:cases`), and `tests/integration/resourceRouteAuthorization.test.js` (the case group now
+expresses the read/write split and the delete tombstone instead of a single capability).
+
+**Combined gate results:**
+
+- Full backend suite with `TEST_DATABASE_URL` + `EVAL_DATABASE_URL` and `--no-file-parallelism`:
+  **2404 passed / 2404, 101 files** (was 2172 before this phase).
+- Phase 3 real-PostgreSQL concurrency suite: **17/17, stable across repeated runs.**
+- Frontend: **61/61 across 6 files**, clean production build, `oxlint` clean of any new warning.
+- `npm run eval:phase1` PASS · `eval:risk` 19/19 · `eval:phase2` 22 scenarios / 112 assertions ·
+  `eval:phase2:mutation` 6/6 · `eval:vulnerability` 41 scenarios / 992 assertions ·
+  `eval:vulnerability:mutation` 12/12 · **`eval:phase3` 12 scenarios / 151 assertions, rerunnable.**
+- `npx prisma validate` clean; `migrate deploy` reports **15 migrations, none pending** on both
+  `threatnexus_test` and `threatnexus_eval`; migration count is exactly **15**.
+- `git diff --check` clean; no secret, credential or generated artifact in the diff; no real network
+  call anywhere in the suite or in any evaluator.
+
+**Both environment rules from Phase 2 still apply and were followed:** never export `JWT_SECRET`
+globally when running the backend suite (HTTP-token suites self-default their own signing secret and
+an exported value makes every request 401), and real-PostgreSQL suites must run with
+`--no-file-parallelism` (they share one database and parallel files steal each other's rows).
+
+### Accepted limitations
+
+- **No standalone Findings list screen.** No `GET /api/findings` list endpoint exists, and the
+  locked Phase 3 API surface does not include one. Triage is therefore surfaced where findings
+  actually appear — expandable per linked finding on the case detail — rather than inventing an
+  endpoint outside the phase's scope.
+- **A legacy `Case` row with a null `organizationId` cannot be bound to an organization through any
+  endpoint.** Doing it safely needs a controlled migration that decides what the pre-existing
+  free-text `organization` string actually referred to — a separate piece of work, deliberately not
+  invented here. Such rows stay readable and every workflow operation refuses them with
+  `CASE_NOT_ORGANIZATION_BOUND`.
+
+### Phase 3 completeness patch (2026-08-01)
+
+Two accepted limitations recorded above at Phase 3 close were resolved before the PR, without
+touching lifecycle, closure, recurrence, triage or Risk semantics, and without a schema change.
+**Migration count stays 15.**
+
+**1. Reliable organization selection for case creation.** `GET /api/organizations/options`
+(`organizationController.getOrganizationOptions`) is new, registered in `organizationRoutes.js`
+*before* the router's `manage:system` gate so it runs on its own, narrower capability —
+`manage:cases`, held by ADMIN and ANALYST — rather than the administrator-only registry grant.
+REVIEWER and VIEWER hold neither and are denied by `requireCapability` before the organization table
+is ever read. It returns only `organizationId`/`name`/`sector` (never contact detail, counters or
+audit data), ordered deterministically (`name asc, id asc`), with a bounded case-insensitive
+`search` (≤100 chars) and a `limit` capped at 50 (default 25) plus a `page` offset — invalid `limit`,
+`page` or `search` are rejected with a 400 naming the field, never silently clamped or ignored, and
+an empty or unmatched result is a safe empty list rather than a fabricated option. `Cases.jsx` now
+sources its organization picker from this endpoint instead of the previous case-derived fallback
+(which is removed), so an ANALYST can create the **first** organization-bound case even when zero
+cases currently exist to derive an organization from — the whole reason the prior fallback was
+insufficient.
+
+**2. Organization-response `occurredAt` input.** The backend already accepted and strictly validated
+a caller-supplied `occurredAt` (rejecting an unparseable value rather than defaulting it); only the
+response form had no date control. `CaseDetail.jsx`'s response form now includes a
+`datetime-local` field defaulting to the current local date/time, parsed client-side with the same
+strictness as the server (invalid input disables the Record button and shows inline feedback rather
+than round-tripping to find out), and submits the selected instant as an ISO timestamp. The client
+never supplies actor identity or any other internal field — only `responseType`, `summary`,
+`reference` and `occurredAt` cross the wire, matching the backend's existing allow-list.
+`recordedAt` (when we wrote it down) stays server-captured and is never conflated with it.
+
+Verification: 15 new/changed backend tests
+(`tests/integration/organizationOptionsRouteAuthorization.test.js`) covering ADMIN/ANALYST read
+access, REVIEWER/VIEWER denial before the table is read, the exact three-field serializer shape, PII
+non-leakage, deterministic ordering, bounded search/limit/page validation and pagination; 6 new
+frontend tests across `Cases.test.jsx` and `CaseDetail.test.jsx` covering first-case creation with
+zero prior cases, the safe-API sourcing (and non-use of the ADMIN-only registry), the occurredAt
+default/submission/invalid-value paths. Full frontend suite **65/65** across 6 files, clean
+production build, `oxlint` clean of any new warning. Focused backend suites (case/organization RBAC,
+case workflow services/rules/serializer safety, roles) all green; full no-DB backend suite
+**2268 passed / 151 skipped**, consistent with the pre-patch skip set. `npx prisma validate` clean;
+migration count confirmed at **15**, `backend/prisma/` otherwise untouched. `git diff --check`
+clean; no secret, `.env` or Graphify artifact in the diff.
 
 ## Phase 2 COMPLETE AND COMBINED-GATE VERIFIED (2026-07-31)
 
@@ -3031,25 +3351,40 @@ consistency detection and the combined integration gate.
 COMBINED-GATE VERIFIED" near the top of this file for the full record, the
 verification matrix and the accepted limitations.
 
-**Exact next task: Phase 3 — defensible analyst workflow.**
+**PHASE 3 IS COMPLETE** — see "Phase 3 COMPLETE — defensible analyst workflow"
+near the top of this file for the full record, the verification matrix and the
+accepted limitations. Finding triage, organization-bound cases, `CaseFinding`
+evidence linkage, the case lifecycle, organization-response tracking,
+reviewer-approved closure and recurrence-driven reopening are all implemented,
+audited, tested against real PostgreSQL, gated by `eval:phase3`, and reachable
+through functional frontend screens.
 
-    Finding triage
-      → CaseFinding
-        → case lifecycle
-          → organization response tracking
-            → recurrence-driven reopening
+**Exact next task: Phase 4 — notification drafting, analyst approval/edit/reject,
+manual export, and delivery/response tracking integration.**
 
-That packet owns the analyst-facing workflow that turns a scored, owned Finding
-into tracked work: triage state on a Finding; the `CaseFinding` link between a
-Case and the Findings it covers; the case lifecycle and its transitions; how an
-organization's response is recorded; and how recurrence (already detected and
-proven in Phase 1/Phase 2) drives reopening a closed case.
+    draft notification
+      → analyst approval / edit / reject
+        → manual export
+          → delivery and response tracking
 
-Carry the existing invariants in unchanged: audit every write path in the same
-change; keep recurrence/persistence semantics exactly as locked; keep backend
-capabilities the sole authorization boundary; keep AI off by default and unable
-to approve, close or resolve anything. **Notification export still requires
-analyst approval and is not part of this packet.**
+The `Notification` model is untouched by Phase 3 and still carries its Phase 0
+shape. Carry every existing invariant in unchanged:
+
+- **The export endpoint must refuse any notification whose status is not
+  `Approved` or whose `approved_by` is null.** That is the single hardest
+  requirement in the phase and the one a reviewer will check first.
+- **There is no SMTP or webhook client at all, not even a disabled one.**
+  Automatic notification sending is explicitly out of scope; export is manual.
+- **AI stays off by default (`AI_ENABLED=false`) and cannot approve, send, score,
+  close, resolve or finalize anything.** It may draft and suggest only, and every
+  core workflow must complete correctly with AI off.
+- Audit every write path in the same change, keep backend capabilities the sole
+  authorization boundary, and keep every response through an allow-list
+  serializer.
+- **Delivery and response tracking integrates with Phase 3's
+  `CaseOrganizationResponse` timeline rather than duplicating it.** A response
+  recorded against a notification and a response recorded against a case must not
+  become two competing records of the same conversation.
 
 Non-blocking carry-overs from the Phase 1 audit (none gate Phase 2): add a
 `RawReport.rawContent` byte-preservation test; fix the `cleanupUpload`

@@ -21,6 +21,15 @@ export const CAPABILITIES = {
   MANAGE_FINDING_VULNERABILITIES: 'manage:finding-vulnerabilities',
   TRIGGER_VULNERABILITY_ENRICHMENT: 'trigger:vulnerability-enrichment',
   EXECUTE_VULNERABILITY_ENRICHMENT_BATCH: 'execute:vulnerability-enrichment-batch',
+  // Phase 3 — defensible analyst workflow.
+  // READ_CASES is a read-only grant held by EVERY role: a reviewer must be able
+  // to read a case in order to decide its closure, and read-only oversight is a
+  // stated Phase 3 requirement. REVIEW_CASE_CLOSURE is held by REVIEWER and
+  // ADMIN only, which is what makes it impossible for the role that requests a
+  // closure (ANALYST) to also grant one.
+  READ_CASES: 'read:cases',
+  REVIEW_CASE_CLOSURE: 'review:case-closure',
+  OVERRIDE_CLOSURE_SELF_APPROVAL: 'override:closure-self-approval',
 }
 
 export const CAPABILITY_VALUES = Object.values(CAPABILITIES)
