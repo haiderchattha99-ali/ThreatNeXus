@@ -79,12 +79,24 @@ model User {
   // all explicit human acts that always carry an actor at write time; the
   // columns are nullable only so deleting a User nulls the attribution instead
   // of destroying the record that justifies an approval or an export.
-  notificationsCreated    Notification[]               @relation("NotificationCreatedBy")
-  notificationsApproved   Notification[]               @relation("NotificationApprovedBy")
-  notificationRevisions   NotificationRevision[]       @relation("NotificationRevisionAuthor")
-  notificationLifecycle   NotificationLifecycleEvent[] @relation("NotificationLifecycleActor")
-  notificationExports     NotificationExport[]         @relation("NotificationExportActor")
-  notificationDeliveries  NotificationDeliveryEvent[]  @relation("NotificationDeliveryRecordedBy")
+  notificationsCreated   Notification[]               @relation("NotificationCreatedBy")
+  notificationsApproved  Notification[]               @relation("NotificationApprovedBy")
+  notificationRevisions  NotificationRevision[]       @relation("NotificationRevisionAuthor")
+  notificationLifecycle  NotificationLifecycleEvent[] @relation("NotificationLifecycleActor")
+  notificationExports    NotificationExport[]         @relation("NotificationExportActor")
+  notificationDeliveries NotificationDeliveryEvent[]  @relation("NotificationDeliveryRecordedBy")
+
+  // Phase 5 — same SetNull-actor convention throughout. Creating, removing or
+  // reactivating a framework mapping, requesting AI suggestions, and approving
+  // or rejecting one are ALL explicit human acts that always carry an actor at
+  // write time. The columns are nullable only so deleting a User nulls the
+  // attribution instead of destroying the record of who associated a control
+  // with a case — or, more importantly, of WHICH HUMAN promoted a machine
+  // suggestion into an active mapping.
+  frameworkMappings     CaseFrameworkMapping[]         @relation("FrameworkMappingActor")
+  aiSuggestionRuns      AiSuggestionRun[]              @relation("AiSuggestionRunActor")
+  aiSuggestionsDecided  AiFrameworkMappingSuggestion[] @relation("AiSuggestionDecidedBy")
+  aiSuggestionDecisions AiSuggestionDecision[]         @relation("AiSuggestionDecisionActor")
 }
 
 model Threat {
@@ -200,6 +212,13 @@ model Case {
   // organization and to real persisted evidence.
   notifications Notification[] @relation("NotificationCase")
 
+  // Phase 5 — a case is the ONLY thing a framework mapping or an AI mapping
+  // suggestion may be attached to, for the same reason: it is what binds both
+  // to exactly one organization and to real persisted evidence.
+  frameworkMappings    CaseFrameworkMapping[]         @relation("FrameworkMappingCase")
+  aiSuggestionRuns     AiSuggestionRun[]              @relation("AiSuggestionRunCase")
+  aiMappingSuggestions AiFrameworkMappingSuggestion[] @relation("AiSuggestionCase")
+
   @@index([lifecycleState])
   @@index([organizationId, lifecycleState])
 }
@@ -276,7 +295,7 @@ model Notification {
   approvedBy         User?                 @relation("NotificationApprovedBy", fields: [approvedByUserId], references: [id], onDelete: SetNull)
   approvedAt         DateTime?
 
-  revisions       NotificationRevision[]      @relation("NotificationRevisions")
+  revisions       NotificationRevision[]       @relation("NotificationRevisions")
   lifecycleEvents NotificationLifecycleEvent[]
   exports         NotificationExport[]
   deliveryEvents  NotificationDeliveryEvent[]
@@ -315,6 +334,13 @@ model Organization {
   // Phase 4 — same Restrict reasoning: an organization that has been notified
   // must never be deleted out from under that notification's history.
   notifications Notification[] @relation("NotificationOrganization")
+
+  // Phase 5 — same Restrict reasoning again. A framework mapping and an AI
+  // suggestion run both record the organization they were made against, so a
+  // historical mapping stays explicable on its own rather than only through a
+  // join that a later change could quietly alter.
+  frameworkMappings CaseFrameworkMapping[] @relation("FrameworkMappingOrganization")
+  aiSuggestionRuns  AiSuggestionRun[]      @relation("AiSuggestionRunOrganization")
 }
 
 // ===========================================================================
@@ -485,6 +511,14 @@ model Finding {
 
   // Phase 3 — the recurrence-driven reopen ledger keyed on this Finding.
   caseRecurrenceReopens CaseRecurrenceReopen[]
+
+  // Phase 5 — a framework mapping or an AI suggestion may cite ONE Finding as
+  // the evidence it rests on. Restrict, for the same reason as every other
+  // history table hanging off Finding: "this control was associated with that
+  // case BECAUSE of this Finding" is the evidence trail, and it must never be
+  // orphaned. Nullable because a CASE-scoped mapping cites the case as a whole.
+  frameworkMappingEvidence CaseFrameworkMapping[]         @relation("FrameworkMappingEvidenceFinding")
+  aiSuggestionEvidence     AiFrameworkMappingSuggestion[] @relation("AiSuggestionEvidenceFinding")
 
   // The locked identity key. Its index also covers indicatorValue-prefixed
   // lookups, so no separate indicatorValue index is added.
@@ -2015,4 +2049,390 @@ model NotificationDeliveryEvent {
   @@index([notificationId, occurredAt])
   @@index([exportId])
   @@index([status])
+}
+
+// ===========================================================================
+// Phase 5 â€” Framework mapping (manual first) and guarded, optional AI mapping
+// assistance.
+//
+// Additive only. Nothing below alters a Phase 0-4 table, an enum value, a
+// migration, the Risk v1 contract, or any existing constraint.
+//
+// ---------------------------------------------------------------------------
+// What "framework support" means here, and what it deliberately does not
+// ---------------------------------------------------------------------------
+// An ACTIVE CaseFrameworkMapping row means exactly one thing: a named human
+// analyst associated a named framework reference with this case, on a stated
+// evidence basis, and wrote down why. It does NOT mean the organization has
+// implemented that control, that the control was audited, that any compliance
+// obligation is satisfied, or - for MITRE ATT&CK - that the adversary
+// behaviour actually occurred anywhere beyond what the rationale asserts.
+// This is framework SUPPORT, not compliance certification, and no read path,
+// serializer or aggregate in this phase is permitted to imply otherwise.
+//
+// ---------------------------------------------------------------------------
+// No catalogue is claimed
+// ---------------------------------------------------------------------------
+// This phase ships NO local framework catalogue. referenceId and
+// referenceTitle are analyst-entered, bounded and format-checked - they are
+// NOT validated against a pinned copy of ATT&CK, NIST CSF or CIS Controls,
+// because no such copy exists in this repository yet. Every read path labels
+// them as analyst-entered for exactly that reason. Claiming catalogue
+// validation that did not happen would be a worse defect than not having a
+// catalogue, so `frameworkVersion` is REQUIRED and never defaulted: an analyst
+// must state which version of the framework they mapped against.
+// ===========================================================================
+
+// The three supported framework families. A closed enum rather than a string
+// so a fourth family cannot appear without a migration and a rules review -
+// each family carries different evidence obligations (see
+// services/framework/frameworkMappingRules.js).
+enum FrameworkFamily {
+  MITRE_ATTACK
+  NIST_CSF
+  CIS_CONTROLS
+}
+
+// Whether the mapping is asserted about the case as a whole or about one
+// specific piece of Finding evidence within it. Part of the current-row
+// identity, so the same reference may legitimately be mapped once at case
+// scope and once at finding scope without either superseding the other.
+enum FrameworkMappingScope {
+  CASE
+  FINDING
+}
+
+// Current state of a mapping. Two values only - a mapping either currently
+// stands or it has been withdrawn. Both are recorded as rows; REMOVED is a
+// state, never a deletion (see CaseFrameworkMapping's header).
+enum FrameworkMappingState {
+  ACTIVE
+  REMOVED
+}
+
+// WHY the analyst says this reference belongs on this case.
+//
+// OBSERVED_BEHAVIOR is the only basis that asserts something happened, and it
+// is therefore the ONLY basis a MITRE ATT&CK mapping may use. The other three
+// are explicitly non-behavioural: CONTROL_GAP says a control appears absent,
+// REMEDIATION_ALIGNMENT says the remediation advice aligns with a control, and
+// ANALYST_ASSESSMENT is a stated professional judgement. None of the three
+// asserts adversary activity, and none asserts compliance.
+enum FrameworkEvidenceBasis {
+  OBSERVED_BEHAVIOR
+  CONTROL_GAP
+  REMEDIATION_ALIGNMENT
+  ANALYST_ASSESSMENT
+}
+
+// How this mapping came to exist. AI_SUGGESTION_PROMOTED still means a human
+// created it - it records that the CONTENT originated in a machine suggestion
+// that a named analyst then reviewed and approved. There is deliberately no
+// value meaning "created by AI": no code path in this repository can write a
+// CaseFrameworkMapping row without a human actor having requested it.
+enum FrameworkMappingSource {
+  MANUAL
+  AI_SUGGESTION_PROMOTED
+}
+
+// Outcome of one AI suggestion-generation run. DISABLED is a first-class,
+// recorded outcome rather than an error: asking for suggestions while AI is
+// off is a legitimate request with a legitimate answer, and recording it is
+// what lets "we asked and the system was off" be told apart from "nobody ever
+// asked".
+enum AiSuggestionRunStatus {
+  DISABLED
+  COMPLETED
+  FAILED
+}
+
+// Review state of one immutable suggestion. PENDING suggestions are inert:
+// they change nothing about the case, appear in no active-mapping list, and
+// are excluded from every read path that answers "what is mapped".
+enum AiSuggestionState {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum AiSuggestionDecisionType {
+  APPROVE
+  REJECT
+}
+
+// ---------------------------------------------------------------------------
+// Append-only framework-mapping history for one Case.
+//
+// Same supersede-then-insert shape as FindingTriage, CaseFinding and
+// FindingOwnership, and for the same reason: "this control was associated with
+// this case between these two instants, by this analyst, on this basis" must
+// stay answerable forever. Nothing in this phase hard-deletes a row, and no
+// production HTTP route can.
+//
+// Removing a mapping appends a REMOVED row. Re-adding it later appends a fresh
+// ACTIVE row. Both prior rows survive untouched except for their supersededAt
+// and currentMappingKey.
+// ---------------------------------------------------------------------------
+model CaseFrameworkMapping {
+  id     Int  @id @default(autoincrement())
+  caseId Int
+  case   Case @relation("FrameworkMappingCase", fields: [caseId], references: [id], onDelete: Restrict)
+
+  // The organization the mapping was made against - always equal to the case
+  // organizationId at write time. Stored explicitly for the same reason
+  // CaseFinding and Notification store it: a historical mapping must stay
+  // explicable on its own, and a divergence introduced by any future change
+  // must be detectable rather than invisible.
+  organizationId Int
+  organization   Organization @relation("FrameworkMappingOrganization", fields: [organizationId], references: [id], onDelete: Restrict)
+
+  framework FrameworkFamily
+
+  // REQUIRED and never defaulted or inferred. An analyst who does not state
+  // which framework version they mapped against has not made a defensible
+  // mapping - see this section's header on why no catalogue is claimed.
+  frameworkVersion String
+
+  // Analyst-entered, bounded, format-checked, NOT catalogue-validated.
+  referenceId    String
+  referenceTitle String
+
+  mappingScope  FrameworkMappingScope
+  evidenceBasis FrameworkEvidenceBasis
+
+  // Required analyst free text. Bounded at the service boundary. This is the
+  // whole defensibility of the mapping and is never machine-generated: on the
+  // promotion path it is the text a named human read and approved.
+  rationale String
+
+  // The ONE Finding this mapping rests on, when it rests on one. Restrict:
+  // cited evidence must never be orphaned. Validated at write time to be a
+  // Finding CURRENTLY linked to this same case - a mapping citing evidence
+  // that belongs to a different case would be unreviewable.
+  evidenceFindingId Int?
+  evidenceFinding   Finding? @relation("FrameworkMappingEvidenceFinding", fields: [evidenceFindingId], references: [id], onDelete: Restrict)
+
+  state  FrameworkMappingState
+  source FrameworkMappingSource @default(MANUAL)
+
+  actorUserId Int?
+  actor       User? @relation("FrameworkMappingActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  effectiveAt  DateTime
+  supersededAt DateTime?
+
+  // "<caseId>:<framework>:<mappingScope>:<referenceId>" while current, null
+  // once superseded - "at most one current mapping row per (case, framework,
+  // scope, reference)" with no raw SQL and no partial index, the same
+  // distinct-NULLs mechanism as CaseFinding.currentLinkKey.
+  //
+  // evidenceFindingId is deliberately NOT part of the key: changing which
+  // Finding a mapping cites is a revision of the same mapping, not a second
+  // independent one.
+  currentMappingKey String? @unique
+
+  createdAt DateTime @default(now())
+
+  // Set only when this row was created by promoting an approved AI
+  // suggestion. The suggestion side holds the authoritative @unique link; this
+  // back-relation exists so a mapping can be traced to its origin.
+  promotedFromSuggestion AiFrameworkMappingSuggestion? @relation("AiSuggestionPromotedMapping")
+
+  @@index([caseId, state])
+  @@index([caseId, framework, state])
+  @@index([evidenceFindingId])
+  @@index([organizationId])
+  @@index([caseId, effectiveAt])
+}
+
+// ---------------------------------------------------------------------------
+// One AI suggestion-generation run against one Case.
+//
+// A run is recorded even when it produced nothing - including when AI was
+// disabled, which is the shipped default. That is deliberate: the absence of
+// suggestions must be explicable ("AI is off", "the provider failed", "it ran
+// and proposed nothing"), and those three are very different facts.
+// ---------------------------------------------------------------------------
+model AiSuggestionRun {
+  id     Int  @id @default(autoincrement())
+  caseId Int
+  case   Case @relation("AiSuggestionRunCase", fields: [caseId], references: [id], onDelete: Restrict)
+
+  organizationId Int
+  organization   Organization @relation("AiSuggestionRunOrganization", fields: [organizationId], references: [id], onDelete: Restrict)
+
+  status AiSuggestionRunStatus
+
+  // Stable lowercase provider name ("disabled", "mock"). A plain string rather
+  // than an enum so registering a future provider needs no migration - the
+  // same convention as IocEnrichment.provider (D-007).
+  providerName String
+
+  // Provider-declared model identifier, when the provider declares one. Null
+  // for the disabled provider, which has no model. NEVER a credential, never a
+  // base URL, never a key - see services/ai/aiProviderRegistry.js.
+  providerModel String?
+
+  // Version-stamped prompt/contract identity, so a suggestion stays
+  // interpretable after the template changes.
+  promptTemplateVersion String
+
+  // sha256 over the bounded, canonical, evidence-only case snapshot the
+  // provider was given. This is an INTERNAL value: it is never serialized to
+  // any API response and never written to AuditLog. Its only job is to let a
+  // later approval detect that the case evidence has changed since the
+  // suggestion was produced.
+  inputFingerprint String
+
+  // Counts, derived from what actually happened. `rejectedCount` is the number
+  // of provider-returned candidates that failed validation and were DISCARDED
+  // - never repaired, never persisted.
+  suggestionCount Int @default(0)
+  rejectedCount   Int @default(0)
+
+  // Closed machine-readable vocabulary (see services/ai/aiSuggestionRules.js
+  // RUN_REASON_CODES). Never free text, never an exception message, never a
+  // provider error string.
+  reasonCode String
+
+  // Bounded analyst-supplied context for this request. Deliberately excluded
+  // from inputFingerprint: it describes what the analyst asked, not what the
+  // case is, so changing it must not make an existing suggestion stale.
+  requestContext String?
+
+  actorUserId Int?
+  actor       User? @relation("AiSuggestionRunActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  requestedAt DateTime
+  completedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  suggestions AiFrameworkMappingSuggestion[] @relation("AiSuggestionRunSuggestions")
+
+  @@index([caseId, requestedAt])
+  @@index([status])
+}
+
+// ---------------------------------------------------------------------------
+// One immutable AI mapping suggestion.
+//
+// The CONTENT columns (framework .. providerConfidence) are written once at
+// creation and never rewritten by any code path in this repository. What
+// changes is the DECISION PROJECTION (state, decidedAt, decidedByUserId,
+// decisionReason, promotedMappingId) - the same projection-plus-history
+// division as Notification's approval columns beside
+// NotificationLifecycleEvent, and Case's closure columns beside
+// CaseLifecycleEvent. The permanent record of every decision lives in
+// AiSuggestionDecision, never only here.
+//
+// A PENDING suggestion is INERT. It grants nothing, changes nothing, appears
+// in no active-mapping list, and is invisible to every aggregate. The only
+// thing that can turn one into an ACTIVE mapping is a named human calling the
+// approval path, which promotes it through the SAME manual mapping service an
+// analyst uses by hand.
+// ---------------------------------------------------------------------------
+model AiFrameworkMappingSuggestion {
+  id    Int             @id @default(autoincrement())
+  runId Int
+  run   AiSuggestionRun @relation("AiSuggestionRunSuggestions", fields: [runId], references: [id], onDelete: Restrict)
+
+  // Denormalized from the run so every suggestion query is case-scoped without
+  // a join, and so a suggestion stays bound to its case independently of the
+  // run row. Validated equal to run.caseId at write time.
+  caseId Int
+  case   Case @relation("AiSuggestionCase", fields: [caseId], references: [id], onDelete: Restrict)
+
+  // --- Immutable suggested content -----------------------------------------
+  // Every field here has already passed the SAME validation a manual mapping
+  // must pass, including the MITRE ATT&CK evidence rule. Provider output that
+  // failed validation was discarded at generation time and never reached this
+  // table - there is no "invalid suggestion" row to filter out later.
+  framework        FrameworkFamily
+  frameworkVersion String
+  referenceId      String
+  referenceTitle   String
+  mappingScope     FrameworkMappingScope
+  evidenceBasis    FrameworkEvidenceBasis
+  rationale        String
+
+  evidenceFindingId Int?
+  evidenceFinding   Finding? @relation("AiSuggestionEvidenceFinding", fields: [evidenceFindingId], references: [id], onDelete: Restrict)
+
+  // Provider-declared confidence, 0-100, DISPLAY CONTEXT ONLY. Nothing in this
+  // repository reads this column to make a decision: it does not order
+  // suggestions, does not gate approval, does not influence risk, and is never
+  // compared against a threshold. It exists so an analyst can see what the
+  // model claimed about its own output while deciding - and the analyst
+  // deciding is the only thing that matters.
+  providerConfidence Int?
+
+  // Copied from the run at creation. Approval recomputes the fingerprint from
+  // the case as it is NOW and refuses if it differs - that is the whole
+  // staleness guard, and it is stored per suggestion so it survives
+  // independently of the run row.
+  inputFingerprint String
+
+  // --- Decision projection -------------------------------------------------
+  state AiSuggestionState @default(PENDING)
+
+  decidedAt       DateTime?
+  decidedByUserId Int?
+  decidedBy       User?     @relation("AiSuggestionDecidedBy", fields: [decidedByUserId], references: [id], onDelete: SetNull)
+
+  // Bounded human text. Required by the service layer on REJECT (a rejection
+  // with no stated reason teaches nothing and is not reviewable). Never
+  // written by a provider.
+  decisionReason String?
+
+  // The mapping this suggestion was promoted into, set in the SAME transaction
+  // as the approval. @unique: one suggestion promotes to at most one mapping,
+  // and one mapping originates from at most one suggestion - which is what
+  // makes a repeated approval structurally unable to create a second mapping.
+  // Restrict: the mapping an approval points at must not be removable while
+  // the approval record stands.
+  promotedMappingId Int?                  @unique
+  promotedMapping   CaseFrameworkMapping? @relation("AiSuggestionPromotedMapping", fields: [promotedMappingId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+
+  decisions AiSuggestionDecision[] @relation("AiSuggestionDecisions")
+
+  @@index([caseId, state])
+  @@index([runId])
+  @@index([caseId, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Append-only human decision ledger for AI suggestions.
+//
+// Every decision ATTEMPT that reached a durable outcome is recorded here,
+// including the ones that changed nothing (a repeated approval on an
+// already-approved suggestion). That is what makes repeated requests provably
+// idempotent rather than merely believed to be, and it is the same reasoning
+// as CaseRecurrenceReopen recording its SKIPPED_* evaluations.
+// ---------------------------------------------------------------------------
+model AiSuggestionDecision {
+  id           Int                          @id @default(autoincrement())
+  suggestionId Int
+  suggestion   AiFrameworkMappingSuggestion @relation("AiSuggestionDecisions", fields: [suggestionId], references: [id], onDelete: Restrict)
+
+  decision AiSuggestionDecisionType
+
+  // Closed machine-readable vocabulary (see services/ai/aiSuggestionRules.js
+  // DECISION_OUTCOME_CODES): APPROVED_AND_PROMOTED, REJECTED,
+  // ALREADY_DECIDED_UNCHANGED. Never free text, never an exception message.
+  outcomeCode String
+
+  // Bounded human text, required on REJECT by the service layer.
+  reason String?
+
+  actorUserId Int?
+  actor       User? @relation("AiSuggestionDecisionActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  decidedAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([suggestionId, decidedAt])
+  @@index([decision])
 }

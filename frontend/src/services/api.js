@@ -116,6 +116,57 @@ export const caseWorkflowService = {
   reopenCase: (id, reason) => apiClient.post(`/cases/${id}/reopen`, { reason }),
 }
 
+// Phase 5 — framework mapping and optional AI mapping assistance.
+//
+// There is deliberately no deleteMapping. A mapping's history is the record of
+// what a named analyst associated with a case and when they withdrew it; the
+// backend has no hard-delete route and withdrawal is an appended REMOVED row.
+//
+// There is also no "reactivate" call: re-adding a previously removed mapping is
+// simply createMapping with the same framework, scope and reference, and the
+// backend reports the outcome as REACTIVATED. One call site means the ATT&CK
+// evidence rule and the organization binding cannot drift between two paths.
+export const frameworkMappingService = {
+  listMappings: (caseId) => apiClient.get(`/cases/${caseId}/framework-mappings`),
+
+  getHistory: (caseId, params) =>
+    apiClient.get(`/cases/${caseId}/framework-mappings/history`, { params }),
+
+  // The body carries CONTENT only. actor, source, state, effectiveAt and every
+  // internal key are server-decided; the backend rejects them by name rather
+  // than dropping them, so sending one is a 400 and never a silent no-op.
+  createMapping: (caseId, data) => apiClient.post(`/cases/${caseId}/framework-mappings`, data),
+
+  removeMapping: (caseId, mappingId, reason) =>
+    apiClient.post(`/cases/${caseId}/framework-mappings/${mappingId}/remove`, { reason }),
+}
+
+// AI assistance is OPTIONAL and disabled by default. Every call below is safe
+// to make with AI off: the config endpoint reports the disabled state, and a
+// suggestion request answers 200 with a recorded DISABLED run rather than an
+// error. No screen needs to guess whether the feature exists.
+export const aiMappingService = {
+  getConfig: () => apiClient.get('/ai/config'),
+
+  listSuggestions: (caseId, params) =>
+    apiClient.get(`/cases/${caseId}/ai/mapping-suggestions`, { params }),
+
+  requestSuggestions: (caseId, requestContext) =>
+    apiClient.post(
+      `/cases/${caseId}/ai/mapping-suggestions`,
+      requestContext ? { requestContext } : {},
+    ),
+
+  approveSuggestion: (caseId, suggestionId, reason) =>
+    apiClient.post(
+      `/cases/${caseId}/ai/mapping-suggestions/${suggestionId}/approve`,
+      reason ? { reason } : {},
+    ),
+
+  rejectSuggestion: (caseId, suggestionId, reason) =>
+    apiClient.post(`/cases/${caseId}/ai/mapping-suggestions/${suggestionId}/reject`, { reason }),
+}
+
 export const findingTriageService = {
   getTriage: (findingId) => apiClient.get(`/findings/${findingId}/triage`),
 

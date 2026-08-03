@@ -25,6 +25,7 @@ import { useAuth } from '../hooks/useAuth'
 import { CAPABILITIES } from '../constants/capabilities'
 import { hasCapability } from '../utils/permissions'
 import { FindingTriagePanel } from '../components/FindingTriagePanel'
+import { FrameworkMappingPanel } from '../components/FrameworkMappingPanel'
 import {
   CASE_STATE_COLORS,
   CASE_STATE_LABELS,
@@ -871,6 +872,20 @@ export const CaseDetail = () => {
             ))}
           </Box>
         )}
+      </Section>
+
+      {/* ---------------- Phase 5: framework mapping workspace ---------------- */}
+      {/* Placed after the evidence and response sections and before the
+          timeline: a framework mapping is a judgement made ABOUT the evidence
+          above it, and it should be read after that evidence rather than
+          before. The panel fetches its own data and renders its own capability
+          gates, so this screen neither knows nor decides who may map what. */}
+      <Section
+        title="Framework mapping"
+        subtitle="Analyst-associated framework context for this case. Not a compliance determination."
+        testId="framework-mapping-section"
+      >
+        <FrameworkMappingPanel caseId={id} />
       </Section>
 
       {/* ---------------- Lifecycle timeline ---------------- */}

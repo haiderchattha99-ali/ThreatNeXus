@@ -2,232 +2,430 @@
 
 **Connecting Intelligence with Action**
 
-## Status: Phase 0
+A defensible CERT triage and constituent-notification workflow: ingest a
+Shadowserver-style exposure report, deduplicate it into persistent findings,
+attribute each one to a constituent organization, enrich and score it
+deterministically, work it through an analyst case, notify the affected
+organization with reviewer approval, and record what came back — with a
+complete audit trail behind every step.
 
-This repository is being built in phase-gated increments. **Phase 0** covers
-the foundation only: secure environment/config handling, audit logging,
-role/capability authorization enforced on every protected route (see the
-authorization matrix in
-[`docs/API_CONTRACT_PHASE0.md`](docs/API_CONTRACT_PHASE0.md)),
-hardened auth, upload cleanup, and this local dev setup. It does **not**
-include the Shadowserver ingestion pipeline, the Finding/RawReport model,
-IOC/vulnerability enrichment, or AI assistance — those are later phases in
-`../ThreatNeXus-Planning/planning/BUILD_PLAN.md`.
+## What this is, and what it is not
 
-Three CRUD groups added by parallel UI work — `/api/cases`,
-`/api/notifications`, `/api/organizations` — are also present. They now sit
-behind the same authenticate + capability guard as everything else
-(`manage:cases`, `review:notifications` and `manage:system` respectively), with
-audit logging and input validation on every write. They are **flat CRUD tables
-backing the UI, not the Phase 1 workflow**: a case is not linked to a finding,
-and a notification has no approval state and is never sent anywhere.
+ThreatNeXus is a **defensive security prototype built as a PKCERT / NCERT
+internship project**. It is a working demonstration of a CERT workflow, not a
+national production system. It has not been security-audited, has no
+high-availability or disaster-recovery story, ships with local development
+defaults, and has never processed real constituent data.
 
-There is still **no Shadowserver ingestion** — that is Phase 1 and has not
+Everything in it is designed so a human stays accountable for every decision
+that leaves the system:
+
+- **It never sends anything.** There is no SMTP client, no webhook client, and
+  no outbound message transport anywhere in the repository — not even a
+  disabled one. Approved notifications are *exported to a file* that a human
+  sends by hand. The absence of the code is the guarantee.
+- **It never remediates.** Nothing here changes a constituent's systems, opens
+  a connection to them, or verifies a fix on its own.
+- **It never scans.** Findings come from an uploaded report file. There is no
+  scanner, no probe and no active reconnaissance of any kind.
+- **AI decides nothing.** It is off by default, and when on it only drafts and
+  suggests — see [AI assistance](#ai-assistance-optional-off-by-default).
+
+## Current status: Phase 5 complete
+
+| Phase | Delivered |
+|---|---|
+| **0 — Foundation** | Config validation, audit logging, role/capability authorization on every protected route, hardened auth, upload cleanup, Vitest + Supertest, local PostgreSQL via Docker Compose. |
+| **1 — Ingestion** | Accessible-RDP CSV upload → `RawReport` → `RawReportRow` → deduplicated `Finding` → `FindingOccurrence`. Dedup key `(indicator, port, protocol, reportType)`; persistence bumps an occurrence, recurrence reopens. Idempotent replay. |
+| **2 — Attribution, enrichment, risk** | Ownership resolution (exact IP → longest-prefix CIDR → ASN) with analyst override; AbuseIPDB IOC reputation behind a provider abstraction with a durable cache/queue, retry and dead-letter; CISA KEV, FIRST EPSS and NVD vulnerability enrichment on analyst-asserted CVEs; deterministic, explainable **Risk v1** scoring. |
+| **3 — Analyst workflow** | Triage, organization-bound cases, `CaseFinding` evidence links, organization responses, reviewer-approved closure with separation of duties, recurrence-driven reopening. |
+| **4 — Notifications** | Drafting from case evidence, immutable revisions, reviewer approval bound to an exact revision, approved-only manual `.eml` / `.txt` export, delivery tracking. |
+| **5 — Framework mapping + AI assistance** | Append-only MITRE ATT&CK / NIST CSF 2.0 / CIS Controls v8 mappings on cases, with a server-enforced ATT&CK evidence rule; optional AI mapping suggestions, disabled by default, promoted only by a named human through the manual mapping service. |
+
+Phase 6 (the dedicated analyst frontend and demonstration build) has not
 started.
 
-Build outputs are not committed: `frontend/dist` is ignored and untracked, so
-`npm run build` produces no tracked diffs.
+## The workflow, end to end
 
-See [`docs/API_CONTRACT_PHASE0.md`](docs/API_CONTRACT_PHASE0.md) for exactly
-which endpoints exist today and their known limitations.
+```
+Shadowserver-style CSV
+        │
+        ▼
+  RawReport ─► RawReportRow ─► Finding ─► FindingOccurrence
+                                  │        (persistence / recurrence)
+                                  ├─► FindingOwnership      which constituent owns this?
+                                  ├─► IocEnrichment         AbuseIPDB reputation
+                                  ├─► FindingVulnerability  analyst-asserted CVEs
+                                  │      └─► KEV / EPSS / NVD metadata
+                                  └─► RiskScore             deterministic, explainable
+                                  │
+                                  ▼
+                          FindingTriage   (analyst decision)
+                                  │
+                                  ▼
+                      Case ◄── CaseFinding (evidence links)
+                       │
+                       ├─► CaseFrameworkMapping    ATT&CK / CSF / CIS context
+                       │      └─► AiSuggestionRun ─► suggestion ─► human decision
+                       │
+                       ├─► Notification ─► revision ─► reviewer approval
+                       │      └─► export (sent by hand) ─► delivery record
+                       │
+                       ├─► CaseOrganizationResponse
+                       │
+                       └─► closure request ─► reviewer approval ─► CLOSED
+                                                     │
+                                        recurrence ──┘ reopens
+```
 
-## Stack
+Every write on that path appends its own `AuditLog` event in the same change.
 
-- **Backend:** Node.js, Express
-- **Database:** PostgreSQL via Prisma
-- **Frontend:** React, Vite, MUI
-- **Tests:** Vitest, Supertest (backend); oxlint (frontend)
+## Framework mapping is not compliance
+
+Phase 5 supports three framework families: **MITRE ATT&CK**, **NIST
+Cybersecurity Framework 2.0**, and **CIS Controls v8**.
+
+An active mapping means exactly one thing: *a named analyst associated a named
+framework reference with this case, on a stated evidence basis, and wrote down
+why.* It does **not** mean the control is implemented, audited, assessed or
+compliant, and it is not a compliance determination of any kind. The API
+carries that disclaimer on every read path, and the UI renders the server's own
+wording rather than re-phrasing it.
+
+There is deliberately **no "percentage mapped" metric**, no coverage gauge and
+no maturity score anywhere in the system. Counts are counts of mappings and are
+labelled as such — a denominator would require knowing how many references
+*should* apply, which nobody knows, and printing one creates pressure to force
+weak mappings.
+
+Reference identifiers and titles are **analyst-entered and format-checked
+only**. This repository pins no local framework catalogue, so no reference is
+verified to exist; `T9999` passes the shape check and does not exist. Every
+read path says so rather than implying a validation that did not happen.
+`frameworkVersion` is required and never assumed.
+
+### The MITRE ATT&CK evidence rule
+
+An ATT&CK mapping asserts that adversary behaviour occurred, so it is held to a
+stricter standard than the other two families. Enforced server-side, it
+requires:
+
+- evidence basis `OBSERVED_BEHAVIOR` (structural),
+- a rationale that reaches a substance floor (structural),
+- evidence tied to the case or to a currently-linked finding (structural), and
+- a rationale that actually describes behaviour rather than restating exposure
+  (a documented, bounded lexical guard that fails closed).
+
+An ATT&CK mapping resting **only** on an exposed service, an open port, a CVE,
+KEV membership, an EPSS score, an AbuseIPDB reputation result, the
+organization's sector or the risk score is **refused**. A CVE may support an
+investigation; it is not evidence that an adversary did anything.
+
+NIST CSF and CIS Controls mappings may record a control gap or remediation
+alignment. They assert analyst-associated context — never implementation, audit
+status or compliance.
+
+## AI assistance (optional, off by default)
+
+`AI_ENABLED` defaults to `false`, and that is the shipped configuration. With it
+off:
+
+- the application starts normally and **no API key is required to start**,
+- no external call is made and no provider is invoked at all,
+- no timer, worker or background job exists,
+- a suggestion request returns a controlled `DISABLED` result with a recorded
+  run explaining why, and no suggestion row is fabricated,
+- the UI says "AI assistance is disabled",
+- **every workflow in Phases 0–5 completes normally.**
+
+**No live AI provider ships in this milestone.** The repository contains a
+provider *contract*, a disabled production provider, and a deterministic
+offline mock used only by tests and the evaluator. The mock is reachable only
+behind an explicit test opt-in; there is no configuration value that makes
+production silently fall back to it.
+
+When assistance is enabled, what it can do is bounded by what it is handed. A
+provider gets one method, taking a **bounded, allow-listed case snapshot** and
+returning data — no database client, no transaction, no repository, no user, no
+capability and no logger. It therefore cannot:
+
+> alter a risk score or its contributions · choose a risk band · approve its own
+> suggestion · create an ownership mapping · attach a CVE · close, reopen or
+> resolve a case · approve a closure · create, approve, export or deliver a
+> notification · record an organization response · send email · run enrichment ·
+> scan anything · create an active framework mapping
+
+That prohibition is structural rather than a rule somebody remembered to write,
+and a dedicated test suite drives a deliberately hostile provider end to end and
+counts every table it must not touch.
+
+The snapshot sent to a provider carries the case reference and title, lifecycle
+state, coarse organization sector, and per linked finding: report type, triage
+decision, the deterministic Risk v1 band with its stored explanation, and
+analyst-asserted CVE ids. It **never** carries indicator values, ports, the
+organization's name or contacts, notification bodies, audit rows, credentials,
+internal fingerprints or raw database rows.
+
+Provider output is treated as untrusted input: unknown fields are rejected
+rather than dropped, every candidate must clear the same rules a hand-written
+mapping clears, and failures are discarded and counted — never repaired. A
+suggestion is **inert** until a named human approves it, and approval reloads
+the case, recomputes the evidence fingerprint, **refuses a stale suggestion**,
+re-validates, and promotes through the same service the analyst form uses,
+recording the human as the mapping's actor.
+
+## Roles and RBAC
+
+Authorization is **capability-based and deliberately non-hierarchical** — no
+role inherits another's authority. The backend middleware is the only boundary;
+the frontend's capability checks are UX convenience and are re-checked on every
+request regardless.
+
+| | ADMIN | ANALYST | REVIEWER | VIEWER |
+|---|---|---|---|---|
+| Read dashboard, findings, cases | ✅ | ✅ | ✅ | ✅ |
+| Upload reports, triage findings | ✅ | ✅ | — | — |
+| Manage cases, link evidence, record responses | ✅ | ✅ | — | — |
+| Override ownership, trigger enrichment, recalculate risk | ✅ | ✅ | — | — |
+| Assert / retract CVE associations | ✅ | ✅ | — | — |
+| Approve or reject a case closure | ✅ | — | ✅ | — |
+| Draft, edit, submit, export notifications; record delivery | ✅ | ✅ | — | — |
+| Approve or reject a notification | ✅ | — | ✅ | — |
+| Create, remove, reactivate framework mappings | ✅ | ✅ | — | — |
+| Read AI suggestion history | ✅ | ✅ | ✅ | — |
+| Request AI suggestions; approve or reject them | ✅ | ✅ | — | — |
+| Run batch enrichment workers; manage users and system | ✅ | — | — | — |
+
+Two separations of duties are structural: the analyst who requests a closure can
+never approve one, and the analyst who writes a notification can never approve
+it. A third invariant is enforced in Phase 5 — approving an AI suggestion
+creates a mapping, so **approval authority never exceeds the authority to write
+that same mapping by hand**.
+
+## Architecture and stack
+
+- **Backend:** Node.js, Express 5
+- **Database:** PostgreSQL 16 via Prisma (17 migrations, all additive)
+- **Frontend:** React 19, Vite, MUI
+- **Tests:** Vitest + Supertest (backend), Vitest + Testing Library (frontend),
+  oxlint
 - **Local database:** Docker Compose (PostgreSQL only)
 
-The original submitted proposal sketched a FastAPI/SQLAlchemy backend. That
-was superseded early on (see `../ThreatNeXus-Planning/planning/DECISIONS.md`,
-decision D-001) — this repository preserves and refactors the existing
-Node/Express/Prisma codebase rather than rewriting it in Python.
+The submitted proposal sketched a FastAPI/SQLAlchemy backend. That was
+superseded early (see `../ThreatNeXus-Planning/planning/DECISIONS.md`, D-001):
+this repository preserves and refactors the existing Node/Express/Prisma
+codebase rather than rewriting it in Python.
+
+Recurring design patterns worth knowing before reading the code:
+
+- **Append-only history with a current-row pointer.** Triage decisions, case
+  links, ownership, risk scores, CVE associations, notification revisions and
+  framework mappings all supersede rather than update, using a nullable
+  `@unique` column (PostgreSQL treats multiple NULLs as distinct) — no raw SQL
+  and no partial indexes.
+- **Closed vocabularies everywhere.** Reason codes, outcome codes and rejection
+  codes are enumerated constants, never free text and never an exception
+  message.
+- **Construct-only serializers.** Every API response is built from named fields
+  rather than by deleting keys from a database row, so a future migration cannot
+  silently start leaking a column.
+- **Provider abstractions with offline mocks.** Automated tests never consume a
+  live third-party quota and never make a real network call.
 
 ## Local setup
 
-### 1. Install dependencies
+### 1. Start PostgreSQL
 
-```
-cd backend
-npm install
-
-cd ../frontend
-npm install
-```
-
-### 2. Copy environment examples
-
-```
-cd backend
-cp .env.example .env
-cp .env.test.example .env.test
-```
-
-```
-cd ../frontend
-cp .env.example .env
-```
-
-Fill in a real `JWT_SECRET` in `backend/.env` (32+ characters — the example
-value is a local-only placeholder, not something to run with as-is). Never
-commit `.env` or `.env.test` — they're gitignored.
-
-### 3. Start PostgreSQL
-
-```
+```bash
 docker compose up -d
 ```
 
-This starts a `postgres:16` container (service `postgres`, db/user
-`threatnexus`) matching the default `DATABASE_URL` in `backend/.env.example`,
-with a named volume for persistence and a healthcheck.
+### 2. Create the disposable test and evaluation databases
 
-> **Port conflict note:** if you already have the T4-era disposable container
-> `threatnexus-phase0-postgres` running, it holds port 5432 and this compose
-> file's `postgres` service will fail to start. Stop the disposable one first:
-> `docker stop threatnexus-phase0-postgres`.
+The dev database is created by Compose. The other two are separate on purpose —
+the evaluators refuse to run against the development database.
 
-### 4. Run database migrations
-
+```bash
+docker exec threatnexus-postgres psql -U threatnexus -d threatnexus \
+  -c "CREATE DATABASE threatnexus_test;"
+docker exec threatnexus-postgres psql -U threatnexus -d threatnexus \
+  -c "CREATE DATABASE threatnexus_eval;"
 ```
+
+### 3. Configure the backend
+
+```bash
 cd backend
-npx prisma migrate deploy
+cp .env.example .env      # then edit: JWT_SECRET must be your own, 32+ chars
+npm install
 ```
 
-(Use `npx prisma migrate dev` instead if you're actively developing schema
-changes — `migrate deploy` just applies what's already committed.)
+`AI_ENABLED=false` and `AI_PROVIDER=null` are the shipped defaults in
+`.env.example`. No AI key is read anywhere, and none is required to start.
 
-### 5. (Optional) Seed local role-testing users
+### 4. Apply migrations to all three databases
 
+```bash
+npx prisma migrate deploy                                   # dev database, from .env
+DATABASE_URL="postgresql://threatnexus:threatnexus_local_dev_only@localhost:5432/threatnexus_test" \
+  npx prisma migrate deploy
+DATABASE_URL="postgresql://threatnexus:threatnexus_local_dev_only@localhost:5432/threatnexus_eval" \
+  npx prisma migrate deploy
 ```
-SEED_USER_PASSWORD=<a-strong-local-only-password> npm run seed:users
+
+`migrate deploy` only applies migrations already committed to
+`backend/prisma/migrations/` — it never generates one.
+
+### 5. Seed the four local demo users
+
+`SEED_USER_PASSWORD` is read only by the script, never by the running
+application. Pass it as a one-off shell variable; never commit it.
+
+```bash
+SEED_USER_PASSWORD='<a-strong-local-only-password>' npm run seed:users
 ```
 
-Creates/updates four demo accounts for testing each role:
-`admin@threatnexus.local`, `analyst@threatnexus.local`,
-`reviewer@threatnexus.local`, `viewer@threatnexus.local` — all with the
-password you provide. Idempotent (safe to re-run), refuses to run in
-production, and never prints the password. See
-`backend/src/scripts/seedUsers.js`.
+### 6. Run
 
-### 6. Run the backend
-
+```bash
+cd backend  && npm run dev                    # http://localhost:5000
+cd frontend && npm install && npm run dev     # http://localhost:5173
 ```
+
+## Tests
+
+```bash
 cd backend
-npm run test:watch   # or: node index.js / your usual dev command
+npm test                                      # unit suites; real-DB suites self-skip
+
+# With the disposable test database. Real-PostgreSQL suites share one database,
+# so they MUST run sequentially — in parallel they claim each other's queued
+# jobs and fail in a way that reads like flakiness.
+TEST_DATABASE_URL="postgresql://threatnexus:threatnexus_local_dev_only@localhost:5432/threatnexus_test" \
+  npx vitest run --no-file-parallelism
 ```
 
-Backend listens on **http://localhost:5000** by default (`PORT` in `.env`).
+Do **not** export `JWT_SECRET` when running the backend suite: several HTTP
+suites sign their own tokens with a module-scoped secret and only self-default
+it, so an exported value makes every request 401 in a way that looks exactly
+like an authorization regression.
 
-### 7. Run the frontend
-
-```
+```bash
 cd frontend
-npm run dev
-```
-
-Frontend dev server runs on **http://localhost:5173** by default and talks to
-the backend via `VITE_API_BASE_URL` (see `frontend/.env.example`).
-
-## Useful commands
-
-**Backend** (from `backend/`):
-```
-npm test                    # run the full backend test suite
-npx prisma validate         # validate the Prisma schema
-npx prisma migrate status   # check pending/applied migrations
-npm run seed:users          # seed the four local demo role accounts
-```
-
-**Frontend** (from `frontend/`):
-```
+npm test
 npm run lint
 npm run build
 ```
 
-## Security notes
+## Evaluators
 
-- No real secrets are committed anywhere in this repository. `.env` and
-  `.env.*` are gitignored except the `.env.example`/`.env.test.example`
-  templates, which contain placeholder values only.
-- Public registration (`POST /api/auth/register`) always creates a `VIEWER`
-  account — a `role` field in the request body is ignored, not honored.
-- Write actions (auth, threat create/update/delete/import, and case /
-  notification / organization create/update/delete) are recorded to the
-  `AuditLog` table via `safeLogAuditEvent`; an audit write failure never
-  blocks the underlying request. Audit rows carry small allow-listed summaries
-  only — never the raw request body, headers, cookies, bearer token or query
-  string.
-- Every protected route is capability-gated via `requireCapability`
-  (`requireRole.js`, `roles.js`): reads need `read:dashboard`/`read:findings`,
-  import needs `ingest:reports`, status updates need `triage:findings`, and
-  deletes need `delete:records` (ADMIN only). The three resource groups need
-  `manage:cases` (`/api/cases`), `review:notifications`
-  (`/api/notifications`) and `manage:system` (`/api/organizations`) — applied
-  at router level so a route added later cannot be left unguarded. Denials
-  return a generic `403` that never names the missing capability, and are
-  audited. See the authorization matrix in `docs/API_CONTRACT_PHASE0.md`.
-- Build artifacts are not tracked. `frontend/dist` is gitignored and untracked,
-  so a local `npm run build` cannot introduce a tracked diff or ship a stale
-  bundle from the repository.
-- AI assistance is unimplemented and disabled by default (`AI_ENABLED=false`).
-  Live Shadowserver ingestion, automatic notification sending, and automatic
-  remediation verification are all out of scope for the entire project, not
-  just Phase 0.
+Each gate drives the **real production services** end to end against a
+disposable database, and compares every result against expectations written out
+by hand in the gate file. All of them refuse to run without an explicit
+`EVAL_DATABASE_URL`, and refuse to run if it equals `DATABASE_URL`.
 
-## Phase 1 gate — synthetic evaluation (P1-GATE)
+```bash
+cd backend
+export EVAL_DATABASE_URL="postgresql://threatnexus:threatnexus_local_dev_only@localhost:5432/threatnexus_eval"
 
-`eval/run_phase1_gate.js` is an executable check that ingests the synthetic
-fixtures in `data/synthetic/accessible-rdp/*.csv` through the real ingestion
-service and compares the resulting database state against the manually
-authored `data/synthetic/ground_truth.yaml`. It is **not part of the running
-application** and never touches the development database.
+npm run eval:phase1                 # ingestion, dedup, persistence, recurrence
+npm run eval:risk                   # the locked Risk v1 numeric contract
+npm run eval:phase2                 # ownership + IOC enrichment
+npm run eval:phase2:mutation        # proves the ownership gate can actually fail
+npm run eval:vulnerability          # KEV / EPSS / NVD
+npm run eval:vulnerability:mutation # proves the vulnerability gate can actually fail
+npm run eval:phase3                 # analyst workflow to closure and reopening
+npm run eval:phase4                 # notification drafting to delivery
+npm run eval:phase5                 # framework mapping + guarded AI assistance
+```
 
-**These are synthetic development/evaluation fixtures only** — RFC 5737
-documentation IP ranges, deterministic hand-chosen timestamps, no real
-organization or Shadowserver data. See `data/synthetic/README.md` for the
-full disclaimer. `accessible-rdp.synthetic.v1` is not an official
+The two `:mutation` gates deliberately break a rule and assert that a named
+scenario notices — a gate nobody has proven can fail is not a gate.
+
+The synthetic fixtures in `data/synthetic/` are **development and evaluation
+data only**: RFC 5737 documentation IP ranges, deterministic hand-chosen
+timestamps, and no real organization or Shadowserver data. See
+`data/synthetic/README.md`. `accessible-rdp.synthetic.v1` is not an official
 Shadowserver schema.
 
-### Set up a dedicated, disposable evaluation database
+## External providers
 
-Never point this at your dev database. Using the same local Docker Postgres
-service as the rest of this README:
+| Provider | Used for | Key required | Notes |
+|---|---|---|---|
+| **AbuseIPDB** | IPv4 reputation enrichment | Optional (`ABUSEIPDB_API_KEY`) | Without a key the provider returns `SKIPPED_DISABLED`; ingestion is never blocked. |
+| **CISA KEV** | Known-exploited status for analyst-asserted CVEs | No | Public catalogue. |
+| **FIRST EPSS** | Exploit-prediction score | No | Public API. |
+| **NVD** | CVE metadata | Optional (`NVD_API_KEY`) | Public rate limit applies without a key. |
+| **AI mapping assistance** | Framework mapping suggestions | **No live provider ships** | Disabled by default; offline mock for tests only. |
 
-```
-docker exec threatnexus-postgres psql -U threatnexus -c "CREATE DATABASE threatnexus_eval;" postgres
+Enrichment failure **never blocks ingestion** — the finding is still created and
+the enrichment row records `FAILED` or `RATE_LIMITED`. API keys are read from
+environment variables only, and never appear in a log line, an error response,
+an audit record or a database column.
 
-cd backend
-DATABASE_URL="postgresql://threatnexus:<your-postgres-password>@localhost:5432/threatnexus_eval" \
-  npx prisma migrate deploy
-```
+## Known limitations
 
-`migrate deploy` only applies the migrations already committed to
-`backend/prisma/migrations/` — it never generates one.
+- **Single report type.** Only Shadowserver-style *Accessible RDP* is ingested.
+- **Manual ingestion only.** No scheduled or live Shadowserver API pull; a human
+  uploads a CSV.
+- **No framework catalogue.** Reference ids are format-checked, not verified to
+  exist. There is no pinned ATT&CK/CSF/CIS data in the repository.
+- **No live AI provider.** The contract, the disabled provider and an offline
+  mock exist; nothing calls a model.
+- **The ATT&CK lexical guard is a backstop, not comprehension.** It reliably
+  catches the common "port 3389 is open, therefore T1021.001" mistake. It cannot
+  detect a fluent, well-worded fabrication — which is why the structural gates
+  exist and why every mapping records a named human actor.
+- **ASN-tier ownership cannot be re-resolved later.** ASN is not persisted on a
+  finding, so that tier only fires at ingestion time.
+- **No production deployment story.** No production Docker image, no CI
+  pipeline, no HA/DR, no secret manager, no external security audit.
+- **Synthetic data only.** No real constituent or victim data has ever been
+  processed, and none may be committed.
 
-### Run the gate
+## Roadmap
 
-```
-cd backend
-EVAL_DATABASE_URL="postgresql://threatnexus:<your-postgres-password>@localhost:5432/threatnexus_eval" \
-  npm run eval:phase1
-```
+- **Phase 6 — Analyst frontend and demonstration readiness.** A premium,
+  purpose-built SOC/CERT interface; an authorized subtle PKCERT watermark;
+  metrics derived only from real backend data with nothing fabricated;
+  accessibility and responsive behaviour; and final security, Docker, CI,
+  end-to-end test, documentation and demo hardening.
+- **Beyond.** A second report type carried to closure; a pinned framework
+  catalogue so references can be validated rather than only format-checked; and
+  a live AI provider behind the existing contract, if and only if it is approved
+  in the decision record first.
 
-`EVAL_DATABASE_URL` is **required** — the gate refuses to run without it, and
-refuses to run if it's equal to `DATABASE_URL` (a safeguard against
-accidentally targeting the development database). It never reads
-`DATABASE_URL` for its own connection. Exit code `0` means every scenario
-matched `ground_truth.yaml` exactly; non-zero means at least one mismatch (see
-the printed expected-vs-actual diff) or an unsafe/invalid configuration.
+## Team
 
-The gate is rerunnable: it cleans up its own, exactly-scoped evaluation-owned
-records (derived from this run's own `RawReport`/`FindingOccurrence` evidence
-chain, never a broad table reset) before each run.
+| | |
+|---|---|
+| **M. Ismail** | Threat Intelligence and System Coordination |
+| **Ali Haider** | Software Engineering and Backend Systems |
+| **Aun Zulfiqar** | Frontend and UX |
+| **Eshaal Khan** | Security Workflow and QA |
+
+## Responsible use
+
+ThreatNeXus is a **defensive** tool for a CERT acting on behalf of its
+constituents. It ingests reports about exposures, helps an analyst decide what
+to do about them, and helps them tell the affected organization.
+
+It contains no offensive capability: no scanner, no exploit, no payload, no
+credential testing, no active reconnaissance, and no transport that can reach a
+third party's systems. It cannot send a message on its own, cannot change
+anything outside its own database, and cannot make any decision that leaves the
+system without a named human recorded against it.
+
+Handle any data placed in it as you would handle real incident data. Only
+synthetic or sample data belongs in this repository, and no secrets or real
+victim data may ever be committed.
+
+Planning documents, the phased build plan and the decision record live in the
+sibling folder `../ThreatNeXus-Planning/`, which is read-only from here.
 
 ## Docker cleanup
 
-```
+```bash
 docker compose down       # stop and remove the postgres container, keep data
 docker compose down -v    # ALSO deletes the named volume — every local row is gone
 ```

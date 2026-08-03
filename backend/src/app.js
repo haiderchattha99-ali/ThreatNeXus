@@ -23,6 +23,8 @@ const findingVulnerabilityRoutes = require("./routes/findingVulnerabilityRoutes"
 const vulnerabilityEnrichmentRoutes = require("./routes/vulnerabilityEnrichmentRoutes");
 const vulnerabilityEnrichmentBatchRoutes = require("./routes/vulnerabilityEnrichmentBatchRoutes");
 const findingTriageRoutes = require("./routes/findingTriageRoutes");
+const frameworkMappingRoutes = require("./routes/frameworkMappingRoutes");
+const aiAssistanceRoutes = require("./routes/aiAssistanceRoutes");
 const app = express();
 
 const allowedOrigins = env.CORS_ORIGIN.split(",")
@@ -62,6 +64,11 @@ app.use("/api/findings", findingTriageRoutes);
 app.use("/api/enrichment", enrichmentBatchRoutes);
 app.use("/api/vulnerabilities", vulnerabilityEnrichmentRoutes);
 app.use("/api/vulnerability-enrichment", vulnerabilityEnrichmentBatchRoutes);
+// Phase 5. Registered AFTER caseRoutes so the two /api/cases routers compose in
+// a defined order — caseRoutes owns "/:id" and "/:id/workflow", neither of which
+// matches any framework-mapping or AI path, so nothing is shadowed either way.
+app.use("/api/cases", frameworkMappingRoutes);
+app.use("/api/ai", aiAssistanceRoutes);
 // Home Route
 app.get("/", (req, res) => {
   res.json({

@@ -100,7 +100,7 @@ function applyData(row, data) {
   return row;
 }
 
-function orderAndTake(rows, orderBy, take) {
+function orderAndTake(rows, orderBy, take, skip) {
   const clauses = Array.isArray(orderBy) ? orderBy : orderBy ? [orderBy] : [];
   let out = [...rows];
   if (clauses.length > 0) {
@@ -117,6 +117,11 @@ function orderAndTake(rows, orderBy, take) {
       return 0;
     });
   }
+  // Phase 5 read paths paginate, so `skip` is applied BEFORE `take` — the same
+  // order PostgreSQL applies OFFSET before LIMIT. Getting this backwards would
+  // make a paginated test pass against an implementation that silently returned
+  // the first page every time.
+  if (Number.isInteger(skip) && skip > 0) out = out.slice(skip);
   return Number.isInteger(take) && take > 0 ? out.slice(0, take) : out;
 }
 
@@ -148,6 +153,17 @@ function createWorkflowPrismaFake() {
     notificationLifecycleEvents: [],
     notificationExports: [],
     notificationDeliveryEvents: [],
+    // Phase 5. The framework/AI tables, plus the three Phase 1/2 evidence
+    // tables the bounded AI snapshot reads (risk scores, their contributions,
+    // and analyst-asserted CVE associations).
+    caseFrameworkMappings: [],
+    aiSuggestionRuns: [],
+    aiFrameworkMappingSuggestions: [],
+    aiSuggestionDecisions: [],
+    riskScores: [],
+    riskFactorContributions: [],
+    vulnerabilities: [],
+    findingVulnerabilities: [],
     auditLogs: [],
     nextId: 1,
   };
@@ -166,29 +182,49 @@ function createWorkflowPrismaFake() {
   function table(key, { uniques = [], defaults = () => ({}), relations = {} } = {}) {
     const rows = () => state[key];
 
-    function withRelations(row, include) {
-      if (!row || !include) return row;
+    // `include` and relation-bearing `select` are handled by the same code.
+    // Phase 5's snapshot builder reads relations through `select` (e.g.
+    // `select: { vulnerability: { select: { cveId: true } } }`), and a fake that
+    // silently returned no relation there would make a snapshot test pass
+    // against a builder that never loaded the data.
+    //
+    // Scalar `select` keys are still ignored — the fake returns whole rows,
+    // which is strictly more permissive than Prisma and therefore cannot hide a
+    // field a service forgot to request.
+    function withRelations(row, include, select) {
+      const spec = include || (select ? pickRelationKeys(select) : null);
+      if (!row || !spec) return row;
       const out = { ...row };
-      Object.entries(include).forEach(([name, spec]) => {
+      Object.entries(spec).forEach(([name, spec2]) => {
         const relation = relations[name];
-        if (!relation || spec === false) return;
+        if (!relation || spec2 === false) return;
         const target = state[relation.table].find((r) => r.id === row[relation.foreignKey]);
         if (!target) {
           out[name] = null;
           return;
         }
-        const select = spec && typeof spec === "object" ? spec.select : null;
-        if (!select) {
+        const nestedSelect = spec2 && typeof spec2 === "object" ? spec2.select : null;
+        if (!nestedSelect) {
           out[name] = { ...target };
           return;
         }
         const projected = {};
-        Object.keys(select).forEach((field) => {
-          if (select[field]) projected[field] = target[field];
+        Object.keys(nestedSelect).forEach((field) => {
+          if (nestedSelect[field]) projected[field] = target[field];
         });
         out[name] = projected;
       });
       return out;
+    }
+
+    // Only the keys of `select` that name a modelled relation. A scalar key
+    // ("id: true") is not a relation and must not be treated as one.
+    function pickRelationKeys(select) {
+      const out = {};
+      Object.keys(select).forEach((key) => {
+        if (Object.prototype.hasOwnProperty.call(relations, key)) out[key] = select[key];
+      });
+      return Object.keys(out).length > 0 ? out : null;
     }
 
     function assertUnique(candidate, excludeId) {
@@ -210,28 +246,29 @@ function createWorkflowPrismaFake() {
         rows().push(row);
         return clone(row);
       },
-      async findUnique({ where, include }) {
+      async findUnique({ where, include, select }) {
         // Compound-key form, e.g. { findingOccurrenceId_caseId: {...} }.
         const [firstKey, firstValue] = Object.entries(where)[0];
         const found =
           firstValue !== null && typeof firstValue === "object" && !(firstValue instanceof Date)
             ? rows().find((row) => matches(row, firstValue))
             : rows().find((row) => row[firstKey] === firstValue);
-        return found ? withRelations(clone(found), include) : null;
+        return found ? withRelations(clone(found), include, select) : null;
       },
-      async findFirst({ where, orderBy, include } = {}) {
+      async findFirst({ where, orderBy, include, select } = {}) {
         const found = orderAndTake(
           rows().filter((row) => matches(row, where || {})),
           orderBy
         );
-        return found[0] ? withRelations(clone(found[0]), include) : null;
+        return found[0] ? withRelations(clone(found[0]), include, select) : null;
       },
-      async findMany({ where, orderBy, take, include } = {}) {
+      async findMany({ where, orderBy, take, skip, include, select } = {}) {
         return orderAndTake(
           rows().filter((row) => matches(row, where || {})),
           orderBy,
-          take
-        ).map((row) => withRelations(clone(row), include));
+          take,
+          skip
+        ).map((row) => withRelations(clone(row), include, select));
       },
       async count({ where } = {}) {
         return rows().filter((row) => matches(row, where || {})).length;
@@ -389,6 +426,71 @@ function createWorkflowPrismaFake() {
         revision: { table: "notificationRevisions", foreignKey: "revisionId" },
       },
     }),
+    // --- Phase 5 -------------------------------------------------------------
+    // currentMappingKey is the distinct-NULLs current-row unique again, this
+    // time enforcing "at most one current mapping per (case, framework, scope,
+    // reference)". Without it here, an append-only test would pass against a
+    // service that had no invariant at all.
+    caseFrameworkMapping: table("caseFrameworkMappings", {
+      uniques: [{ fields: ["currentMappingKey"], ignoreNull: true }],
+      defaults: () => ({
+        evidenceFindingId: null,
+        actorUserId: null,
+        supersededAt: null,
+        currentMappingKey: null,
+        source: "MANUAL",
+      }),
+      relations: {
+        actor: { table: "users", foreignKey: "actorUserId" },
+        evidenceFinding: { table: "findings", foreignKey: "evidenceFindingId" },
+      },
+    }),
+    aiSuggestionRun: table("aiSuggestionRuns", {
+      defaults: () => ({
+        providerModel: null,
+        requestContext: null,
+        actorUserId: null,
+        completedAt: null,
+        suggestionCount: 0,
+        rejectedCount: 0,
+      }),
+      relations: { actor: { table: "users", foreignKey: "actorUserId" } },
+    }),
+    aiFrameworkMappingSuggestion: table("aiFrameworkMappingSuggestions", {
+      // promotedMappingId @unique with NULLs distinct: this is what makes a
+      // repeated approval structurally unable to create a second mapping.
+      uniques: [{ fields: ["promotedMappingId"], ignoreNull: true }],
+      defaults: () => ({
+        evidenceFindingId: null,
+        providerConfidence: null,
+        state: "PENDING",
+        decidedAt: null,
+        decidedByUserId: null,
+        decisionReason: null,
+        promotedMappingId: null,
+      }),
+      relations: {
+        decidedBy: { table: "users", foreignKey: "decidedByUserId" },
+        evidenceFinding: { table: "findings", foreignKey: "evidenceFindingId" },
+        promotedMapping: { table: "caseFrameworkMappings", foreignKey: "promotedMappingId" },
+      },
+    }),
+    aiSuggestionDecision: table("aiSuggestionDecisions", {
+      defaults: () => ({ reason: null, actorUserId: null }),
+      relations: { actor: { table: "users", foreignKey: "actorUserId" } },
+    }),
+    riskScore: table("riskScores", {
+      uniques: [{ fields: ["currentForFindingId"], ignoreNull: true }],
+      defaults: () => ({ supersededAt: null, currentForFindingId: null }),
+    }),
+    riskFactorContribution: table("riskFactorContributions"),
+    vulnerability: table("vulnerabilities"),
+    findingVulnerability: table("findingVulnerabilities", {
+      uniques: [{ fields: ["currentAssociationKey"], ignoreNull: true }],
+      defaults: () => ({ supersededAt: null, currentAssociationKey: null }),
+      relations: { vulnerability: { table: "vulnerabilities", foreignKey: "vulnerabilityId" } },
+    }),
+
     auditLog: {
       async create({ data }) {
         const row = { id: state.auditLogs.length + 1, ...data };
