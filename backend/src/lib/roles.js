@@ -127,6 +127,54 @@ const CAPABILITIES = Object.freeze({
   // revision unless they are an administrator" without ever knowing what a
   // role is — see notificationReviewService.assertNotSelfApproval.
   OVERRIDE_NOTIFICATION_SELF_APPROVAL: "override:notification-self-approval",
+
+  // Phase 5 — framework mapping and guarded AI mapping assistance. Four
+  // additive, non-hierarchical grants, same convention as every capability
+  // above.
+  //
+  // There is deliberately NO new read capability for mappings. Reading which
+  // controls an analyst associated with a case IS reading the case, so both
+  // mapping read routes reuse READ_CASES — held by all four roles, exactly the
+  // policy Phase 3 already approved for case context. Minting a parallel
+  // read:framework-mappings granted to the same four roles would be capability
+  // sprawl with no policy difference behind it. (Compare READ_NOTIFICATIONS,
+  // which DID need to exist, because the notification read policy genuinely
+  // differs by role.)
+  //
+  // Creating, removing and reactivating a mapping. ADMIN and ANALYST only —
+  // this is the phase's core analyst act. REVIEWER and VIEWER hold it nowhere,
+  // so neither can mutate a mapping through any route.
+  MANAGE_FRAMEWORK_MAPPINGS: "manage:framework-mappings",
+
+  // Reading AI suggestions and their decision history. ADMIN, ANALYST and
+  // REVIEWER — deliberately NOT VIEWER.
+  //
+  // A suggestion is unreviewed machine output. VIEWER is a read-only oversight
+  // role, and read-only oversight of what a model proposed but no human
+  // accepted is not oversight of anything the organization did. VIEWER still
+  // sees every ACTIVE mapping, including ones whose `source` is
+  // AI_SUGGESTION_PROMOTED — which is the safe, approved, human-decided display
+  // fact — and sees no prompt, snapshot, confidence or pending proposal.
+  READ_AI_MAPPING_SUGGESTIONS: "read:ai-mapping-suggestions",
+
+  // Causing a generation run (and therefore, once a live provider exists,
+  // causing provider spend). ADMIN and ANALYST, mirroring how
+  // TRIGGER_FINDING_ENRICHMENT gates the enrichment equivalent.
+  REQUEST_AI_MAPPING_SUGGESTIONS: "request:ai-mapping-suggestions",
+
+  // Approving or rejecting a suggestion. ADMIN and ANALYST — the SAME holders
+  // as MANAGE_FRAMEWORK_MAPPINGS, and that identity is the point.
+  //
+  // Approving a suggestion creates a mapping. Anyone who may approve one must
+  // therefore already be permitted to create the same mapping by hand, or the
+  // AI path would be a way to obtain an authority the manual path denies. This
+  // is why the pre-existing REVIEW_AI_SUGGESTIONS grant (REVIEWER + ADMIN,
+  // declared in Phase 0 and never wired to a route) is NOT used here: it was
+  // drafted on a review-of-somebody-else's-work model, and under it a REVIEWER
+  // holding no mapping authority at all could have promoted machine output into
+  // an active mapping. REVIEW_AI_SUGGESTIONS is left in place, still granted,
+  // and still unused by any route.
+  DECIDE_AI_MAPPING_SUGGESTIONS: "decide:ai-mapping-suggestions",
 });
 
 const CAPABILITY_VALUES = Object.freeze(Object.values(CAPABILITIES));
@@ -167,6 +215,14 @@ const ROLE_CAPABILITIES = Object.freeze({
     // closure, or reopen a case. Their only write in this phase is the review
     // decision itself.
     CAPABILITIES.REVIEW_CASE_CLOSURE,
+    // Phase 5 — a reviewer may READ the AI suggestion history for a case they
+    // can already read, because deciding a closure means understanding what was
+    // proposed and what was refused. They hold neither
+    // MANAGE_FRAMEWORK_MAPPINGS, REQUEST_AI_MAPPING_SUGGESTIONS nor
+    // DECIDE_AI_MAPPING_SUGGESTIONS, so they cannot create, remove or
+    // reactivate a mapping, cannot cause a generation run, and cannot approve
+    // or reject a suggestion. Phase 5 adds no write of any kind to REVIEWER.
+    CAPABILITIES.READ_AI_MAPPING_SUGGESTIONS,
   ]),
   ANALYST: Object.freeze([
     ...READ_ONLY_CAPABILITIES,
@@ -209,6 +265,16 @@ const ROLE_CAPABILITIES = Object.freeze({
     CAPABILITIES.MANAGE_NOTIFICATIONS,
     CAPABILITIES.EXPORT_NOTIFICATIONS,
     CAPABILITIES.RECORD_NOTIFICATION_DELIVERY,
+    // Phase 5 — an analyst associates frameworks with the cases they work,
+    // asks the (optional, off-by-default) assistant for candidates, and decides
+    // each one. MANAGE_FRAMEWORK_MAPPINGS and DECIDE_AI_MAPPING_SUGGESTIONS are
+    // granted TOGETHER on purpose: approving a suggestion creates a mapping, so
+    // the authority to approve must never exceed the authority to write the
+    // same mapping by hand.
+    CAPABILITIES.MANAGE_FRAMEWORK_MAPPINGS,
+    CAPABILITIES.READ_AI_MAPPING_SUGGESTIONS,
+    CAPABILITIES.REQUEST_AI_MAPPING_SUGGESTIONS,
+    CAPABILITIES.DECIDE_AI_MAPPING_SUGGESTIONS,
   ]),
   ADMIN: Object.freeze([...CAPABILITY_VALUES]),
 });
