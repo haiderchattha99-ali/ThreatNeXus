@@ -14,7 +14,8 @@
     "eval:vulnerability": "node ../eval/run_phase2_vulnerability_gate.js",
     "eval:vulnerability:mutation": "node ../eval/run_phase2_vulnerability_mutation_gate.js",
     "eval:phase3": "node ../eval/run_phase3_gate.js",
-    "eval:phase4": "node ../eval/run_phase4_gate.js"
+    "eval:phase4": "node ../eval/run_phase4_gate.js",
+    "eval:phase5": "node ../eval/run_phase5_gate.js"
   },
   "keywords": [],
   "author": "",

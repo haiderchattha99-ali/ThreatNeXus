@@ -46,6 +46,26 @@ export const CAPABILITIES = {
   EXPORT_NOTIFICATIONS: 'export:notifications',
   RECORD_NOTIFICATION_DELIVERY: 'record:notification-delivery',
   OVERRIDE_NOTIFICATION_SELF_APPROVAL: 'override:notification-self-approval',
+  // Phase 5 — framework mapping and optional AI mapping assistance.
+  //
+  // There is deliberately NO read:framework-mappings. Reading which controls an
+  // analyst associated with a case IS reading the case, so both mapping read
+  // routes reuse READ_CASES — held by all four roles, which is why VIEWER and
+  // REVIEWER both see active mappings and full history.
+  //
+  // MANAGE_FRAMEWORK_MAPPINGS and DECIDE_AI_MAPPING_SUGGESTIONS are held by the
+  // SAME roles (ADMIN, ANALYST) on purpose: approving a suggestion creates a
+  // mapping, so approval authority must never exceed the authority to write the
+  // same mapping by hand.
+  //
+  // READ_AI_MAPPING_SUGGESTIONS is held by ADMIN, ANALYST and REVIEWER but NOT
+  // VIEWER — an undecided machine proposal is not oversight material. VIEWER
+  // still sees every ACTIVE mapping, including ones whose source is
+  // AI_SUGGESTION_PROMOTED.
+  MANAGE_FRAMEWORK_MAPPINGS: 'manage:framework-mappings',
+  READ_AI_MAPPING_SUGGESTIONS: 'read:ai-mapping-suggestions',
+  REQUEST_AI_MAPPING_SUGGESTIONS: 'request:ai-mapping-suggestions',
+  DECIDE_AI_MAPPING_SUGGESTIONS: 'decide:ai-mapping-suggestions',
 }
 
 export const CAPABILITY_VALUES = Object.values(CAPABILITIES)

@@ -6,7 +6,13 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { CaseDetail } from './CaseDetail'
 import { CAPABILITIES } from '../constants/capabilities'
 import * as useAuthModule from '../hooks/useAuth'
-import { caseWorkflowService, findingTriageService, notificationService } from '../services/api'
+import {
+  aiMappingService,
+  caseWorkflowService,
+  findingTriageService,
+  frameworkMappingService,
+  notificationService,
+} from '../services/api'
 
 // The Phase 3 case-detail screen.
 //
@@ -43,6 +49,23 @@ vi.mock('../services/api', () => ({
   notificationService: {
     getNotifications: vi.fn(),
     createDraft: vi.fn(),
+  },
+  // Phase 5 — the case screen embeds the framework-mapping workspace, which
+  // fetches its own data. Mocked to resolve empty so these Phase 3/4 tests
+  // stay about the case screen; the panel has its own dedicated suite in
+  // components/FrameworkMappingPanel.test.jsx.
+  frameworkMappingService: {
+    listMappings: vi.fn(),
+    getHistory: vi.fn(),
+    createMapping: vi.fn(),
+    removeMapping: vi.fn(),
+  },
+  aiMappingService: {
+    getConfig: vi.fn(),
+    listSuggestions: vi.fn(),
+    requestSuggestions: vi.fn(),
+    approveSuggestion: vi.fn(),
+    rejectSuggestion: vi.fn(),
   },
 }))
 
@@ -164,6 +187,40 @@ function renderDetail(capabilities, view = workflowView()) {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  // Phase 5 panel defaults: an empty, AI-disabled workspace. These tests are
+  // about the Phase 3/4 case screen; the panel's own behaviour is asserted in
+  // components/FrameworkMappingPanel.test.jsx.
+  frameworkMappingService.listMappings.mockResolvedValue({
+    data: {
+      data: {
+        caseId: 4,
+        activeCount: 0,
+        countMeaning: 'MAPPING_COUNT_NOT_COVERAGE',
+        groups: [],
+        disclaimer: 'Framework mappings record analyst-associated context only.',
+        catalogueNote: 'This system pins no local framework catalogue.',
+      },
+    },
+  })
+  frameworkMappingService.getHistory.mockResolvedValue({
+    data: { data: { caseId: 4, total: 0, take: 50, skip: 0, history: [] } },
+  })
+  aiMappingService.getConfig.mockResolvedValue({
+    data: {
+      data: {
+        aiEnabled: false,
+        assistanceAvailable: false,
+        providerName: 'disabled',
+        promptTemplateVersion: 'framework-mapping-suggestion-v1',
+        reasonCode: 'AI_DISABLED',
+        maxSuggestionsPerRun: 5,
+        disclaimer: 'Framework mappings record analyst-associated context only.',
+      },
+    },
+  })
+  aiMappingService.listSuggestions.mockResolvedValue({
+    data: { data: { caseId: 4, total: 0, take: 50, skip: 0, runs: [], suggestions: [] } },
+  })
   findingTriageService.getTriage.mockResolvedValue({
     data: {
       data: {

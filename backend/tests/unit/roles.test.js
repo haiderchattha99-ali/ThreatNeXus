@@ -119,7 +119,27 @@ describe("capability constants", () => {
     // + Phase 4 notification workflow (read:notifications,
     //   manage:notifications, export:notifications,
     //   record:notification-delivery, override:notification-self-approval)
-    expect(CAPABILITY_VALUES).toHaveLength(10 + 2 + 2 + 1 + 3 + 3 + 5);
+    // + Phase 5 framework mapping / AI assistance (manage:framework-mappings,
+    //   read:ai-mapping-suggestions, request:ai-mapping-suggestions,
+    //   decide:ai-mapping-suggestions)
+    expect(CAPABILITY_VALUES).toHaveLength(10 + 2 + 2 + 1 + 3 + 3 + 5 + 4);
+  });
+
+  it("defines the Phase 5 framework-mapping and AI-assistance capability set", () => {
+    expect(CAPABILITY_VALUES).toEqual(
+      expect.arrayContaining([
+        "manage:framework-mappings",
+        "read:ai-mapping-suggestions",
+        "request:ai-mapping-suggestions",
+        "decide:ai-mapping-suggestions",
+      ])
+    );
+
+    // Phase 5 deliberately mints NO read capability for mappings themselves:
+    // reading which controls were associated with a case IS reading the case,
+    // and both mapping read routes reuse read:cases. A parallel grant with the
+    // same holders would be sprawl with no policy behind it.
+    expect(CAPABILITY_VALUES).not.toContain("read:framework-mappings");
   });
 
   it("defines the Phase 3 analyst-workflow capability set", () => {
@@ -210,9 +230,73 @@ describe("VIEWER capabilities", () => {
       // Phase 3: reading a case must never imply deciding one.
       C.REVIEW_CASE_CLOSURE,
       C.OVERRIDE_CLOSURE_SELF_APPROVAL,
+      // Phase 5: VIEWER sees ACTIVE mappings through read:cases (including
+      // that a mapping's source is AI_SUGGESTION_PROMOTED, which is an
+      // approved, human-decided display fact) and nothing else. No mutation,
+      // no generation run, no decision, and no sight of an undecided machine
+      // proposal or the prompt context behind it.
+      C.MANAGE_FRAMEWORK_MAPPINGS,
+      C.READ_AI_MAPPING_SUGGESTIONS,
+      C.REQUEST_AI_MAPPING_SUGGESTIONS,
+      C.DECIDE_AI_MAPPING_SUGGESTIONS,
     ].forEach((capability) => {
       expect(hasCapability("VIEWER", capability)).toBe(false);
     });
+  });
+});
+
+describe("Phase 5 framework-mapping and AI-assistance capability grants", () => {
+  it("grants mapping mutation to ADMIN and ANALYST only", () => {
+    expect(hasCapability("ADMIN", C.MANAGE_FRAMEWORK_MAPPINGS)).toBe(true);
+    expect(hasCapability("ANALYST", C.MANAGE_FRAMEWORK_MAPPINGS)).toBe(true);
+    expect(hasCapability("REVIEWER", C.MANAGE_FRAMEWORK_MAPPINGS)).toBe(false);
+    expect(hasCapability("VIEWER", C.MANAGE_FRAMEWORK_MAPPINGS)).toBe(false);
+  });
+
+  it("lets every role read a case's mappings through read:cases", () => {
+    ["ADMIN", "ANALYST", "REVIEWER", "VIEWER"].forEach((role) => {
+      expect(hasCapability(role, C.READ_CASES)).toBe(true);
+    });
+  });
+
+  it("grants suggestion READ to ADMIN, ANALYST and REVIEWER but not VIEWER", () => {
+    expect(hasCapability("ADMIN", C.READ_AI_MAPPING_SUGGESTIONS)).toBe(true);
+    expect(hasCapability("ANALYST", C.READ_AI_MAPPING_SUGGESTIONS)).toBe(true);
+    expect(hasCapability("REVIEWER", C.READ_AI_MAPPING_SUGGESTIONS)).toBe(true);
+    expect(hasCapability("VIEWER", C.READ_AI_MAPPING_SUGGESTIONS)).toBe(false);
+  });
+
+  it("gives REVIEWER read-only AI access and no Phase 5 write of any kind", () => {
+    expect(hasCapability("REVIEWER", C.READ_AI_MAPPING_SUGGESTIONS)).toBe(true);
+    [
+      C.MANAGE_FRAMEWORK_MAPPINGS,
+      C.REQUEST_AI_MAPPING_SUGGESTIONS,
+      C.DECIDE_AI_MAPPING_SUGGESTIONS,
+    ].forEach((capability) => {
+      expect(hasCapability("REVIEWER", capability)).toBe(false);
+    });
+  });
+
+  // THE load-bearing grant invariant of this phase. Approving a suggestion
+  // creates a mapping, so approval authority must never exceed the authority to
+  // write that same mapping by hand — otherwise the AI path would be a way to
+  // obtain an authority the manual path denies.
+  it("never grants suggestion approval to a role that cannot create a mapping by hand", () => {
+    ["ADMIN", "ANALYST", "REVIEWER", "VIEWER"].forEach((role) => {
+      if (hasCapability(role, C.DECIDE_AI_MAPPING_SUGGESTIONS)) {
+        expect(hasCapability(role, C.MANAGE_FRAMEWORK_MAPPINGS)).toBe(true);
+      }
+    });
+  });
+
+  // The pre-existing Phase 0 grant is deliberately left declared, granted and
+  // UNUSED: it was drafted on a review-of-somebody-else's-work model under
+  // which a REVIEWER holding no mapping authority could have promoted machine
+  // output into an active mapping.
+  it("keeps the legacy review:ai-suggestions grant unused by Phase 5", () => {
+    expect(hasCapability("REVIEWER", C.REVIEW_AI_SUGGESTIONS)).toBe(true);
+    expect(hasCapability("ANALYST", C.REVIEW_AI_SUGGESTIONS)).toBe(false);
+    expect(C.REVIEW_AI_SUGGESTIONS).not.toBe(C.DECIDE_AI_MAPPING_SUGGESTIONS);
   });
 });
 
