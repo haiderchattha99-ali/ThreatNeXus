@@ -30,6 +30,7 @@ import {
   describeNotificationError,
   formatInstant,
 } from '../constants/notificationWorkflow'
+import { PageHeader } from '../components/ui'
 
 // The constituent-notification workflow list (Phase 4).
 //
@@ -103,18 +104,14 @@ export const Notifications = () => {
           mb: 3,
         }}
       >
-        <Box>
-          <Typography sx={{ fontSize: 22, fontWeight: 700, color: '#EAF1F9' }}>
-            Notifications
-          </Typography>
-          <Typography sx={{ fontSize: 13, color: '#9DAFC2', mt: 0.5 }}>
-            Constituent notifications drafted from case evidence. ThreatNeXus never sends a
-            message — an approved notification is exported manually and its delivery recorded by
-            hand.
-          </Typography>
-        </Box>
+        <PageHeader
+          eyebrow="Response / constituent communications"
+          title="Notifications"
+          description="Drafted from persisted case evidence. ThreatNeXus never sends a message; approved artifacts are exported for manual delivery and any outcome is recorded by a person."
+          sx={{ mb: 0, flex: '1 1 440px' }}
+        />
 
-        <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center' }}>
+        <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center', flexWrap: 'wrap', flex: '1 1 280px', justifyContent: { xs: 'stretch', sm: 'flex-end' }, '& .MuiTextField-root': { flex: { xs: '1 1 100%', sm: '0 0 auto' } } }}>
           <TextField
             select
             size="small"
@@ -180,7 +177,7 @@ export const Notifications = () => {
             </Button>
           </Box>
         ) : (
-          <TableContainer sx={{ overflowX: 'auto' }}>
+          <TableContainer sx={{ overflowX: 'auto', maxWidth: '100%' }}>
             <Table size="small">
               <TableHead>
                 <TableRow>

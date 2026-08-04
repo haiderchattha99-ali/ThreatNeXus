@@ -33,6 +33,8 @@ import {
   CASE_STATE_LABELS,
   describeWorkflowError,
 } from '../constants/caseWorkflow'
+import { PageHeader } from '../components/ui'
+import { color } from '../theme/tokens'
 
 const priorityColors = {
   Critical: '#F2617A',
@@ -157,36 +159,20 @@ export const Cases = () => {
 
   return (
     <Box sx={{ p: { xs: 2, md: 4 }, maxWidth: 1540, mx: 'auto' }}>
-      <Box
-        sx={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          mb: 4,
-          gap: 2,
-          flexWrap: 'wrap',
-        }}
-      >
-        <Box>
-          <Typography className="eyebrow">Intelligence operations / cases</Typography>
-          <Typography className="page-title" sx={{ mt: 1 }}>
-            Investigation cases
-          </Typography>
-          <Typography sx={{ mt: 1, color: '#9DAFC2', fontSize: 13 }}>
-            Organization-bound cases, their evidence, and their closure review.
-          </Typography>
-        </Box>
-
-        <Button
+      <PageHeader
+        eyebrow="Intelligence operations / cases"
+        title="Investigation cases"
+        description="Organization-bound investigations, their linked evidence and independent closure review."
+        actions={<Button
           startIcon={<FiRefreshCw />}
           onClick={fetchCases}
           disabled={loading}
           variant="outlined"
-          sx={{ borderColor: '#33485F', color: '#9DAFC2' }}
+          sx={{ borderColor: color.borderStrong, color: color.textMuted }}
         >
           Refresh
-        </Button>
-      </Box>
+        </Button>}
+      />
 
       <Box
         sx={{
@@ -213,7 +199,7 @@ export const Cases = () => {
 
       <Card
         className="surface"
-        sx={{ p: 1.5, mb: 3, display: 'flex', gap: 1, alignItems: 'center' }}
+        sx={{ p: 1.5, mb: 3, display: 'flex', gap: 1, alignItems: 'center', flexWrap: { xs: 'wrap', sm: 'nowrap' } }}
       >
         <FiSearch color="#5AB6D9" />
         <TextField
@@ -242,7 +228,7 @@ export const Cases = () => {
         )}
       </Card>
 
-      <TableContainer component={Card} className="surface">
+      <TableContainer component={Card} className="surface" sx={{ maxWidth: '100%', overflowX: 'auto' }}>
         {loading ? (
           <Box sx={{ p: 8, textAlign: 'center' }}>
             <CircularProgress />
