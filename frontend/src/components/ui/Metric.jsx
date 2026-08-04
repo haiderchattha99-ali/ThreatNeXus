@@ -48,7 +48,10 @@ export function MetricValue({ metric, size = 'large' }) {
         <Box
           component="span"
           aria-hidden="true"
-          sx={{ ...typeStyle, color: color.textFaint, lineHeight: 1 }}
+          // This em dash IS the value — it is what stands in place of a figure
+          // the caller may not read or the server could not compute. Supporting
+          // copy may be faint; a value never is.
+          sx={{ ...typeStyle, color: color.textMuted, lineHeight: 1 }}
         >
           —
         </Box>
@@ -72,7 +75,17 @@ export function MetricValue({ metric, size = 'large' }) {
 
   return (
     <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1.25, flexWrap: 'wrap' }}>
-      <Box component="span" sx={{ ...typeStyle, color: color.text }}>
+      <Box
+        component="span"
+        // Phase 6.2 — the count-up hook. Present ONLY when this metric really is
+        // a finite number that was actually counted, so the em dash standing in
+        // for a restricted or unavailable figure can never be animated as if it
+        // were a zero climbing to something. The animation's final act is to
+        // write this exact rendered string back, so a count-up can never leave a
+        // figure that disagrees with the backend value.
+        data-count-to={rendered === null ? undefined : metric.value}
+        sx={{ ...typeStyle, color: color.text }}
+      >
         {rendered === null ? '—' : rendered}
       </Box>
       {availability === 'STALE' && (
@@ -182,7 +195,13 @@ export function MetricTile({ label, metric, description, sx = {} }) {
 export function DistributionBars({ items, colorFor, emptyLabel = 'No records yet' }) {
   const max = items.reduce((m, i) => Math.max(m, i.count || 0), 0)
 
-  if (!items.length || max === 0) {
+  // Only a genuinely EMPTY distribution gets the empty label. A distribution
+  // whose buckets are all zero is still rendered, one row per bucket, showing
+  // 0 — because the backend deliberately returns every bucket as an explicit
+  // counted zero, and collapsing that into "No records yet" would throw away
+  // the distinction it went to the trouble of preserving. A missing bar and a
+  // zero bar do not mean the same thing.
+  if (!items.length) {
     return (
       <Box sx={{ ...type.small, color: color.textMuted, py: 1 }}>{emptyLabel}</Box>
     )

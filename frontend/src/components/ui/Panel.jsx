@@ -137,7 +137,8 @@ export function Field({ label, children, mono = false, sx = {} }) {
         }}
       >
         {children === null || children === undefined || children === '' ? (
-          <Box component="span" sx={{ color: color.textFaint }} aria-label="Not recorded">
+          // Stands in place of a field value, so it reads at value contrast.
+          <Box component="span" sx={{ color: color.textMuted }} aria-label="Not recorded">
             —
           </Box>
         ) : (

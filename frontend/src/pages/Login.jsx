@@ -2,6 +2,8 @@ import React from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { Box, TextField, Button, Alert, InputAdornment, IconButton } from '@mui/material'
 import { FiArrowRight, FiEye, FiEyeOff } from 'react-icons/fi'
+import gsap from 'gsap'
+import { useGSAP } from '@gsap/react'
 
 import { useAuth } from '../hooks/useAuth'
 import { authService } from '../services/api'
@@ -9,6 +11,8 @@ import { OpeningMotif } from '../components/OpeningMotif'
 import { BrandMark, PkcertAttribution } from '../components/ui/Brand'
 import { useReducedMotion } from '../hooks/useReducedMotion'
 import { color, type, layout, font } from '../theme/tokens'
+
+gsap.registerPlugin(useGSAP)
 
 // Marks that the opening has already been seen in THIS browser session, so a
 // sign-out/sign-in round trip does not replay it. Session storage, not local:
@@ -48,12 +52,46 @@ export const Login = () => {
   // user has asked for reduced motion. It is purely visual: the form below is
   // interactive from the first paint either way, so it can never gate sign-in.
   const [playOpening] = React.useState(() => !reducedMotion && !openingAlreadySeen())
+  // Set by the Skip control. Flipping it changes the motif's `animate`
+  // dependency, which makes useGSAP revert the running timeline and re-run its
+  // static branch — so skipping lands on the same final state the animation
+  // would have reached, not on a half-played one.
+  const [skipped, setSkipped] = React.useState(false)
+  const openingActive = playOpening && !skipped
+  const asideRef = React.useRef(null)
 
   const sessionExpired = new URLSearchParams(location.search).get('reason') === 'session-expired'
 
   React.useEffect(() => {
     if (playOpening) markOpeningSeen()
   }, [playOpening])
+
+  // The opening as a readable sequence rather than one simultaneous fade:
+  // the mark identifies the product, the motif traces its evidence lines, the
+  // tagline states what it does, and the PKCERT attribution closes it. Total
+  // ~1.85s, inside the 1.6-2.0s budget.
+  //
+  // Two constraints hold absolutely: this timeline touches ONLY elements inside
+  // the decorative aside (the form is in a sibling column and is interactive
+  // from first paint), and under reduced motion no timeline is constructed at
+  // all — the `if` below returns before gsap.timeline() is ever called.
+  useGSAP(
+    () => {
+      if (!openingActive) {
+        // Static path: final state, no animation objects.
+        gsap.set('[data-open-step]', { autoAlpha: 1, y: 0 })
+        return
+      }
+      const tl = gsap.timeline({ defaults: { ease: 'power2.out' } })
+      tl.fromTo('[data-open-step="brand"]', { autoAlpha: 0, y: -8 }, { autoAlpha: 1, y: 0, duration: 0.5 }, 0)
+        .fromTo('[data-open-step="tagline"]', { autoAlpha: 0, y: 12 }, { autoAlpha: 1, y: 0, duration: 0.5 }, 0.95)
+        .fromTo('[data-open-step="summary"]', { autoAlpha: 0, y: 10 }, { autoAlpha: 1, y: 0, duration: 0.45 }, 1.2)
+        .fromTo('[data-open-step="constraints"]', { autoAlpha: 0 }, { autoAlpha: 1, duration: 0.4 }, 1.45)
+        .fromTo('[data-open-step="attribution"]', { autoAlpha: 0, y: 8 }, { autoAlpha: 1, y: 0, duration: 0.4 }, 1.45)
+      return () => tl.revert()
+    },
+    { scope: asideRef, dependencies: [openingActive], revertOnUpdate: true }
+  )
 
   React.useEffect(() => {
     if (isAuthenticated) navigate('/dashboard', { replace: true })
@@ -104,7 +142,9 @@ export const Login = () => {
       {/* -------------------------------------------------- brand / context */}
       <Box
         component="aside"
+        ref={asideRef}
         sx={{
+          position: 'relative',
           display: { xs: 'none', md: 'flex' },
           flexDirection: 'column',
           justifyContent: 'space-between',
@@ -116,15 +156,22 @@ export const Login = () => {
           backgroundImage: `radial-gradient(circle at 50% 38%, ${color.accent}0F, transparent 60%)`,
         }}
       >
-        <BrandMark size={30} showWordmark />
+        <Box data-open-step="brand">
+          <BrandMark size={30} showWordmark />
+        </Box>
 
         <Box sx={{ textAlign: 'center' }}>
-          <OpeningMotif animate={playOpening} size={320} />
-          <Box component="p" sx={{ ...type.display, color: color.text, mt: 4, mb: 0 }}>
+          {/* Decorative and non-interactive. It sits in this column only; the
+              sign-in form is a sibling and is never covered by it. */}
+          <Box sx={{ pointerEvents: 'none' }}>
+            <OpeningMotif animate={openingActive} size={320} />
+          </Box>
+          <Box component="p" data-open-step="tagline" sx={{ ...type.display, color: color.text, mt: 4, mb: 0 }}>
             Connecting Intelligence with Action
           </Box>
           <Box
             component="p"
+            data-open-step="summary"
             sx={{ ...type.small, color: color.textMuted, mt: 1.5, mx: 'auto', maxWidth: '46ch' }}
           >
             A defensive cyber-threat-intelligence orchestration and
@@ -134,6 +181,7 @@ export const Login = () => {
           </Box>
           <Box
             component="p"
+            data-open-step="constraints"
             sx={{
               ...type.caption,
               color: color.textFaint,
@@ -146,7 +194,32 @@ export const Login = () => {
           </Box>
         </Box>
 
-        <PkcertAttribution variant="card" />
+        <Box data-open-step="attribution">
+          <PkcertAttribution variant="card" />
+        </Box>
+
+        {/* Skip. Shown only while the opening is actually running, because a
+            control that skips nothing is noise. It changes no stored
+            preference and signs nobody in or out — it only lands this one
+            playthrough on its final frame. */}
+        {openingActive && (
+          <Button
+            data-testid="skip-intro"
+            size="small"
+            variant="text"
+            onClick={() => setSkipped(true)}
+            sx={{
+              position: 'absolute',
+              top: 16,
+              right: 16,
+              ...type.caption,
+              color: color.textMuted,
+              '&:hover': { color: color.text, backgroundColor: color.surfaceRaised },
+            }}
+          >
+            Skip intro
+          </Button>
+        )}
       </Box>
 
       {/* ----------------------------------------------------------- sign in */}

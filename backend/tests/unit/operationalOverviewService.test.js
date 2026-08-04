@@ -63,6 +63,9 @@ function makeClient(overrides = {}) {
     notification: { count: zeroCount, groupBy: emptyGroup, findMany: emptyList() },
     notificationExport: { count: zeroCount },
     notificationDeliveryEvent: { count: zeroCount, groupBy: emptyGroup },
+    // Phase 6.2 — factor pressure. Grouped by (factorKey, applicability) with
+    // _sum/_count/_min, so the double must answer groupBy like the others.
+    riskFactorContribution: { groupBy: emptyGroup },
     caseFrameworkMapping: { count: zeroCount, groupBy: emptyGroup },
     aiFrameworkMappingSuggestion: { count: zeroCount },
     iocEnrichment: { aggregate: vi.fn(async () => ({ _max: { queriedAt: null } })) },

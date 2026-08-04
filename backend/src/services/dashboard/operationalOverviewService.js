@@ -946,6 +946,140 @@ async function buildIngestionTrend(client, asOf) {
 }
 
 // ---------------------------------------------------------------------------
+// Phase 6.2 — Risk v1 factor pressure
+// ---------------------------------------------------------------------------
+//
+// The analyst question this answers, and the only one it answers:
+//
+//   "Across the findings that currently carry a Risk v1 score, which factors
+//    are actually producing that risk — and which are producing none because
+//    the evidence for them was never available?"
+//
+// That second half is the point. A dashboard that only shows a band
+// distribution cannot tell an analyst that, say, every IOC-reputation
+// contribution in this dataset is zero because no enrichment lookup ever
+// succeeded. Reading a HIGH band without knowing which evidence was missing
+// when it was computed is how a score gets over-trusted.
+//
+// Every number below is a SUM OR COUNT OF PERSISTED RiskFactorContribution
+// ROWS. Nothing is rescored, re-weighted, re-derived or inferred: Risk v1 is a
+// locked contract and this view only reads what the engine already wrote.
+//
+// Three properties are deliberate:
+//
+//   - Aggregated by factorKey ONLY, over the CURRENT score of each Finding
+//     (RiskScore.currentForFindingId IS NOT NULL). Superseded snapshots are
+//     history; counting them would let one heavily-rescored Finding dominate.
+//   - The per-factor cap comes from the stored maximumContributionBasisPoints
+//     column, not from the live configuration table. That is what keeps an old
+//     contribution explicable as "300 of a possible 1200" after a future
+//     configuration version changes the cap.
+//   - Applicability is reported as three separate counts, never collapsed.
+//     APPLIED, NOT_AVAILABLE and NOT_APPLICABLE all contribute basis points
+//     that may be zero, but they mean different things: "measured as nothing",
+//     "we could not measure it", and "it cannot apply to this finding".
+//
+// Ownership confidence is NOT here and can never be: it is not a Risk v1
+// factor, it affects routing and actionability only, and the ten keys the
+// engine writes do not include it.
+
+const RISK_FACTOR_APPLICABILITY = ["APPLIED", "NOT_AVAILABLE", "NOT_APPLICABLE"];
+
+async function buildRiskFactorPressure(client, asOf) {
+  const iso = asOf.toISOString();
+
+  // Only contributions belonging to a CURRENT score.
+  const currentScoresOnly = { riskScore: { currentForFindingId: { not: null } } };
+
+  // Two bounded aggregates. Neither returns a row, and neither grows with the
+  // number of findings — the grouping is over at most (10 factors x 3
+  // applicabilities) buckets no matter how large the dataset gets.
+  const [rows, scoredFindings] = await Promise.all([
+    client.riskFactorContribution.groupBy({
+      by: ["factorKey", "applicability"],
+      where: currentScoresOnly,
+      _count: { _all: true },
+      _sum: { contributionBasisPoints: true, maximumContributionBasisPoints: true },
+      // Stable presentation order comes from the engine's own displayOrder, so
+      // this list reads identically on every machine and every replay.
+      _min: { displayOrder: true },
+    }),
+    client.riskScore.count({ where: { currentForFindingId: { not: null } } }),
+  ]);
+
+  const byFactor = new Map();
+  for (const row of rows) {
+    const key = row.factorKey;
+    if (!byFactor.has(key)) {
+      byFactor.set(key, {
+        factorKey: key,
+        displayOrder: row._min?.displayOrder ?? Number.MAX_SAFE_INTEGER,
+        contributionBasisPoints: 0,
+        maximumContributionBasisPoints: 0,
+        scoredFindings: 0,
+        applicability: Object.fromEntries(RISK_FACTOR_APPLICABILITY.map((a) => [a, 0])),
+      });
+    }
+    const entry = byFactor.get(key);
+    entry.contributionBasisPoints += row._sum?.contributionBasisPoints ?? 0;
+    entry.maximumContributionBasisPoints += row._sum?.maximumContributionBasisPoints ?? 0;
+    const count = row._count?._all ?? 0;
+    entry.scoredFindings += count;
+    if (row.applicability in entry.applicability) {
+      entry.applicability[row.applicability] += count;
+    }
+    entry.displayOrder = Math.min(entry.displayOrder, row._min?.displayOrder ?? entry.displayOrder);
+  }
+
+  const factors = Array.from(byFactor.values())
+    .sort((a, b) => a.displayOrder - b.displayOrder || a.factorKey.localeCompare(b.factorKey))
+    .map((entry) => ({
+      factorKey: entry.factorKey,
+      displayOrder: entry.displayOrder,
+      // What this factor actually added, summed across every current score.
+      contributionBasisPoints: entry.contributionBasisPoints,
+      // What it could have added across those same scores, summed from the cap
+      // each row was drawn against at the time it was written.
+      maximumContributionBasisPoints: entry.maximumContributionBasisPoints,
+      // How many current scores carry a contribution row for this factor at
+      // all. Equal to `scoredFindings` below in a coherent dataset; published
+      // separately so a mismatch is visible rather than hidden.
+      contributionRows: entry.scoredFindings,
+      applied: entry.applicability.APPLIED,
+      notAvailable: entry.applicability.NOT_AVAILABLE,
+      notApplicable: entry.applicability.NOT_APPLICABLE,
+    }));
+
+  const totalContribution = factors.reduce((n, f) => n + f.contributionBasisPoints, 0);
+  const totalMaximum = factors.reduce((n, f) => n + f.maximumContributionBasisPoints, 0);
+
+  return {
+    availability: AVAILABILITY.AVAILABLE,
+    asOf: iso,
+    label: "Risk v1 factor pressure",
+    factors,
+    // The denominator is stated, and so is what it means. Every per-factor
+    // count above is out of exactly this many findings.
+    denominator: scoredFindings,
+    denominatorDefinition:
+      "Findings holding a current Risk v1 score (RiskScore.currentForFindingId IS NOT NULL). Findings with no current score contribute no row to any factor here and are not counted in any figure on this panel.",
+    totals: {
+      contributionBasisPoints: totalContribution,
+      maximumContributionBasisPoints: totalMaximum,
+      // Stated rather than computed into a percentage: the ten locked factor
+      // caps sum to exactly SCORE_MAX_BASIS_POINTS, so this total is also the
+      // sum of every current score's basis points. Publishing it lets that
+      // identity be checked instead of trusted.
+      note: "Total contribution equals the sum of every current Risk v1 score in basis points, because the ten locked factor caps sum to the maximum score.",
+    },
+    source:
+      "RiskFactorContribution.contributionBasisPoints and .maximumContributionBasisPoints, grouped by factorKey and applicability, restricted to rows whose RiskScore holds currentForFindingId",
+    disclaimer:
+      "Persisted contributions from the locked Risk v1 engine, summed. Nothing here is rescored, re-weighted or inferred, and no factor's share is presented as a proportion of any catalogue, population or national total. A factor contributing zero basis points may mean the evidence was measured as negligible or that it could never be read — the applicability counts distinguish the two.",
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Composition
 // ---------------------------------------------------------------------------
 
@@ -1000,6 +1134,7 @@ async function buildOperationalOverview({ role, asOf = new Date(), client = pris
     caseQueues,
     notificationQueue,
     ingestionTrend,
+    riskFactorPressure,
   ] = await Promise.all([
     section("findings", CAPABILITIES.READ_FINDINGS, buildFindingsSection, "Reading findings requires read:findings."),
     section("cases", CAPABILITIES.READ_CASES, buildCasesSection, "Reading cases requires read:cases."),
@@ -1060,6 +1195,15 @@ async function buildOperationalOverview({ role, asOf = new Date(), client = pris
       buildIngestionTrend,
       "Reading ingestion history requires read:findings."
     ),
+    // Phase 6.2. Factor contributions are Risk v1 evidence about Findings, and
+    // the band distribution they explain already rides on read:findings — so
+    // this reuses the SAME capability and mints no new authority.
+    section(
+      "riskFactorPressure",
+      CAPABILITIES.READ_FINDINGS,
+      buildRiskFactorPressure,
+      "Reading risk factor contributions requires read:findings."
+    ),
   ]);
 
   return {
@@ -1094,6 +1238,7 @@ async function buildOperationalOverview({ role, asOf = new Date(), client = pris
       caseQueues,
       notificationQueue,
       ingestionTrend,
+      riskFactorPressure,
     },
   };
 }
@@ -1105,6 +1250,7 @@ module.exports = {
   RECENT_ACTIVITY_LIMIT,
   QUEUE_LIMIT,
   TREND_WINDOW_DAYS,
+  RISK_FACTOR_APPLICABILITY,
   // exported for tests
   distribution,
   providerFreshness,

@@ -63,7 +63,8 @@ export function Timeline({ items = [], emptyLabel = 'No recorded events yet.', d
                   <Box
                     component="time"
                     dateTime={item.at}
-                    sx={{ fontFamily: font.mono, fontSize: 11, color: color.textFaint }}
+                    // 11px operational timestamp — muted, never faint.
+                    sx={{ fontFamily: font.mono, fontSize: 11, color: color.textMuted }}
                   >
                     {formatAsOf(item.at)}
                   </Box>
@@ -75,7 +76,7 @@ export function Timeline({ items = [], emptyLabel = 'No recorded events yet.', d
                 </Box>
               )}
               {item.actor && (
-                <Box sx={{ ...type.caption, color: color.textFaint, mt: 0.5 }}>{item.actor}</Box>
+                <Box sx={{ ...type.caption, color: color.textMuted, mt: 0.5 }}>{item.actor}</Box>
               )}
               {item.children && <Box sx={{ mt: 1 }}>{item.children}</Box>}
             </Box>

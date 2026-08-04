@@ -16,6 +16,7 @@ import {
   ProviderFreshness,
   RecentActivity,
   RefreshStatus,
+  RiskFactorPressure,
   RiskPosture,
   RoleActionButtons,
   SectionFallback,
@@ -54,15 +55,58 @@ export const Dashboard = () => {
 
   React.useEffect(() => { load() }, [load])
 
+  // The authenticated entrance.
+  //
+  // Budget: the whole first-screen timeline finishes inside ~900ms, measured
+  // from when the first real snapshot exists — not from mount. It never gates
+  // interaction: nothing is pointer-events:none, nothing is position-shifted
+  // beyond a few pixels, and every control is clickable from first paint
+  // because the elements start at autoAlpha 0 rather than display:none.
+  //
+  // Order encodes the hierarchy the dashboard is supposed to teach: command
+  // header, then the exact metrics, then the primary queue, then risk posture,
+  // then everything else on scroll.
   useGSAP(() => {
     if (!overview || reducedMotion) return undefined
 
     const timeline = gsap.timeline({ defaults: { ease: 'power3.out' } })
     timeline
-      .fromTo('[data-dashboard-header]', { y: 16, autoAlpha: 0 }, { y: 0, autoAlpha: 1, duration: 0.42, clearProps: 'transform,opacity,visibility' })
-      .fromTo('[data-kpi]', { y: 12, autoAlpha: 0 }, { y: 0, autoAlpha: 1, duration: 0.34, stagger: 0.055, clearProps: 'transform,opacity,visibility' }, '-=0.24')
-      .fromTo('[data-primary-panel]', { y: 18, autoAlpha: 0 }, { y: 0, autoAlpha: 1, duration: 0.42, stagger: 0.08, clearProps: 'transform,opacity,visibility' }, '-=0.2')
-      .fromTo('[data-queue-row]', { x: -14, autoAlpha: 0 }, { x: 0, autoAlpha: 1, duration: 0.3, stagger: 0.045, clearProps: 'transform,opacity,visibility' }, '-=0.28')
+      .fromTo('[data-dashboard-header]', { y: 14, autoAlpha: 0 }, { y: 0, autoAlpha: 1, duration: 0.34, clearProps: 'transform,opacity,visibility' }, 0)
+      .fromTo('[data-kpi]', { y: 10, autoAlpha: 0 }, { y: 0, autoAlpha: 1, duration: 0.26, stagger: 0.04, clearProps: 'transform,opacity,visibility' }, 0.16)
+      .fromTo('[data-primary-panel]', { y: 16, autoAlpha: 0 }, { y: 0, autoAlpha: 1, duration: 0.3, stagger: 0.06, clearProps: 'transform,opacity,visibility' }, 0.3)
+      .fromTo('[data-queue-row]', { x: -12, autoAlpha: 0 }, { x: 0, autoAlpha: 1, duration: 0.24, stagger: 0.03, clearProps: 'transform,opacity,visibility' }, 0.42)
+
+    // Counters climb to the EXACT persisted value and then have that value's
+    // own rendered string written back over them. A count-up that stopped at
+    // whatever the easing produced would be a fabricated figure, which is the
+    // one thing this dashboard exists to not do.
+    gsap.utils.toArray('[data-count-to]').forEach((element) => {
+      const target = Number(element.getAttribute('data-count-to'))
+      if (!Number.isFinite(target)) return
+      const exact = target.toLocaleString('en-US')
+      // Below this, a count-up is imperceptible flicker rather than motion.
+      if (Math.abs(target) < 5) {
+        element.textContent = exact
+        return
+      }
+      const counter = { value: 0 }
+      timeline.to(
+        counter,
+        {
+          value: target,
+          duration: 0.5,
+          ease: 'power2.out',
+          snap: { value: 1 },
+          onUpdate() {
+            element.textContent = Math.round(counter.value).toLocaleString('en-US')
+          },
+          onComplete() {
+            element.textContent = exact
+          },
+        },
+        0.22
+      )
+    })
 
     const donutSegments = gsap.utils.toArray('[data-donut-segment]')
     if (donutSegments.length) {
@@ -70,53 +114,67 @@ export const Dashboard = () => {
         donutSegments,
         { strokeDashoffset: 100 },
         {
+          // Back to the offset the component computed from real counts. The
+          // geometry is never invented by the animation.
           strokeDashoffset: (_index, element) => Number(element.getAttribute('stroke-dashoffset') || 0),
-          duration: 0.72,
-          stagger: 0.06,
+          duration: 0.46,
+          stagger: 0.04,
           ease: 'power2.out',
           clearProps: 'strokeDashoffset',
         },
-        '-=0.36'
+        0.4
       )
     }
 
+    // ---- below the fold ----------------------------------------------------
+    //
+    // Secondary sections animate TRANSFORM ONLY on scroll. Nothing below is
+    // ever set to opacity 0 waiting for a trigger: a ScrollTrigger that never
+    // fires (short viewport, zoomed page, trigger already past) would otherwise
+    // strand operational evidence invisible, which is a defect this phase's
+    // predecessor actually shipped and had to fix.
     gsap.utils.toArray('[data-secondary-section]').forEach((section) => {
-      gsap.fromTo(section, { y: 18 }, {
+      gsap.fromTo(section, { y: 16 }, {
         y: 0,
-        duration: 0.42,
+        duration: 0.4,
         ease: 'power3.out',
         clearProps: 'transform',
-        scrollTrigger: { trigger: section, start: 'top 92%', once: true },
+        scrollTrigger: { trigger: section, start: 'top 94%', once: true },
       })
     })
 
-    const trendBars = gsap.utils.toArray('[data-trend-bar]')
-    const trendSection = shellRef.current?.querySelector('[data-trend-section]')
-    if (trendBars.length && trendSection) {
-      gsap.fromTo(trendBars, { scaleY: 0.04 }, {
-        scaleY: 1,
-        duration: 0.52,
-        stagger: 0.025,
-        ease: 'power3.out',
-        clearProps: 'transform',
-        scrollTrigger: { trigger: trendSection, start: 'top 88%', once: true },
-      })
-    }
-
-    const ageBars = gsap.utils.toArray('[data-age-bar]')
-    const ageSection = shellRef.current?.querySelector('[data-age-section]')
-    if (ageBars.length && ageSection) {
-      gsap.fromTo(ageBars, { scaleX: 0.03 }, {
+    // Chart geometry draws from its own factual values: bars scale from a hairline
+    // to the height/width the component already computed from persisted counts.
+    const drawBars = (selector, sectionSelector, from, duration, stagger) => {
+      const bars = gsap.utils.toArray(selector)
+      const section = shellRef.current?.querySelector(sectionSelector)
+      if (!bars.length || !section) return
+      gsap.fromTo(bars, from, {
         scaleX: 1,
-        duration: 0.48,
-        stagger: 0.07,
+        scaleY: 1,
+        duration,
+        stagger,
         ease: 'power3.out',
         clearProps: 'transform',
-        scrollTrigger: { trigger: ageSection, start: 'top 88%', once: true },
+        scrollTrigger: { trigger: section, start: 'top 90%', once: true },
       })
     }
 
-    return () => timeline.revert()
+    drawBars('[data-trend-bar]', '[data-trend-section]', { scaleY: 0.04 }, 0.52, 0.025)
+    drawBars('[data-age-bar]', '[data-age-section]', { scaleX: 0.03 }, 0.48, 0.07)
+    drawBars('[data-factor-bar]', '[data-factor-section]', { scaleX: 0.02 }, 0.5, 0.05)
+
+    // Decorative work must not run for a tab nobody is looking at.
+    const onVisibility = () => {
+      if (document.hidden) timeline.pause()
+      else timeline.resume()
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility)
+      timeline.revert()
+    }
   }, { scope: shellRef, dependencies: [overview?.generatedAt, reducedMotion], revertOnUpdate: true })
 
   if (loading && !overview) return <LoadingState label="Loading your operational workspace" />
@@ -180,6 +238,18 @@ export const Dashboard = () => {
 
       <Box data-secondary-section sx={{ mt: 2 }}>
         <ScopeNote>{overview.datasetScope}</ScopeNote>
+      </Box>
+
+      {/* Phase 6.2 — the one new primary visualization. Full width, and placed
+          directly after the first viewport rather than inside it: the question
+          it answers ("which factors are producing this risk, and which had no
+          readable evidence?") is the SECOND question an analyst asks, after
+          "what needs me now?" — which the queue and metrics above already
+          answer. Putting it higher would push the queue off the first screen. */}
+      <Box data-secondary-section data-factor-section sx={{ mt: 2 }}>
+        {isReadable(sections.riskFactorPressure)
+          ? <RiskFactorPressure pressure={sections.riskFactorPressure} />
+          : <Panel title="What is driving current risk"><SectionFallback section={sections.riskFactorPressure} /></Panel>}
       </Box>
 
       <Box sx={{ mt: 2, display: 'grid', gridTemplateColumns: { xs: 'minmax(0, 1fr)', lg: 'minmax(0, 1.2fr) minmax(320px, .8fr)' }, gap: 2 }}>

@@ -136,6 +136,80 @@ export const NOTIFICATION_STATE = Object.freeze({
   APPROVED: { label: 'Approved', tone: 'success', icon: 'check' },
   REJECTED: { label: 'Rejected', tone: 'danger', icon: 'cross' },
 })
+// Phase 6.2 — Risk v1 factor keys, rendered.
+//
+// `label` is the analyst-facing name; `meaning` states what the factor measures
+// in one line, because a factor contributing zero is only interpretable if you
+// know what it was looking for. Both are fixed strings keyed off the engine's
+// own closed vocabulary (RISK_FACTOR_KEYS) — nothing here is generated, and an
+// unknown key falls back to the raw key rather than being hidden.
+export const RISK_FACTOR_LABEL = Object.freeze({
+  sourceSeverity: {
+    label: 'Source severity',
+    meaning: 'Severity carried by the report type the finding came from.',
+  },
+  exposureCriticality: {
+    label: 'Exposure criticality',
+    meaning: 'How critical the exposed service itself is. An exposure, never evidence of intrusion.',
+  },
+  persistence: {
+    label: 'Persistence',
+    meaning: 'How many separate reports have observed this finding.',
+  },
+  recurrence: {
+    label: 'Recurrence',
+    meaning: 'How often it returned after its case was closed.',
+  },
+  daysUnresolved: {
+    label: 'Days unresolved',
+    meaning: 'Elapsed time since the finding was first observed and still open.',
+  },
+  iocReputationContext: {
+    label: 'IOC reputation context',
+    meaning: 'Stored reputation context for the indicator. Supporting context, never proof.',
+  },
+  sectorCriticality: {
+    label: 'Sector criticality',
+    meaning: "Criticality of the owning organization's sector, where ownership resolved.",
+  },
+  cvePresence: {
+    label: 'CVE presence',
+    meaning: 'Whether a CVE is associated with the finding at all.',
+  },
+  kevStatus: {
+    label: 'KEV status',
+    meaning: 'Whether an associated CVE appears on the CISA known-exploited list.',
+  },
+  epssScore: {
+    label: 'EPSS probability',
+    meaning: 'FIRST exploitation-probability score for an associated CVE.',
+  },
+})
+
+// How a factor's zero contribution should be read. The whole reason this
+// panel exists is that these three are NOT the same thing, and a bar chart
+// alone would render all three as an identical empty bar.
+export const FACTOR_EVIDENCE_STATE = Object.freeze({
+  CONTRIBUTING: { label: 'Contributing', tone: 'accent', icon: 'dot' },
+  MEASURED_ZERO: { label: 'Measured, no weight', tone: 'neutral', icon: 'minus' },
+  NO_EVIDENCE: { label: 'No evidence read', tone: 'warning', icon: 'warning' },
+  NOT_APPLICABLE: { label: 'Cannot apply', tone: 'neutral', icon: 'minus' },
+})
+
+/**
+ * Classifies one factor row into the four states above.
+ *
+ * Order matters: a factor that contributed basis points is CONTRIBUTING even if
+ * some findings could not supply it, because the contribution is real.
+ */
+export function factorEvidenceState(factor) {
+  if (!factor) return 'NOT_APPLICABLE'
+  if (factor.contributionBasisPoints > 0) return 'CONTRIBUTING'
+  if (factor.applied > 0) return 'MEASURED_ZERO'
+  if (factor.notAvailable > 0) return 'NO_EVIDENCE'
+  return 'NOT_APPLICABLE'
+}
+
 export const PROVIDER_STATE = Object.freeze({
   FRESH: { label: 'Fresh stored result', tone: 'success', icon: 'check' },
   STALE: { label: 'Stored result stale', tone: 'warning', icon: 'clock' },

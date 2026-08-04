@@ -35,12 +35,21 @@ export const color = {
   borderStrong: '#315344',
   borderFocus: '#63D58E',
 
-  // Text. `text` on `surface` measures ~13.9:1; `textMuted` ~5.6:1;
-  // `textFaint` ~4.0:1 and is therefore used ONLY for non-essential captions
-  // at >=12px, never for a value a decision depends on.
+  // Text. `text` on `surface` measures ~13.9:1 and `textMuted` ~5.6:1.
+  //
+  // Phase 6.2 raised `textFaint` from #75899E. The old value cleared 4.5:1 on
+  // `surface` (4.99:1) but fell to 4.44:1 on `surfaceRaised` — which is the
+  // background behind every hover row and every sunken note, and is exactly
+  // where small operational copy (timestamps, day captions, "not scored")
+  // lands. The new value measures 5.33:1 on `surface` and 4.74:1 on
+  // `surfaceRaised`, so it now clears 4.5:1 on EVERY surface in this palette
+  // rather than on most of them.
+  //
+  // It is still reserved for supporting copy. A value a decision depends on
+  // uses `textMuted` or `text`, whatever its size.
   text: '#EAF1F9',
   textMuted: '#9DAFC2',
-  textFaint: '#75899E',
+  textFaint: '#7A8EA3',
   textInverse: '#06100A',
 
   // Accent. A lightened institutional green echoes the supplied PKCERT mark

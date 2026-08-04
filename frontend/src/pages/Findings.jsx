@@ -249,7 +249,7 @@ export const Findings = () => {
                       >
                         {finding.indicatorValue}
                       </Link>
-                      <Box sx={{ ...type.caption, color: color.textFaint, fontFamily: font.mono, mt: 0.3 }}>
+                      <Box sx={{ ...type.caption, color: color.textMuted, fontFamily: font.mono, mt: 0.3 }}>
                         port {finding.port} · {finding.protocol} · {finding.reportType.replace(/_/g, ' ')}
                       </Box>
                     </TableCell>
@@ -268,7 +268,7 @@ export const Findings = () => {
                           </Box>
                         </>
                       ) : (
-                        <Box sx={{ ...type.small, color: color.textFaint }}>
+                        <Box sx={{ ...type.small, color: color.textMuted }}>
                           {finding.ownership?.status === 'AMBIGUOUS'
                             ? 'Ambiguous — several organizations tied'
                             : 'Unresolved'}
@@ -279,12 +279,12 @@ export const Findings = () => {
                       {finding.risk ? (
                         <RiskBandBadge band={finding.risk.riskBand} score={finding.risk.displayScore} size="small" />
                       ) : (
-                        <Box sx={{ ...type.caption, color: color.textFaint }}>Not yet scored</Box>
+                        <Box sx={{ ...type.caption, color: color.textMuted }}>Not yet scored</Box>
                       )}
                     </TableCell>
                     <TableCell>
                       <StatusBadge dictionary={LIFECYCLE} value={lifecycleOf(finding)} size="small" />
-                      <Box sx={{ ...type.caption, color: color.textFaint, mt: 0.4, fontFamily: font.mono }}>
+                      <Box sx={{ ...type.caption, color: color.textMuted, mt: 0.4, fontFamily: font.mono }}>
                         {finding.occurrenceCount}× observed
                         {finding.recurrenceCount > 0 ? ` · ${finding.recurrenceCount}× recurred` : ''}
                       </Box>

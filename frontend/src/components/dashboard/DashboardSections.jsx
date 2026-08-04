@@ -24,8 +24,11 @@ import {
 import { color, font, radius, riskBandColor, type } from '../../theme/tokens'
 import {
   AGE_LABEL,
+  FACTOR_EVIDENCE_STATE,
   PROVIDER_STATE,
+  RISK_FACTOR_LABEL,
   RISK_LABEL,
+  factorEvidenceState,
 } from './dashboardModel'
 
 export function SectionFallback({ section, compact = false }) {
@@ -352,6 +355,137 @@ export function ProviderFreshness({ providers, showSettings = false }) {
         </Box>
         <Box>{rows.map((provider, index) => <Box key={provider.id} sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1.25, py: 1, borderTop: index ? `1px solid ${color.border}` : 0 }}><Box sx={{ minWidth: 0 }}><Box sx={{ ...type.small, color: color.text }}>{provider.name}</Box><Box sx={{ ...type.caption, color: color.textMuted }}>{provider.lastSuccessAt ? `Stored ${formatAsOf(provider.lastSuccessAt)}` : 'No successful lookup recorded'}</Box></Box><StatusBadge dictionary={PROVIDER_STATE} value={provider.state} size="small" /></Box>)}</Box>
       </> : <Box sx={{ ...type.small, color: color.textMuted }}>No provider entries were returned.</Box>}
+    </Panel>
+  )
+}
+
+// Phase 6.2 — the one new primary dashboard visualization.
+//
+// The question: "across the findings that currently carry a Risk v1 score,
+// which factors are actually producing that risk, and which are producing none
+// because their evidence was never read?"
+//
+// Two decisions make this honest rather than decorative:
+//
+//  1. Every bar is scaled against the SAME denominator — the largest per-factor
+//     stored cap in this snapshot — so bar lengths are comparable across rows
+//     and the empty part of a track is the headroom that factor did not use.
+//     No bar is scaled to its own maximum, which would make a factor that
+//     contributed 100 of a possible 100 look identical to one that contributed
+//     3000 of a possible 3000.
+//  2. A zero-length bar is never left to speak for itself. Each row carries an
+//     evidence state, because "measured and it added nothing", "we could not
+//     read the evidence" and "this factor cannot apply here" are three
+//     different facts that all draw an empty bar.
+//
+// There is deliberately NO click-through on a factor row. GET /api/findings
+// exposes no factor filter, so a link here would either 404 or quietly return
+// an unfiltered list — and a control that lies about what it will show is worse
+// than no control. The panel links to Analysis instead, which is where the full
+// per-factor table with applicability breakdowns actually lives.
+export function RiskFactorPressure({ pressure }) {
+  const factors = pressure?.factors || []
+  // The scale denominator: the largest stored cap among the factors present.
+  // Falls back to 1 so an all-zero dataset divides safely rather than rendering
+  // NaN-width bars.
+  const scale = Math.max(1, ...factors.map((f) => f.maximumContributionBasisPoints || 0))
+
+  return (
+    <Panel
+      title="What is driving current risk"
+      description="Persisted Risk v1 factor contributions, summed across every finding that holds a current score. A factor with no bar contributed nothing — the state beside it says whether that was measured or unreadable."
+      actions={<Button component={RouterLink} to="/analytics" size="small" variant="text" endIcon={<FiExternalLink />}>Full breakdown</Button>}
+      footer={
+        <DataDefinition
+          source={pressure?.source}
+          asOf={pressure?.asOf}
+          countNote={`${formatMetricNumber(pressure?.denominator) || 0} scored findings`}
+          note={`${pressure?.denominatorDefinition || ''} ${pressure?.disclaimer || ''}`.trim()}
+        />
+      }
+    >
+      {factors.length ? (
+        <>
+          <Box component="ul" sx={{ listStyle: 'none', p: 0, m: 0, display: 'grid', gap: 1.5 }}>
+            {factors.map((factor) => {
+              const meta = RISK_FACTOR_LABEL[factor.factorKey] || {}
+              const state = factorEvidenceState(factor)
+              const contributed = factor.contributionBasisPoints || 0
+              const possible = factor.maximumContributionBasisPoints || 0
+              return (
+                <Box component="li" key={factor.factorKey}>
+                  <Box sx={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 1.5, flexWrap: 'wrap', mb: 0.6 }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, minWidth: 0 }}>
+                      <Box sx={{ ...type.small, color: color.text }}>{meta.label || factor.factorKey}</Box>
+                      <StatusBadge dictionary={FACTOR_EVIDENCE_STATE} value={state} size="small" />
+                    </Box>
+                    <Box sx={{ ...type.code, color: contributed ? color.text : color.textMuted, whiteSpace: 'nowrap' }}>
+                      {formatMetricNumber(contributed) || '0'}
+                      <Box component="span" sx={{ color: color.textMuted }}> / {formatMetricNumber(possible) || '0'} bp</Box>
+                    </Box>
+                  </Box>
+                  {/* The track is this factor's stored headroom; the fill is what
+                      it actually contributed. Both are scaled by `scale`. */}
+                  <Box sx={{ height: 9, backgroundColor: color.surfaceSunken, position: 'relative' }}>
+                    <Box aria-hidden="true" sx={{ position: 'absolute', inset: 0, width: `${(possible / scale) * 100}%`, backgroundColor: color.canvasAlt, border: `1px solid ${color.border}` }} />
+                    <Box
+                      data-factor-bar
+                      aria-hidden="true"
+                      sx={{ position: 'absolute', insetBlock: 0, left: 0, width: `${(contributed / scale) * 100}%`, backgroundColor: contributed ? color.accent : 'transparent', transformOrigin: 'left' }}
+                    />
+                  </Box>
+                  <Box sx={{ ...type.caption, color: color.textMuted, mt: 0.5 }}>
+                    {meta.meaning || 'Risk v1 factor.'}{' '}
+                    {factor.applied > 0 && `${factor.applied} measured. `}
+                    {factor.notAvailable > 0 && `${factor.notAvailable} with no readable evidence. `}
+                    {factor.notApplicable > 0 && `${factor.notApplicable} where it cannot apply.`}
+                  </Box>
+                </Box>
+              )
+            })}
+          </Box>
+
+          {/* Accessible, non-visual alternative to the bars above: the same
+              numbers as a real table, with the applicability split spelled out. */}
+          <Box component="details" sx={{ mt: 2, ...type.caption, color: color.textMuted, '& summary': { cursor: 'pointer', width: 'fit-content', color: color.link }, '&[open] summary': { mb: 1 } }}>
+            <summary>Factor contributions as a table</summary>
+            <Box component="table" sx={{ width: '100%', borderCollapse: 'collapse', fontFamily: font.mono, fontSize: 12 }}>
+              <caption style={{ textAlign: 'left', paddingBottom: 8, color: color.textMuted }}>
+                Basis points contributed and possible, out of {formatMetricNumber(pressure?.denominator) || 0} findings holding a current Risk v1 score.
+              </caption>
+              <Box component="thead">
+                <Box component="tr">
+                  {['Factor', 'Contributed', 'Possible', 'Measured', 'No evidence', 'N/A'].map((h, i) => (
+                    <Box component="th" key={h} scope="col" sx={{ textAlign: i ? 'right' : 'left', p: 0.75, borderBottom: `1px solid ${color.border}`, color: color.textMuted, fontWeight: 600 }}>{h}</Box>
+                  ))}
+                </Box>
+              </Box>
+              <Box component="tbody">
+                {factors.map((factor) => (
+                  <Box component="tr" key={factor.factorKey}>
+                    <Box component="th" scope="row" sx={{ textAlign: 'left', p: 0.75, borderBottom: `1px solid ${color.border}`, color: color.text, fontWeight: 400 }}>
+                      {RISK_FACTOR_LABEL[factor.factorKey]?.label || factor.factorKey}
+                    </Box>
+                    {[factor.contributionBasisPoints, factor.maximumContributionBasisPoints, factor.applied, factor.notAvailable, factor.notApplicable].map((value, i) => (
+                      <Box component="td" key={i} sx={{ textAlign: 'right', p: 0.75, borderBottom: `1px solid ${color.border}`, color: color.text }}>{formatMetricNumber(value) ?? '0'}</Box>
+                    ))}
+                  </Box>
+                ))}
+              </Box>
+            </Box>
+          </Box>
+
+          <Box sx={{ mt: 2, p: 1.25, backgroundColor: color.surfaceSunken, ...type.caption, color: color.textMuted }}>
+            Totals: {formatMetricNumber(pressure?.totals?.contributionBasisPoints) || 0} of{' '}
+            {formatMetricNumber(pressure?.totals?.maximumContributionBasisPoints) || 0} possible basis points.{' '}
+            {pressure?.totals?.note}
+          </Box>
+        </>
+      ) : (
+        <Box sx={{ ...type.small, color: color.textMuted, py: 2 }}>
+          No finding currently holds a Risk v1 score, so no factor contribution has been persisted yet.
+        </Box>
+      )}
     </Panel>
   )
 }

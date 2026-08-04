@@ -178,7 +178,7 @@ function RiskExplanation({ risk }) {
                   <Box sx={{ ...type.small, color: color.text }}>
                     {FACTOR_LABEL[c.factorKey] || c.factorKey}
                   </Box>
-                  <Box sx={{ ...type.caption, color: color.textFaint, fontFamily: font.mono, mt: 0.3 }}>
+                  <Box sx={{ ...type.caption, color: color.textMuted, fontFamily: font.mono, mt: 0.3 }}>
                     {c.explanationCode}
                   </Box>
                 </TableCell>
@@ -191,7 +191,7 @@ function RiskExplanation({ risk }) {
                 <TableCell align="right" sx={{ fontFamily: font.mono, fontSize: 12.5, color: color.text }}>
                   {(c.contributionBasisPoints / 100).toFixed(2)}
                 </TableCell>
-                <TableCell align="right" sx={{ fontFamily: font.mono, fontSize: 12, color: color.textFaint }}>
+                <TableCell align="right" sx={{ fontFamily: font.mono, fontSize: 12, color: color.textMuted }}>
                   {(c.maximumContributionBasisPoints / 100).toFixed(2)}
                 </TableCell>
               </TableRow>
