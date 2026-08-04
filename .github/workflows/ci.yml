@@ -261,6 +261,132 @@ jobs:
           echo "Bundle is clean."
 
   # --------------------------------------------------------------------------
+  e2e:
+    name: Browser suite (Chromium)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: threatnexus_e2e
+          POSTGRES_USER: threatnexus_e2e
+          POSTGRES_PASSWORD: threatnexus_e2e
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U threatnexus_e2e -d threatnexus_e2e"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      # A disposable database that lives only for this job.
+      E2E_DATABASE_URL: postgresql://threatnexus_e2e:threatnexus_e2e@localhost:5432/threatnexus_e2e?schema=public
+      # One-off values for this run. The accounts they create exist only in the
+      # throwaway container above, and the JWT secret signs tokens no deployed
+      # system will ever accept. Neither is a credential to anything real.
+      E2E_SEED_PASSWORD: e2e-only-local-password-2026
+      E2E_JWT_SECRET: e2e-only-jwt-secret-value-at-least-32-characters-long
+      E2E_ORIGIN: http://127.0.0.1:4173
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            backend/package-lock.json
+            frontend/package-lock.json
+
+      - run: npm ci
+        working-directory: backend
+      - run: npm ci
+        working-directory: frontend
+
+      - name: Apply migrations to the disposable database
+        working-directory: backend
+        env:
+          DATABASE_URL: ${{ env.E2E_DATABASE_URL }}
+        run: npx prisma migrate deploy
+
+      # The four role accounts the suite signs in as. The password is supplied
+      # here and never committed, never defaulted and never printed by the
+      # script itself.
+      - name: Seed the four role accounts
+        working-directory: backend
+        env:
+          DATABASE_URL: ${{ env.E2E_DATABASE_URL }}
+          SEED_USER_PASSWORD: ${{ env.E2E_SEED_PASSWORD }}
+        run: node src/scripts/seedUsers.js
+
+      # Real evidence, produced by driving the application's own REST API. The
+      # dashboard has to have something truthful to render — a suite against an
+      # empty database would assert nothing about composition or gating.
+      - name: Seed the demonstration dataset through the real routes
+        working-directory: backend
+        env:
+          NODE_ENV: development
+          DATABASE_URL: ${{ env.E2E_DATABASE_URL }}
+          JWT_SECRET: ${{ env.E2E_JWT_SECRET }}
+          CORS_ORIGIN: ${{ env.E2E_ORIGIN }}
+          DEMO_MODE: 'true'
+          DEMO_USER_PASSWORD: ${{ env.E2E_SEED_PASSWORD }}
+          IOC_ENRICHMENT_PROVIDER: mock
+          ABUSEIPDB_API_KEY: ''
+          NVD_API_KEY: ''
+          AI_ENABLED: 'false'
+          AI_PROVIDER: 'null'
+        run: npm run seed:demo
+
+      - name: Install Chromium
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+
+      - run: npm run build
+        working-directory: frontend
+
+      - name: Start the backend
+        working-directory: backend
+        env:
+          NODE_ENV: development
+          DATABASE_URL: ${{ env.E2E_DATABASE_URL }}
+          JWT_SECRET: ${{ env.E2E_JWT_SECRET }}
+          # The preview server's origin, so the browser suite is not blocked by
+          # CORS. Providers stay off and keyless: the browser suite must never
+          # consume live provider quota either.
+          CORS_ORIGIN: ${{ env.E2E_ORIGIN }}
+          IOC_ENRICHMENT_PROVIDER: mock
+          ABUSEIPDB_API_KEY: ''
+          NVD_API_KEY: ''
+          AI_ENABLED: 'false'
+          AI_PROVIDER: 'null'
+        run: |
+          node server.js > /tmp/backend-e2e.log 2>&1 &
+          for i in $(seq 1 30); do
+            code="$(curl -s -o /dev/null -w '%{http_code}' http://localhost:5000/api/dashboard/overview || true)"
+            # 401 is the healthy answer here: the route exists and is refusing
+            # an unauthenticated caller, which is exactly what it should do.
+            if [ "$code" = "401" ]; then echo "Backend is up."; exit 0; fi
+            sleep 2
+          done
+          echo "::error::Backend did not become ready."; cat /tmp/backend-e2e.log; exit 1
+
+      - name: Run the browser suite
+        working-directory: frontend
+        env:
+          E2E_PASSWORD: ${{ env.E2E_SEED_PASSWORD }}
+          E2E_BASE_URL: ${{ env.E2E_ORIGIN }}
+        run: npm run test:e2e
+
+      - name: Backend log on failure
+        if: failure()
+        run: cat /tmp/backend-e2e.log || true
+
+      - name: Upload the report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: frontend/playwright-report/
+          retention-days: 7
+
+  # --------------------------------------------------------------------------
   evaluators:
     name: Core evaluators
     runs-on: ubuntu-latest

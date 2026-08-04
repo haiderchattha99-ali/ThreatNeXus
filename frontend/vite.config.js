@@ -44,6 +44,12 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: ['./src/test/setup.js'],
     globals: false,
+    // The Playwright suite lives in e2e/ and matches Vitest's default spec
+    // glob. Without this it would be collected into the jsdom run, where
+    // `@playwright/test` has no browser to drive and every file errors on
+    // import. They are separate gates: `npm test` is the unit suite,
+    // `npm run test:e2e` is the browser suite.
+    exclude: ['**/node_modules/**', '**/dist/**', 'e2e/**'],
     // Vitest's 5s default is not enough for the Phase 3 workflow screens: a
     // single userEvent interaction with an MUI Select opens a portal, runs a
     // transition and re-renders a full page, and several test files run in

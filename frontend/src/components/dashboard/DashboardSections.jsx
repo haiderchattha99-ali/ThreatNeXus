@@ -419,7 +419,7 @@ export function RiskFactorPressure({ pressure }) {
                       <Box sx={{ ...type.small, color: color.text }}>{meta.label || factor.factorKey}</Box>
                       <StatusBadge dictionary={FACTOR_EVIDENCE_STATE} value={state} size="small" />
                     </Box>
-                    <Box sx={{ ...type.code, color: contributed ? color.text : color.textMuted, whiteSpace: 'nowrap' }}>
+                    <Box data-factor-value sx={{ ...type.code, color: contributed ? color.text : color.textMuted, whiteSpace: 'nowrap' }}>
                       {formatMetricNumber(contributed) || '0'}
                       <Box component="span" sx={{ color: color.textMuted }}> / {formatMetricNumber(possible) || '0'} bp</Box>
                     </Box>
@@ -498,7 +498,7 @@ export function RefreshStatus({ loading, onRefresh, generatedAt, role, reducedMo
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
       <Chip label={`${role} view`} size="small" variant="outlined" />
-      <Box sx={{ ...type.caption, color: color.textMuted, display: 'flex', alignItems: 'center', gap: 0.6 }}><FiClock size={12} />Snapshot {formatAsOf(generatedAt) || 'time unavailable'}</Box>
+      <Box data-testid="dashboard-snapshot" sx={{ ...type.caption, color: color.textMuted, display: 'flex', alignItems: 'center', gap: 0.6 }}><FiClock size={12} />Snapshot {formatAsOf(generatedAt) || 'time unavailable'}</Box>
       <Button
         onClick={onRefresh}
         disabled={loading}

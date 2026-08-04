@@ -70,11 +70,14 @@ export const Dashboard = () => {
     if (!overview || reducedMotion) return undefined
 
     const timeline = gsap.timeline({ defaults: { ease: 'power3.out' } })
-    timeline
-      .fromTo('[data-dashboard-header]', { y: 14, autoAlpha: 0 }, { y: 0, autoAlpha: 1, duration: 0.34, clearProps: 'transform,opacity,visibility' }, 0)
-      .fromTo('[data-kpi]', { y: 10, autoAlpha: 0 }, { y: 0, autoAlpha: 1, duration: 0.26, stagger: 0.04, clearProps: 'transform,opacity,visibility' }, 0.16)
-      .fromTo('[data-primary-panel]', { y: 16, autoAlpha: 0 }, { y: 0, autoAlpha: 1, duration: 0.3, stagger: 0.06, clearProps: 'transform,opacity,visibility' }, 0.3)
-      .fromTo('[data-queue-row]', { x: -12, autoAlpha: 0 }, { x: 0, autoAlpha: 1, duration: 0.24, stagger: 0.03, clearProps: 'transform,opacity,visibility' }, 0.42)
+    const addEntrance = (selector, from, to, position) => {
+      const targets = Array.from(shellRef.current?.querySelectorAll(selector) || [])
+      if (targets.length) timeline.fromTo(targets, from, to, position)
+    }
+    addEntrance('[data-dashboard-header]', { y: 14, autoAlpha: 0 }, { y: 0, autoAlpha: 1, duration: 0.34, clearProps: 'transform,opacity,visibility' }, 0)
+    addEntrance('[data-kpi]', { y: 10, autoAlpha: 0 }, { y: 0, autoAlpha: 1, duration: 0.26, stagger: 0.04, clearProps: 'transform,opacity,visibility' }, 0.16)
+    addEntrance('[data-primary-panel]', { y: 16, autoAlpha: 0 }, { y: 0, autoAlpha: 1, duration: 0.3, stagger: 0.06, clearProps: 'transform,opacity,visibility' }, 0.3)
+    addEntrance('[data-queue-row]', { x: -12, autoAlpha: 0 }, { x: 0, autoAlpha: 1, duration: 0.24, stagger: 0.03, clearProps: 'transform,opacity,visibility' }, 0.42)
 
     // Counters climb to the EXACT persisted value and then have that value's
     // own rendered string written back over them. A count-up that stopped at

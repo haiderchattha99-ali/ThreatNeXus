@@ -5,13 +5,112 @@ _Operational status / handoff note. Authoritative plan lives in
 
 ## Current
 
-- **Branch:** `feat/phase-5-framework-ai-assistance` — pushed, no PR opened (not requested). Built on
-  `f894894`, which is Phase 4 merged into `main` via PR #5.
-- **Phases 0 through 5 are COMPLETE and gate-verified.** 17 migrations, all additive. Nine
-  evaluators all pass. Exact next task is **Phase 6 — dedicated professional frontend and
-  demonstration readiness** (premium SOC/CERT interface, authorized subtle PKCERT watermark,
-  real backend-derived metrics only, accessibility and responsiveness, and final security, Docker,
-  CI, end-to-end test, documentation and demo hardening).
+- **Branch:** `feat/phase-6-frontend-demo-hardening` — pushed, no PR opened (not requested).
+- **Phases 0 through 6 are COMPLETE and gate-verified, and Phase 6.2 is complete on top of
+  Phase 6.** 17 migrations, all additive — Phase 6 and Phase 6.2 both added none. Nine evaluators
+  all pass.
+
+### Phase 6.2 — command-centre motion, visual intelligence, truth cleanup, browser exit gate
+
+Adds **one** new primary dashboard visualization and closes the browser-testing gap Phase 6 left
+open.
+
+- **Risk v1 factor pressure.** `GET /api/dashboard/overview` grows one section,
+  `riskFactorPressure`, built by summing persisted `RiskFactorContribution` rows over CURRENT
+  scores only. It answers what the band distribution cannot: which factors are actually producing
+  the risk, and which are producing none because their evidence was never readable. `APPLIED` /
+  `NOT_AVAILABLE` / `NOT_APPLICABLE` are reported as three separate counts — all three can be zero
+  basis points and all three mean different things. Per-factor caps come from the stored
+  `maximumContributionBasisPoints` column, not the live configuration, so an old row stays
+  explicable after a future cap change. Denominator AND `denominatorDefinition` returned; no
+  percentage asserted. Read-only, bounded, gated on the existing `read:findings`. Ownership
+  confidence is not and cannot be a factor. Verified against the demo dataset: summed
+  contributions equal the sum of every current score's basis points exactly.
+- **Analysis** widened over the SAME single snapshot with no backend extension — notification
+  lifecycle and manual-delivery observations (RESTRICTED for VIEWER, never zero), framework
+  mappings by family and by how each was recorded, findings by report type, and the full
+  per-factor contribution table. Every chart carries raw values and a table alternative.
+- **Truth cleanup outside the dashboard.** Settings had five cards asserting things this system
+  has never done (widget toggles for deleted widgets, a threat-feed refresh interval for
+  non-existent scheduled ingestion, VirusTotal/OTX/MISP selectors, alert toggles for a
+  non-existent alerting subsystem, hardcoded 92/81/67/88 service-availability bars, and
+  "AI Engine: Ready" while `AI_ENABLED` defaults to false). Profile showed the current clock as
+  "Last Login" — the `User` model persists no login timestamp at all — plus static connection
+  chips, a hardcoded department, and four hardcoded-"0" analyst statistics, and its editable
+  identity saved to `localStorage` while reporting success. Organizations averaged and summed
+  `securityScore` / `activeThreats`, two hand-typed Int columns nothing computes, into
+  posture-and-threat headlines. All removed; the two columns remain as the administrative notes
+  they always were, labelled as manually entered and excluded from every aggregate.
+- **Motion.** Dashboard entrance retuned to ~0.9s; KPI counters climb to the exact persisted value
+  and have that value's rendered string written back on completion, and the count-up hook is
+  absent from the em dash that stands in for a restricted or unavailable figure. Scroll work is
+  transform-only, so no trigger that fails to fire can strand evidence invisible. The sign-in
+  opening is a readable ~1.85s sequence with a Skip control that lands on the final frame, and a
+  Replay action in Settings that touches no session storage and signs nobody out. Under reduced
+  motion — OS or in-app — no timeline is constructed at all.
+- **Browser exit gate.** `frontend/e2e/` — a committed Chromium Playwright suite driving the real
+  backend, real PostgreSQL, real routes and real JWTs, with credentials from environment variables
+  and no committed literal. A `Browser suite (Chromium)` CI job runs it against a disposable
+  seeded service container. **36 tests** across six files: role composition, dashboard provenance
+  and refresh semantics, session behaviour, motion, responsive/keyboard, and the truth-cleanup
+  regression gate.
+- **Session semantics are now gated in a browser** (`e2e/session.spec.js`). 401 and 403 mean
+  opposite things and the application has to treat them as opposites: a real backend 401 clears the
+  stored session and returns to sign-in with an explanation, while a 403 leaves the analyst signed
+  in with the refusal shown in place. Neither claim was previously provable — the behaviour lives
+  in an axios interceptor, a context listener and a real navigation, none of which a jsdom test
+  observes end to end.
+- **Contrast.** `textFaint` raised `#75899E` → `#7A8EA3`: the old value cleared 4.5:1 on `surface`
+  but fell to 4.44:1 on `surfaceRaised`, which backs every hover row and sunken note. Values a
+  decision depends on moved off the faint token entirely.
+- **Legacy frontend docs archived** to `frontend/docs/archive/` behind an explicit notice. They
+  claimed "production-ready", documented deleted `/api/threats` endpoints, referenced an
+  uninstalled charting library, and carried committed credential literals.
+
+#### Phase 6.2 exit gate — measured 2026-08-05, every command re-run from a fresh process
+
+| Gate | Result |
+|---|---|
+| `prisma validate` | pass |
+| Migration count and order | **17**, canonical order, unchanged by Phase 6 and 6.2 |
+| `prisma migrate deploy` from an EMPTY database | pass (fresh disposable database) |
+| `prisma migrate status` | no pending migration, no drift |
+| Backend suite vs real PostgreSQL (`TEST_DATABASE_URL` set) | **118 files passed / 1 skipped · 2922 tests passed / 2 skipped**, exit 0 |
+| — including `appHardening.test.js` and the real-PG concurrency suites | pass (no timeout in a fresh, uncontended process) |
+| Frontend `npm run lint` (oxlint) | exit 0 — 6 pre-existing `only-export-components` warnings, no errors |
+| Frontend unit suite (Vitest, jsdom) | **11 files / 139 tests passed**, exit 0 |
+| Frontend production build | pass — 5 chunks, ~292 kB gzip total |
+| Bundle secret scan | clean (`ABUSEIPDB_API_KEY`, `NVD_API_KEY`, PEM headers; plus a sweep for the run's own local password and JWT value) |
+| Playwright Chromium browser suite | **36 discovered / 36 passed**, exit 0, 2.3 min, 1 worker, 0 retries |
+| `eval:phase1` | PASS — 9 scenarios |
+| `eval:risk` | PASS — locked contract + 19 manually derived scenarios |
+| `eval:phase3` | PASS — 12 scenarios, 151 assertions |
+| `eval:phase4` | PASS — 14 scenarios, 151 assertions |
+| `eval:phase5` | PASS — 14 scenarios, 148 assertions |
+| CI workflow YAML | parses; 7 jobs (`hygiene`, `schema`, `backend`, `frontend`, `e2e`, `evaluators`, `deep-gates`) |
+| `docker compose config` | valid, and still fails fast when `JWT_SECRET` is absent |
+| Committed `.env` files | none |
+| Credential-shaped literals | none |
+| Tracked build output or dependencies | none |
+
+The browser suite and the demonstration seed ran against a **disposable** PostgreSQL database
+created for the run and migrated from zero, with `IOC_ENRICHMENT_PROVIDER=mock`, empty
+`ABUSEIPDB_API_KEY` / `NVD_API_KEY`, and `AI_ENABLED=false`. `TNX_SKIP_DOTENV=true` was set for
+every process, so `backend/.env` was never loaded and no live provider key entered any test,
+report or log. **No external provider was contacted at any point.**
+
+Two environment facts worth recording, because both cost time and neither is a product defect:
+
+- **A stale backend and preview server from an earlier session were still bound to ports 5000 and
+  4173.** Playwright's `reuseExistingServer` silently attached to the stale preview, which served
+  an older bundle pointed at the stale backend, and the first six tests failed on sign-in. This is
+  the failure mode a browser gate is most likely to fake a result with. The run was repeated on
+  dedicated ports (backend 5055, preview 4180, `E2E_SKIP_WEBSERVER=1`) against the freshly seeded
+  database, where the same tests pass in 2.8 s instead of timing out at 25 s. The foreign
+  processes were left running and untouched.
+- **The three frontend unit failures reported under heavy local contention did not reproduce.**
+  A fresh, otherwise-idle process gives 139/139. No timeout was raised, no assertion weakened and
+  no test skipped to obtain that.
 
 _The per-phase notes below are append-only and are kept in reverse-chronological order. Lines
 further down describe the state at the time they were written and are not re-edited; the entry
@@ -4036,6 +4135,8 @@ unreachable advisory for fourteen reachable ones including open redirect via
   `Finding.status = CLOSED`. Recurrence and recurrence-driven case reopening are
   proven by the evaluators but cannot be reached through the running application.
   Phase 6 did not add one: that is locked lifecycle semantics.
-- **No committed Playwright suite.** Critical flows were verified interactively
-  in a real browser and through the API-driven demo seed.
+- ~~**No committed Playwright suite.**~~ **CLOSED in Phase 6.2** — see
+  "Phase 6.2" in the Current block. `frontend/e2e/` now holds a committed
+  Chromium suite that drives the real stack, and a `Browser suite (Chromium)`
+  CI job runs it against a disposable seeded PostgreSQL service container.
 - **The demo does not include a recurrence-reopened case**, for the reason above.

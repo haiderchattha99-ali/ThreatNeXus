@@ -74,7 +74,7 @@ export function LoadingState({ label = 'Loading', description, dense = false }) 
     >
       {/* The visible skeleton is decorative; this sentence is what a screen
           reader actually announces. */}
-      <Box sx={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0 0 0 0)' }}>
+      <Box sx={{ position: 'absolute', width: '1px', height: '1px', overflow: 'hidden', clip: 'rect(0 0 0 0)' }}>
         {label}…
       </Box>
       <Skeleton variant="text" width="38%" height={22} />
