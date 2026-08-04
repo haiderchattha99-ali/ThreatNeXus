@@ -12,8 +12,8 @@
 // first-class furniture rather than fine print.
 //
 // Locked constraints this file must keep satisfying:
-//   - dark navy / near-black foundation
-//   - restrained cyan and teal accents, never neon
+//   - near-black, subtly green foundation
+//   - restrained institutional green accents, never neon
 //   - high contrast, readable analyst density
 //   - status is NEVER communicated by colour alone (see STATUS_SEMANTICS: every
 //     entry carries a label and an icon key as well as a colour)
@@ -24,16 +24,16 @@
 
 export const color = {
   // Surfaces, darkest to lightest.
-  canvas: '#0A1018',
-  canvasAlt: '#0E1622',
-  surface: '#111C2A',
-  surfaceRaised: '#162334',
-  surfaceSunken: '#0C141F',
+  canvas: '#070C0A',
+  canvasAlt: '#0A1210',
+  surface: '#0D1915',
+  surfaceRaised: '#14251E',
+  surfaceSunken: '#09120E',
 
   // Hairlines and dividers.
-  border: '#243549',
-  borderStrong: '#33485F',
-  borderFocus: '#5AD3C2',
+  border: '#20382F',
+  borderStrong: '#315344',
+  borderFocus: '#63D58E',
 
   // Text. `text` on `surface` measures ~13.9:1; `textMuted` ~5.6:1;
   // `textFaint` ~4.0:1 and is therefore used ONLY for non-essential captions
@@ -41,14 +41,17 @@ export const color = {
   text: '#EAF1F9',
   textMuted: '#9DAFC2',
   textFaint: '#75899E',
-  textInverse: '#08121B',
+  textInverse: '#06100A',
 
-  // Accent. Teal is the single brand accent; cyan is the link/interaction hue.
-  accent: '#31C7B4',
-  accentHover: '#4FD8C6',
-  accentQuiet: '#123B37',
-  link: '#5AB6D9',
-  linkHover: '#7FC9E4',
+  // Accent. A lightened institutional green echoes the supplied PKCERT mark
+  // while retaining enough contrast against the near-black operational shell.
+  // Links use a quieter green-teal so actions and primary controls remain
+  // distinguishable without introducing a second brand colour.
+  accent: '#35C477',
+  accentHover: '#55D28F',
+  accentQuiet: '#123822',
+  link: '#68BFA0',
+  linkHover: '#87D2B5',
 
   // Semantic feedback. Chosen to stay distinguishable under the common
   // red/green colour-vision deficiencies — which is also why nothing in this
@@ -57,10 +60,10 @@ export const color = {
   dangerQuiet: '#3A1620',
   warning: '#E8A33D',
   warningQuiet: '#3A2A12',
-  success: '#3FBF8F',
-  successQuiet: '#0F3328',
-  info: '#5AB6D9',
-  infoQuiet: '#12303D',
+  success: '#4BCB92',
+  successQuiet: '#103528',
+  info: '#65ADD0',
+  infoQuiet: '#122F3B',
   neutral: '#7C8AA0',
   neutralQuiet: '#1B2534',
 }
@@ -74,8 +77,8 @@ export const RISK_BANDS = ['INFORMATIONAL', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL']
 export const riskBandColor = Object.freeze({
   CRITICAL: '#F2617A',
   HIGH: '#E8A33D',
-  MEDIUM: '#5AB6D9',
-  LOW: '#31C7B4',
+  MEDIUM: '#65ADD0',
+  LOW: '#35C477',
   INFORMATIONAL: '#7C8AA0',
 })
 

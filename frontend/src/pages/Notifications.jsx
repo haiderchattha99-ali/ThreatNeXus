@@ -221,7 +221,7 @@ export const Notifications = () => {
                         <Chip
                           size="small"
                           label="Exportable"
-                          sx={{ ml: 1, bgcolor: '#31C7B422', color: '#31C7B4', fontWeight: 700 }}
+                          sx={{ ml: 1, bgcolor: '#35C47722', color: '#35C477', fontWeight: 700 }}
                           data-testid={`exportable-${row.id}`}
                         />
                       )}

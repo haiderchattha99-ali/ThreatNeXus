@@ -146,7 +146,7 @@ export const Dashboard = () => {
           pb: 2.5,
         }}
       >
-        <Box aria-hidden="true" sx={{ position: 'absolute', right: { xs: -20, md: 12 }, bottom: -24, fontFamily: font.ui, fontSize: { xs: 78, md: 116 }, fontWeight: 700, lineHeight: 1, color: 'rgba(234,241,249,0.022)', userSelect: 'none', pointerEvents: 'none' }}>PKCERT</Box>
+        <Box aria-hidden="true" sx={{ position: 'absolute', right: { xs: -20, md: 12 }, bottom: -24, fontFamily: font.ui, fontSize: { xs: 78, md: 116 }, fontWeight: 700, lineHeight: 1, color: color.accent, opacity: 0.035, userSelect: 'none', pointerEvents: 'none' }}>PKCERT</Box>
         <PageHeader
           eyebrow={copy.eyebrow}
           title={copy.title}

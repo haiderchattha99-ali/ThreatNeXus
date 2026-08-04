@@ -147,9 +147,9 @@ export const theme = createTheme({
         outlined: {
           borderColor: color.borderStrong,
           color: color.text,
-          '&:hover': { borderColor: color.accent, backgroundColor: 'rgba(49, 199, 180, 0.08)' },
+          '&:hover': { borderColor: color.accent, backgroundColor: 'rgba(53, 196, 119, 0.08)' },
         },
-        text: { color: color.link, '&:hover': { backgroundColor: 'rgba(90, 182, 217, 0.1)' } },
+        text: { color: color.link, '&:hover': { backgroundColor: 'rgba(104, 191, 160, 0.1)' } },
       },
     },
 
@@ -212,7 +212,7 @@ export const theme = createTheme({
       styleOverrides: {
         root: {
           '&:last-child td': { borderBottom: 'none' },
-          '&:hover': { backgroundColor: 'rgba(90, 182, 217, 0.04)' },
+          '&:hover': { backgroundColor: 'rgba(104, 191, 160, 0.04)' },
         },
       },
     },

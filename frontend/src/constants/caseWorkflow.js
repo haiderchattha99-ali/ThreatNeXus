@@ -52,7 +52,7 @@ export const TRIAGE_COLORS = {
   UNTRIAGED: '#7C8AA0',
   IN_REVIEW: '#5AB6D9',
   ESCALATED: '#F2617A',
-  DISMISSED: '#31C7B4',
+  DISMISSED: '#35C477',
 }
 
 // A dismissal with no stated reason is not defensible, so the form requires one.
@@ -79,7 +79,7 @@ export const RESPONSE_LABELS = {
 export const RESPONSE_COLORS = {
   ACKNOWLEDGED: '#5AB6D9',
   INVESTIGATING: '#E8A33D',
-  REMEDIATED: '#31C7B4',
+  REMEDIATED: '#35C477',
   DISPUTED: '#F2617A',
   NO_RESPONSE: '#7C8AA0',
   OTHER: '#9DAFC2',

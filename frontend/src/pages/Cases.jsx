@@ -40,7 +40,7 @@ const priorityColors = {
   Critical: '#F2617A',
   High: '#E8A33D',
   Medium: '#5AB6D9',
-  Low: '#31C7B4',
+  Low: '#35C477',
 }
 
 const initialFormState = {
@@ -217,9 +217,9 @@ export const Cases = () => {
             variant="contained"
             onClick={() => setCreateDialog(true)}
             sx={{
-              bgcolor: '#31C7B4',
-              color: '#08121B',
-              '&:hover': { bgcolor: '#4FD8C6' },
+              bgcolor: '#35C477',
+              color: '#06100A',
+              '&:hover': { bgcolor: '#55D28F' },
               whiteSpace: 'nowrap',
             }}
           >
@@ -311,7 +311,7 @@ export const Cases = () => {
                         <Button
                           size="small"
                           startIcon={<FiEye />}
-                          sx={{ color: '#31C7B4' }}
+                          sx={{ color: '#35C477' }}
                           onClick={() => navigate(`/cases/${item.id}`)}
                         >
                           Open
@@ -458,7 +458,7 @@ export const Cases = () => {
             variant="contained"
             disabled={creating}
             onClick={createCase}
-            sx={{ bgcolor: '#31C7B4', color: '#08121B' }}
+            sx={{ bgcolor: '#35C477', color: '#06100A' }}
           >
             Create
           </Button>

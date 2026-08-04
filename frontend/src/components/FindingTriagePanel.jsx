@@ -174,7 +174,7 @@ export function FindingTriagePanel({ findingId, onTriaged }) {
             variant="contained"
             disabled={saving || (reasonRequired && reason.trim() === '')}
             onClick={submit}
-            sx={{ bgcolor: '#31C7B4', color: '#08121B', '&:hover': { bgcolor: '#4FD8C6' } }}
+            sx={{ bgcolor: '#35C477', color: '#06100A', '&:hover': { bgcolor: '#55D28F' } }}
           >
             Record triage
           </Button>

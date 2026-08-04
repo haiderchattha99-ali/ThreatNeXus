@@ -195,7 +195,7 @@ export const CaseDetail = () => {
     return (
       <Box sx={{ p: { xs: 2, md: 4 } }}>
         <Typography sx={{ color: '#9DAFC2' }}>This case could not be loaded.</Typography>
-        <Button sx={{ mt: 2, color: '#31C7B4' }} onClick={() => navigate('/cases')}>
+        <Button sx={{ mt: 2, color: '#35C477' }} onClick={() => navigate('/cases')}>
           Back to cases
         </Button>
       </Box>
@@ -350,7 +350,7 @@ export const CaseDetail = () => {
                   )
                   if (ok) setReopenReason('')
                 }}
-                sx={{ bgcolor: '#E8A33D', color: '#08121B' }}
+                sx={{ bgcolor: '#E8A33D', color: '#06100A' }}
               >
                 Reopen case
               </Button>
@@ -391,7 +391,7 @@ export const CaseDetail = () => {
                 )
                 if (ok) setLinkFindingId('')
               }}
-              sx={{ bgcolor: '#31C7B4', color: '#08121B' }}
+              sx={{ bgcolor: '#35C477', color: '#06100A' }}
             >
               Link finding
             </Button>
@@ -680,7 +680,7 @@ export const CaseDetail = () => {
                   })
                 }
               }}
-              sx={{ bgcolor: '#31C7B4', color: '#08121B' }}
+              sx={{ bgcolor: '#35C477', color: '#06100A' }}
             >
               Record
             </Button>
@@ -767,7 +767,7 @@ export const CaseDetail = () => {
                     )
                     if (ok) setReviewNote('')
                   }}
-                  sx={{ bgcolor: '#31C7B4', color: '#08121B' }}
+                  sx={{ bgcolor: '#35C477', color: '#06100A' }}
                 >
                   Approve closure
                 </Button>
@@ -849,7 +849,7 @@ export const CaseDetail = () => {
                   )
                   if (ok) setClosureForm({ closureReason: 'OTHER', justification: '' })
                 }}
-                sx={{ bgcolor: '#c08cff', color: '#08121B' }}
+                sx={{ bgcolor: '#c08cff', color: '#06100A' }}
               >
                 Request closure
               </Button>

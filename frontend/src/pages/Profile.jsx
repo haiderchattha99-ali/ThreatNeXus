@@ -61,8 +61,8 @@ export const Profile = () => {
         onClick={() => navigate("/dashboard")}
         sx={{
           mb: 3,
-          color: "#31C7B4",
-          borderColor: "#31C7B4",
+          color: "#35C477",
+          borderColor: "#35C477",
           "&:hover": {
             borderColor: "#3B82F6",
             background: "rgba(37,99,235,.08)",
@@ -100,7 +100,7 @@ export const Profile = () => {
               sx={{
                 width: 130,
                 height: 130,
-                bgcolor: "#31C7B4",
+                bgcolor: "#35C477",
                 mx: "auto",
                 mb: 3,
                 fontSize: 45,
@@ -150,7 +150,7 @@ export const Profile = () => {
             <Stack spacing={2}>
 
               <Box display="flex" alignItems="center">
-                <FiShield color="#31C7B4" size={18} />
+                <FiShield color="#35C477" size={18} />
                 <Typography
                   sx={{
                     ml: 2,
@@ -228,7 +228,7 @@ export const Profile = () => {
                     mt={1}
                     alignItems="center"
                   >
-                    <FiUser color="#31C7B4" />
+                    <FiUser color="#35C477" />
                     <Typography color="white">
                       {user.name}
                     </Typography>
@@ -250,7 +250,7 @@ export const Profile = () => {
                     mt={1}
                     alignItems="center"
                   >
-                    <FiMail color="#31C7B4" />
+                    <FiMail color="#35C477" />
                     <Typography color="white">
                       {user.email}
                     </Typography>
@@ -283,7 +283,7 @@ export const Profile = () => {
                   mt={1}
                   alignItems="center"
                 >
-                  <FiBriefcase color="#31C7B4" />
+                  <FiBriefcase color="#35C477" />
                   <Typography color="white">
                     {user.role}
                   </Typography>
@@ -433,7 +433,7 @@ export const Profile = () => {
                     <Typography
                       variant="h4"
                       sx={{
-                        color: "#31C7B4",
+                        color: "#35C477",
                         fontWeight: 700,
                       }}
                     >
