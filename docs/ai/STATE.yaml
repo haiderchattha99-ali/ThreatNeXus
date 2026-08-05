@@ -2,8 +2,8 @@
     "schema_version":  1,
     "ticket":  "TNX-P6.3-ATTACK-CATALOGUE",
     "title":  "Catalogue-backed ATT\u0026CK evidence integrity and navigator",
-    "status":  "handoff_ready",
-    "owner":  "unassigned",
+    "status":  "in_progress",
+    "owner":  "codex",
     "reviewer":  "codex",
     "branch":  "review/tnx-p6-2",
     "push_target":  "feat/phase-6-frontend-demo-hardening",
@@ -40,7 +40,8 @@
                       "Added the read-only ATT\u0026CK navigator API and premium responsive frontend for all four roles",
                       "Added raw mapping counts, review queue, case/finding evidence links, provenance, and catalogue checksum display",
                       "Kept AI disabled by default and performed no live provider calls",
-                      "Updated CI migration order, catalogue verification, Phase 6.3 evaluator, and Chromium coverage"
+                      "Updated CI migration order, catalogue verification, Phase 6.3 evaluator, and Chromium coverage",
+                      "Stabilized the dashboard keyboard-focus E2E gate by waiting for the GSAP entrance to reach its user-visible state before asserting focus; the focused path passed 5/5 and the full Chromium suite passed 42/42"
                   ],
     "validation":  {
                        "catalogue":  "PASS — Enterprise v19.1 checksum, 15 tactics, 858 techniques, 697 mappable",
@@ -50,7 +51,7 @@
                        "browser":  "PASS — Chromium 42/42 against the real REST stack; four roles; desktop/tablet/mobile; keyboard and reduced motion",
                        "evaluators":  "PASS — Phase 1 (9), Risk v1 (contract + 19), Phase 3 (12/151 assertions), Phase 4 (14/151), Phase 5 (14/150), Phase 6.3 (13/108)",
                        "live_browser":  "PASS — ADMIN, ANALYST, REVIEWER, VIEWER; 1440x900, 1024x768, 390x844; no console warnings/errors; no invisible regions or horizontal overflow",
-                       "ci_workflow":  "PASS local parse; remote GitHub Actions pending first push of this checkpoint",
+                       "ci_workflow":  "PASS — code-bearing Phase 6.3 head 8ec6a5a passed GitHub Actions run 30997649820; the final stabilization checkpoint is pending publish and final CI",
                        "secret_hygiene":  "PASS — no live key read, printed, transmitted, copied, placed in frontend code, or committed"
                    },
     "known_issues":  [
@@ -59,8 +60,8 @@
                          "The existing React Router RSC-only advisory remains unreachable in this client-only SPA.",
                          "A parallel full backend run produced one NOT_CLAIM_OWNER lease collision; the exact file passed 19/19 alone and the complete suite passed 2,984/2,984 with serial file execution."
                      ],
-    "next_action":  "Verify the Phase 6.3 checkpoint and CI run 30997649820, merge the accepted Phase 6 branch into main, then create feat/phase-7-release-candidate from updated main and run the provided Phase 7 goal and execution prompts.",
+    "next_action":  "Publish the bounded keyboard E2E stabilization, require final green CI, release the writer lock, then merge the accepted Phase 6 branch into main before creating feat/phase-7-release-candidate and running the provided Phase 7 prompts.",
     "checkpoint_ref":  "c2000b8e9a5d8245bf92563be8e3db4e5cd10568",
-    "updated_at":  "2026-08-05T10:33:14.9660499Z",
+    "updated_at":  "2026-08-05T10:41:20.4953253Z",
     "next_writer":  "claude"
 }

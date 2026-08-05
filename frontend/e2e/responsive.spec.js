@@ -96,6 +96,12 @@ test('a KPI tile is reachable by keyboard and navigates to its records', async (
   await signIn(page, 'ANALYST')
 
   const firstKpi = page.locator('[data-kpi]').first()
+  // The authenticated dashboard entrance starts KPI links at autoAlpha: 0
+  // for a fraction of a second. `locator.focus()` only requires attachment,
+  // so a very fast CI runner can ask the still-hidden link to focus and get no
+  // error even though the browser correctly refuses to focus it. Wait for the
+  // same user-visible state a keyboard user needs before testing focus.
+  await expect(firstKpi).toBeVisible()
   await firstKpi.focus()
   await expect(firstKpi).toBeFocused()
   await page.keyboard.press('Enter')
