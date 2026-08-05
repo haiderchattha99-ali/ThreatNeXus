@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import {
   Alert,
+  Autocomplete,
   Box,
   Button,
   Chip,
@@ -18,7 +19,7 @@ import {
 } from '@mui/material'
 import toast from 'react-hot-toast'
 
-import { aiMappingService, frameworkMappingService } from '../services/api'
+import { aiMappingService, attackService, frameworkMappingService } from '../services/api'
 import { useAuth } from '../hooks/useAuth'
 import { CAPABILITIES } from '../constants/capabilities'
 import { hasCapability } from '../utils/permissions'
@@ -48,6 +49,8 @@ import {
   SUGGESTION_STATE_LABELS,
   describeMappingError,
 } from '../constants/frameworkMapping'
+import { CONFIDENCE, EVIDENCE_QUOTE_SOURCE } from '../constants/attackNavigator'
+import { StatusBadge } from './ui'
 
 const FRAMEWORK_OPTIONS = [
   FRAMEWORKS.MITRE_ATTACK,
@@ -71,6 +74,10 @@ const EMPTY_FORM = {
   evidenceBasis: EVIDENCE_BASES.CONTROL_GAP,
   rationale: '',
   evidenceFindingId: '',
+  evidenceQuote: '',
+  evidenceQuoteSource: 'FINDING_RECORD',
+  evidenceConfidence: 'MEDIUM',
+  mappingConfidence: 'MEDIUM',
 }
 
 function SubPanel({ title, subtitle, children, testId, action }) {
@@ -78,16 +85,16 @@ function SubPanel({ title, subtitle, children, testId, action }) {
     <Box sx={{ mb: 3 }} data-testid={testId}>
       <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
         <Box>
-          <Typography sx={{ fontSize: 14, fontWeight: 700, color: '#e7eef9' }}>{title}</Typography>
+          <Typography sx={{ fontSize: 14, fontWeight: 700, color: '#EAF1F9' }}>{title}</Typography>
           {subtitle && (
-            <Typography sx={{ fontSize: 12, color: '#8290a5', mt: 0.5, maxWidth: 760 }}>
+            <Typography sx={{ fontSize: 12, color: '#9DAFC2', mt: 0.5, maxWidth: 760 }}>
               {subtitle}
             </Typography>
           )}
         </Box>
         {action}
       </Box>
-      <Divider sx={{ my: 1.5, borderColor: '#233247' }} />
+      <Divider sx={{ my: 1.5, borderColor: '#243549' }} />
       {children}
     </Box>
   )
@@ -127,8 +134,9 @@ function SubPanel({ title, subtitle, children, testId, action }) {
  * rendered here, and a denied request creates no row.
  */
 export function FrameworkMappingPanel({ caseId }) {
-  const { user } = useAuth()
-  const capabilities = user?.capabilities
+  // See FindingTriagePanel: capabilities live on the AuthContext, not on the
+  // user object that GET /api/profile returns alongside them.
+  const { capabilities } = useAuth()
   const canManage = hasCapability(capabilities, CAPABILITIES.MANAGE_FRAMEWORK_MAPPINGS)
   const canReadSuggestions = hasCapability(capabilities, CAPABILITIES.READ_AI_MAPPING_SUGGESTIONS)
   const canRequestSuggestions = hasCapability(
@@ -144,6 +152,8 @@ export function FrameworkMappingPanel({ caseId }) {
   const [history, setHistory] = useState(null)
   const [aiConfig, setAiConfig] = useState(null)
   const [suggestions, setSuggestions] = useState(null)
+  const [catalogue, setCatalogue] = useState(null)
+  const [noApplicable, setNoApplicable] = useState(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [showHistory, setShowHistory] = useState(false)
@@ -151,6 +161,9 @@ export function FrameworkMappingPanel({ caseId }) {
   const [removeReasons, setRemoveReasons] = useState({})
   const [rejectReasons, setRejectReasons] = useState({})
   const [requestContext, setRequestContext] = useState('')
+  const [noApplicableFramework, setNoApplicableFramework] = useState(FRAMEWORKS.MITRE_ATTACK)
+  const [noApplicableRationale, setNoApplicableRationale] = useState('')
+  const [withdrawAssertionReasons, setWithdrawAssertionReasons] = useState({})
 
   const load = useCallback(async () => {
     if (!caseId) return
@@ -164,13 +177,17 @@ export function FrameworkMappingPanel({ caseId }) {
         frameworkMappingService.listMappings(caseId),
         frameworkMappingService.getHistory(caseId),
         aiMappingService.getConfig(),
+        attackService.getCatalogue(),
+        frameworkMappingService.listNoApplicable(caseId),
       ]
       if (canReadSuggestions) requests.push(aiMappingService.listSuggestions(caseId))
 
-      const [mappingsRes, historyRes, configRes, suggestionsRes] = await Promise.all(requests)
+      const [mappingsRes, historyRes, configRes, catalogueRes, noApplicableRes, suggestionsRes] = await Promise.all(requests)
       setMappings(mappingsRes.data?.data ?? null)
       setHistory(historyRes.data?.data ?? null)
       setAiConfig(configRes.data?.data ?? null)
+      setCatalogue(catalogueRes.data?.data ?? null)
+      setNoApplicable(noApplicableRes.data?.data ?? null)
       setSuggestions(suggestionsRes ? (suggestionsRes.data?.data ?? null) : null)
     } catch (error) {
       toast.error(describeMappingError(error))
@@ -184,14 +201,19 @@ export function FrameworkMappingPanel({ caseId }) {
   }, [load])
 
   const isAttack = form.framework === FRAMEWORKS.MITRE_ATTACK
+  const quoteNeedsFinding = ['FINDING_RECORD', 'RAW_REPORT_ROW'].includes(form.evidenceQuoteSource)
 
   // The server enforces this; the form mirrors it so an analyst is not left to
   // discover the rule by having a submission refused.
   useEffect(() => {
-    if (isAttack && form.evidenceBasis !== EVIDENCE_BASES.OBSERVED_BEHAVIOR) {
-      setForm((previous) => ({ ...previous, evidenceBasis: EVIDENCE_BASES.OBSERVED_BEHAVIOR }))
+    if (isAttack) {
+      setForm((previous) => ({
+        ...previous,
+        evidenceBasis: EVIDENCE_BASES.OBSERVED_BEHAVIOR,
+        frameworkVersion: catalogue?.catalogue?.attackVersion || previous.frameworkVersion,
+      }))
     }
-  }, [isAttack, form.evidenceBasis])
+  }, [isAttack, catalogue?.catalogue?.attackVersion])
 
   const submitMapping = async (event) => {
     event.preventDefault()
@@ -205,11 +227,15 @@ export function FrameworkMappingPanel({ caseId }) {
       mappingScope: form.mappingScope,
       evidenceBasis: form.evidenceBasis,
       rationale: form.rationale.trim(),
+      evidenceQuote: form.evidenceQuote.trim(),
+      evidenceQuoteSource: form.evidenceQuoteSource,
+      evidenceConfidence: form.evidenceConfidence,
+      mappingConfidence: form.mappingConfidence,
     }
-    if (form.mappingScope === MAPPING_SCOPES.FINDING) {
+    if (form.mappingScope === MAPPING_SCOPES.FINDING || quoteNeedsFinding) {
       const parsed = Number.parseInt(form.evidenceFindingId, 10)
       if (!Number.isInteger(parsed) || parsed < 1) {
-        toast.error('A finding-scoped mapping must name the finding it is about.')
+        toast.error('This mapping must name the case finding that contains the quoted evidence.')
         return
       }
       payload.evidenceFindingId = parsed
@@ -267,8 +293,50 @@ export function FrameworkMappingPanel({ caseId }) {
       evidenceBasis: row.evidenceBasis,
       rationale: '',
       evidenceFindingId: row.evidenceFindingId ? String(row.evidenceFindingId) : '',
+      evidenceQuote: row.evidenceQuote || '',
+      evidenceQuoteSource: row.evidenceQuoteSource || 'FINDING_RECORD',
+      evidenceConfidence: row.evidenceConfidence || 'MEDIUM',
+      mappingConfidence: row.mappingConfidence || 'MEDIUM',
     })
-    toast('Form filled from the removed mapping. Add a rationale and save to reactivate it.')
+    toast('Form filled from the removed mapping. Recheck the quote and add a fresh rationale before saving.')
+  }
+
+  const assertNoApplicable = async () => {
+    const rationale = noApplicableRationale.trim()
+    if (!rationale) {
+      toast.error('Explain why no reference in this framework applies to the case.')
+      return
+    }
+    setBusy(true)
+    try {
+      await frameworkMappingService.assertNoApplicable(caseId, noApplicableFramework, rationale)
+      toast.success('No-applicable determination recorded. It is distinct from unfinished mapping work.')
+      setNoApplicableRationale('')
+      await load()
+    } catch (error) {
+      toast.error(describeMappingError(error))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const withdrawNoApplicable = async (assertionId) => {
+    const reason = (withdrawAssertionReasons[assertionId] || '').trim()
+    if (!reason) {
+      toast.error('Say why this determination is being withdrawn.')
+      return
+    }
+    setBusy(true)
+    try {
+      await frameworkMappingService.withdrawNoApplicable(caseId, assertionId, reason)
+      toast.success('Determination withdrawn. Its history remains recorded.')
+      setWithdrawAssertionReasons((current) => ({ ...current, [assertionId]: '' }))
+      await load()
+    } catch (error) {
+      toast.error(describeMappingError(error))
+    } finally {
+      setBusy(false)
+    }
   }
 
   const requestSuggestions = async () => {
@@ -362,7 +430,7 @@ export function FrameworkMappingPanel({ caseId }) {
         }
       >
         {groups.length === 0 && (
-          <Typography sx={{ fontSize: 13, color: '#8290a5' }} data-testid="no-active-mappings">
+          <Typography sx={{ fontSize: 13, color: '#9DAFC2' }} data-testid="no-active-mappings">
             No framework mappings have been recorded on this case.
           </Typography>
         )}
@@ -375,11 +443,11 @@ export function FrameworkMappingPanel({ caseId }) {
                 label={FRAMEWORK_LABELS[group.framework] || group.framework}
                 sx={{ bgcolor: FRAMEWORK_COLORS[group.framework], color: '#0b1220', fontWeight: 700 }}
               />
-              <Typography sx={{ fontSize: 12, color: '#8290a5' }}>
+              <Typography sx={{ fontSize: 12, color: '#9DAFC2' }}>
                 {group.count} mapping{group.count === 1 ? '' : 's'} recorded
               </Typography>
             </Box>
-            <Typography sx={{ fontSize: 12, color: '#8290a5', mt: 0.5, maxWidth: 760 }}>
+            <Typography sx={{ fontSize: 12, color: '#9DAFC2', mt: 0.5, maxWidth: 760 }}>
               {FRAMEWORK_NOTES[group.framework]}
             </Typography>
 
@@ -402,12 +470,25 @@ export function FrameworkMappingPanel({ caseId }) {
                         <Typography sx={{ fontSize: 13, fontWeight: 700 }}>
                           {mapping.referenceId}
                         </Typography>
-                        <Typography sx={{ fontSize: 12, color: '#8290a5' }}>
+                        <Typography sx={{ fontSize: 12, color: '#9DAFC2' }}>
                           {mapping.referenceTitle}
                         </Typography>
-                        <Typography sx={{ fontSize: 11, color: '#8290a5' }}>
-                          {mapping.frameworkVersion} · analyst-entered, not catalogue-verified
+                        <Typography sx={{ fontSize: 11, color: '#9DAFC2' }}>
+                          {mapping.frameworkVersion} ·{' '}
+                          {mapping.referenceValidated
+                            ? `catalogue-verified against ${mapping.catalogueVersion}`
+                            : 'legacy / not catalogue-verified'}
                         </Typography>
+                        <Box sx={{ mt: 0.6 }}>
+                          <StatusBadge
+                            dictionary={{
+                              VERIFIED: { label: 'Catalogue verified', tone: 'success', icon: 'check' },
+                              LEGACY: { label: 'Legacy / unverified', tone: 'warning', icon: 'clock' },
+                            }}
+                            value={mapping.referenceValidated && !mapping.legacyUnverified ? 'VERIFIED' : 'LEGACY'}
+                            size="small"
+                          />
+                        </Box>
                       </TableCell>
                       <TableCell sx={{ fontSize: 12 }}>
                         {MAPPING_SCOPE_LABELS[mapping.mappingScope]}
@@ -416,7 +497,28 @@ export function FrameworkMappingPanel({ caseId }) {
                       <TableCell sx={{ fontSize: 12 }}>
                         {EVIDENCE_BASIS_LABELS[mapping.evidenceBasis]}
                       </TableCell>
-                      <TableCell sx={{ fontSize: 12, maxWidth: 320 }}>{mapping.rationale}</TableCell>
+                      <TableCell sx={{ fontSize: 12, minWidth: 280, maxWidth: 420 }}>
+                        <Typography sx={{ fontSize: 12 }}>{mapping.rationale}</Typography>
+                        {mapping.evidenceQuote ? (
+                          <Box sx={{ mt: 0.8, p: 1, border: '1px solid #315344', borderRadius: 1, bgcolor: '#09120E' }}>
+                            <Typography component="blockquote" sx={{ m: 0, fontSize: 12 }}>
+                              “{mapping.evidenceQuote}”
+                            </Typography>
+                            <Box sx={{ display: 'flex', gap: 0.6, flexWrap: 'wrap', mt: 0.7 }}>
+                              <StatusBadge dictionary={EVIDENCE_QUOTE_SOURCE} value={mapping.evidenceQuoteSource} size="small" />
+                              <StatusBadge dictionary={CONFIDENCE} value={mapping.evidenceConfidence} size="small" />
+                              <StatusBadge dictionary={CONFIDENCE} value={mapping.mappingConfidence} size="small" />
+                            </Box>
+                            <Typography sx={{ fontSize: 10.5, color: '#7A8EA3', mt: 0.6 }}>
+                              Evidence confidence and mapping confidence are separate.
+                            </Typography>
+                          </Box>
+                        ) : (
+                          <Typography sx={{ fontSize: 11, color: '#E8A33D', mt: 0.7 }}>
+                            Legacy row: no verified evidence quote was stored.
+                          </Typography>
+                        )}
+                      </TableCell>
                       <TableCell sx={{ fontSize: 12 }}>
                         {MAPPING_SOURCE_LABELS[mapping.source]}
                       </TableCell>
@@ -506,6 +608,73 @@ export function FrameworkMappingPanel({ caseId }) {
         </SubPanel>
       )}
 
+      <SubPanel
+        title="Explicit no-applicable determinations"
+        subtitle="Records that an analyst reviewed this case and concluded that no reference in a framework applies. This is not the same as an empty or unfinished mapping list."
+        testId="no-applicable-panel"
+      >
+        {(noApplicable?.standing ?? []).length === 0 ? (
+          <Typography sx={{ fontSize: 13, color: '#9DAFC2' }}>
+            No standing determination is recorded for this case.
+          </Typography>
+        ) : (
+          <Box component="ul" sx={{ listStyle: 'none', m: 0, p: 0 }}>
+            {noApplicable.standing.map((assertion) => (
+              <Box component="li" key={assertion.id} sx={{ py: 1.2, '& + &': { borderTop: '1px solid #243549' } }}>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 1.5, flexWrap: 'wrap' }}>
+                  <Box>
+                    <Chip size="small" label={FRAMEWORK_LABELS[assertion.framework] || assertion.framework} />
+                    <Typography sx={{ fontSize: 13, mt: 0.8 }}>{assertion.rationale}</Typography>
+                    <Typography sx={{ fontSize: 11, color: '#7A8EA3', mt: 0.4 }}>
+                      Recorded {formatInstant(assertion.effectiveAt)} by {assertion.actor?.name || 'a recorded user'}
+                    </Typography>
+                  </Box>
+                  {canManage && (
+                    <Box sx={{ display: 'flex', gap: 0.75, alignItems: 'center', flexWrap: 'wrap' }}>
+                      <TextField
+                        size="small"
+                        label="Reason to withdraw"
+                        value={withdrawAssertionReasons[assertion.id] || ''}
+                        onChange={(event) => setWithdrawAssertionReasons((current) => ({ ...current, [assertion.id]: event.target.value }))}
+                      />
+                      <Button color="warning" disabled={busy} onClick={() => withdrawNoApplicable(assertion.id)}>
+                        Withdraw determination
+                      </Button>
+                    </Box>
+                  )}
+                </Box>
+              </Box>
+            ))}
+          </Box>
+        )}
+
+        {canManage && (
+          <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', md: '220px minmax(0, 1fr) auto' }, gap: 1, alignItems: 'start', mt: 2, pt: 2, borderTop: '1px solid #243549' }}>
+            <TextField
+              select
+              size="small"
+              label="Framework with no applicable reference"
+              value={noApplicableFramework}
+              onChange={(event) => setNoApplicableFramework(event.target.value)}
+            >
+              {FRAMEWORK_OPTIONS.map((value) => <MenuItem key={value} value={value}>{FRAMEWORK_LABELS[value]}</MenuItem>)}
+            </TextField>
+            <TextField
+              size="small"
+              multiline
+              minRows={2}
+              label="Why no reference applies"
+              value={noApplicableRationale}
+              onChange={(event) => setNoApplicableRationale(event.target.value)}
+              helperText="Required. Explain what was reviewed and why a mapping would overstate the evidence."
+            />
+            <Button variant="outlined" disabled={busy} onClick={assertNoApplicable} sx={{ minHeight: 40 }}>
+              Record determination
+            </Button>
+          </Box>
+        )}
+      </SubPanel>
+
       {canManage && (
         <SubPanel
           title="Record a framework mapping"
@@ -525,7 +694,21 @@ export function FrameworkMappingPanel({ caseId }) {
                 size="small"
                 label="Framework"
                 value={form.framework}
-                onChange={(event) => setForm({ ...form, framework: event.target.value })}
+                onChange={(event) => {
+                  const framework = event.target.value
+                  setForm((current) => ({
+                    ...current,
+                    framework,
+                    frameworkVersion: framework === FRAMEWORKS.MITRE_ATTACK
+                      ? (catalogue?.catalogue?.attackVersion || '')
+                      : '',
+                    referenceId: '',
+                    referenceTitle: '',
+                    evidenceBasis: framework === FRAMEWORKS.MITRE_ATTACK
+                      ? EVIDENCE_BASES.OBSERVED_BEHAVIOR
+                      : EVIDENCE_BASES.CONTROL_GAP,
+                  }))
+                }}
               >
                 {FRAMEWORK_OPTIONS.map((value) => (
                   <MenuItem key={value} value={value}>
@@ -541,24 +724,51 @@ export function FrameworkMappingPanel({ caseId }) {
                 placeholder={FRAMEWORK_VERSION_PLACEHOLDERS[form.framework]}
                 helperText="Required. State which version you mapped against — it is never assumed."
                 value={form.frameworkVersion}
+                disabled={isAttack}
                 onChange={(event) => setForm({ ...form, frameworkVersion: event.target.value })}
               />
 
-              <TextField
-                size="small"
-                label="Reference id"
-                required
-                placeholder={REFERENCE_PLACEHOLDERS[form.framework]}
-                helperText="Format-checked only. This system pins no catalogue and cannot confirm the reference exists."
-                value={form.referenceId}
-                onChange={(event) => setForm({ ...form, referenceId: event.target.value })}
-              />
+              {isAttack ? (
+                <Autocomplete
+                  options={catalogue?.techniques ?? []}
+                  value={(catalogue?.techniques ?? []).find((item) => item.id === form.referenceId) || null}
+                  getOptionLabel={(option) => `${option.id} · ${option.displayName || option.name}`}
+                  isOptionEqualToValue={(option, value) => option.id === value.id}
+                  onChange={(_event, option) => setForm((current) => ({
+                    ...current,
+                    referenceId: option?.id || '',
+                    referenceTitle: option?.name || '',
+                    frameworkVersion: catalogue?.catalogue?.attackVersion || current.frameworkVersion,
+                  }))}
+                  renderInput={(params) => (
+                    <TextField
+                      {...params}
+                      size="small"
+                      required
+                      label="ATT&CK technique"
+                      helperText="Search the pinned local catalogue. Retired and revoked techniques are excluded."
+                    />
+                  )}
+                />
+              ) : (
+                <TextField
+                  size="small"
+                  label="Reference id"
+                  required
+                  placeholder={REFERENCE_PLACEHOLDERS[form.framework]}
+                  helperText="Format-checked only. ThreatNeXus does not pin a catalogue for this framework."
+                  value={form.referenceId}
+                  onChange={(event) => setForm({ ...form, referenceId: event.target.value })}
+                />
+              )}
 
               <TextField
                 size="small"
                 label="Reference title"
                 required
                 value={form.referenceTitle}
+                disabled={isAttack}
+                helperText={isAttack ? 'Filled from the verified catalogue selection.' : undefined}
                 onChange={(event) => setForm({ ...form, referenceTitle: event.target.value })}
               />
 
@@ -599,17 +809,69 @@ export function FrameworkMappingPanel({ caseId }) {
                 ))}
               </TextField>
 
-              {form.mappingScope === MAPPING_SCOPES.FINDING && (
+              {(form.mappingScope === MAPPING_SCOPES.FINDING || quoteNeedsFinding) && (
                 <TextField
                   size="small"
                   label="Evidence finding id"
                   required
-                  helperText="Must be a finding currently linked to this case."
+                  helperText="Must be a finding currently linked to this case and containing the quote below."
                   value={form.evidenceFindingId}
                   onChange={(event) => setForm({ ...form, evidenceFindingId: event.target.value })}
                 />
               )}
+
+              <TextField
+                select
+                size="small"
+                label="Evidence quote source"
+                value={form.evidenceQuoteSource}
+                onChange={(event) => setForm({ ...form, evidenceQuoteSource: event.target.value })}
+                helperText="The server reopens this exact record and verifies the quote character for character."
+              >
+                {Object.entries(EVIDENCE_QUOTE_SOURCE).map(([value, spec]) => (
+                  <MenuItem key={value} value={value}>{spec.label}</MenuItem>
+                ))}
+              </TextField>
+
+              <TextField
+                select
+                size="small"
+                label="Evidence confidence"
+                value={form.evidenceConfidence}
+                onChange={(event) => setForm({ ...form, evidenceConfidence: event.target.value })}
+                helperText="How sure are you that the cited record says what you think it says?"
+              >
+                {Object.entries(CONFIDENCE).map(([value, spec]) => <MenuItem key={value} value={value}>{spec.label}</MenuItem>)}
+              </TextField>
+
+              <TextField
+                select
+                size="small"
+                label="Mapping confidence"
+                value={form.mappingConfidence}
+                onChange={(event) => setForm({ ...form, mappingConfidence: event.target.value })}
+                helperText="How sure are you that this framework reference fits that evidence?"
+              >
+                {Object.entries(CONFIDENCE).map(([value, spec]) => <MenuItem key={value} value={value}>{spec.label}</MenuItem>)}
+              </TextField>
             </Box>
+
+            <Alert severity="info" sx={{ mt: 2 }}>
+              Evidence confidence and mapping confidence answer different questions. ThreatNeXus stores both and never combines them into one score.
+            </Alert>
+
+            <TextField
+              fullWidth
+              multiline
+              minRows={2}
+              size="small"
+              sx={{ mt: 2 }}
+              label="Verbatim evidence quote"
+              required
+              helperText="Copy 12–500 characters from the selected finding, raw report row, or organization response. Spelling, case, punctuation, and digits must match."
+              value={form.evidenceQuote}
+              onChange={(event) => setForm({ ...form, evidenceQuote: event.target.value })}
+            />
 
             <TextField
               fullWidth
@@ -672,7 +934,7 @@ export function FrameworkMappingPanel({ caseId }) {
           )}
 
           {aiAvailable && pending.length === 0 && (
-            <Typography sx={{ fontSize: 13, color: '#8290a5' }} data-testid="no-pending-suggestions">
+            <Typography sx={{ fontSize: 13, color: '#9DAFC2' }} data-testid="no-pending-suggestions">
               No suggestions are awaiting a decision.
             </Typography>
           )}
@@ -683,7 +945,7 @@ export function FrameworkMappingPanel({ caseId }) {
             <Box
               key={suggestion.id}
               data-testid={`suggestion-${suggestion.id}`}
-              sx={{ border: '1px solid #233247', borderRadius: 1, p: 2, mb: 2 }}
+              sx={{ border: '1px solid #243549', borderRadius: 1, p: 2, mb: 2 }}
             >
               <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
                 <Chip
@@ -698,7 +960,7 @@ export function FrameworkMappingPanel({ caseId }) {
                 <Typography sx={{ fontSize: 13, fontWeight: 700 }}>
                   {suggestion.referenceId}
                 </Typography>
-                <Typography sx={{ fontSize: 12, color: '#8290a5' }}>
+                <Typography sx={{ fontSize: 12, color: '#9DAFC2' }}>
                   {suggestion.referenceTitle}
                 </Typography>
                 <Chip
@@ -708,7 +970,7 @@ export function FrameworkMappingPanel({ caseId }) {
                 />
               </Box>
 
-              <Typography sx={{ fontSize: 12, color: '#8290a5', mt: 1 }}>
+              <Typography sx={{ fontSize: 12, color: '#9DAFC2', mt: 1 }}>
                 {suggestion.frameworkVersion} · {MAPPING_SCOPE_LABELS[suggestion.mappingScope]} ·{' '}
                 {EVIDENCE_BASIS_LABELS[suggestion.evidenceBasis]}
                 {/* Provider self-report, labelled as such. Nothing in this
@@ -719,6 +981,29 @@ export function FrameworkMappingPanel({ caseId }) {
 
               {/* Evidence beside the decision, never behind a click. */}
               <Typography sx={{ fontSize: 13, mt: 1 }}>{suggestion.rationale}</Typography>
+              {suggestion.evidenceQuote && (
+                <Box sx={{ mt: 1, p: 1.2, border: '1px solid #315344', borderRadius: 1, bgcolor: '#09120E' }}>
+                  <Typography component="blockquote" sx={{ m: 0, fontSize: 12 }}>
+                    “{suggestion.evidenceQuote}”
+                  </Typography>
+                  <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.6, mt: 0.8 }}>
+                    <StatusBadge dictionary={EVIDENCE_QUOTE_SOURCE} value={suggestion.evidenceQuoteSource} size="small" />
+                    <StatusBadge dictionary={CONFIDENCE} value={suggestion.evidenceConfidence} size="small" />
+                    <StatusBadge dictionary={CONFIDENCE} value={suggestion.mappingConfidence} size="small" />
+                    <StatusBadge
+                      dictionary={{
+                        VERIFIED: { label: 'Catalogue verified', tone: 'success', icon: 'check' },
+                        UNVERIFIED: { label: 'Reference unverified', tone: 'warning', icon: 'clock' },
+                      }}
+                      value={suggestion.referenceValidated ? 'VERIFIED' : 'UNVERIFIED'}
+                      size="small"
+                    />
+                  </Box>
+                  <Typography sx={{ fontSize: 10.5, color: '#7A8EA3', mt: 0.6 }}>
+                    The quote and both confidence statements are reviewed before approval. Provider confidence remains a separate model self-report.
+                  </Typography>
+                </Box>
+              )}
 
               {suggestion.staleForApproval ? (
                 <Alert severity="warning" sx={{ mt: 1.5 }} data-testid={`stale-${suggestion.id}`}>

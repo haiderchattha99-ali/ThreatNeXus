@@ -38,6 +38,30 @@ apiClient.interceptors.request.use((config) => {
   return Promise.reject(error)
 })
 
+// Session expiry. A token that the backend rejects mid-session must not leave
+// the user staring at silently empty screens: the app clears the session and
+// returns to sign-in with an explanation.
+//
+// Two deliberate exclusions:
+//   - /auth/login — a wrong password is a 401 and belongs inline on the form,
+//     not as "your session expired".
+//   - 403 — that is an authorization refusal, not an expiry. The user is
+//     legitimately signed in and must stay signed in; the page renders its
+//     denied state instead.
+export const SESSION_EXPIRED_EVENT = 'tnx:session-expired'
+
+apiClient.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    const status = error?.response?.status
+    const url = error?.config?.url || ''
+    if (status === 401 && !url.includes('/auth/login')) {
+      window.dispatchEvent(new CustomEvent(SESSION_EXPIRED_EVENT))
+    }
+    return Promise.reject(error)
+  }
+)
+
 export const authService = {
   login: (email, password) => apiClient.post('/auth/login', { email, password }),
   // Backend session-validation endpoint: confirms a stored token is still
@@ -46,9 +70,37 @@ export const authService = {
   getCurrentUser: () => apiClient.get('/profile'),
 }
 
+// Phase 6 — the truthful operational overview.
+//
+// ONE bounded, read-only call. Every figure it returns arrives as
+// { value, availability, source, asOf }, and a section the caller may not read
+// comes back RESTRICTED rather than absent or zeroed. The frontend does no
+// arithmetic on these and invents nothing: if the backend did not compute it,
+// the screen shows that it did not.
+//
+// getStats/getCharts remain for the legacy Threat-table screens that predate
+// the Finding lifecycle; nothing in the Phase 6 dashboard uses them.
 export const dashboardService = {
+  getOverview: () => apiClient.get('/dashboard/overview'),
   getStats: () => apiClient.get('/dashboard/stats'),
   getCharts: () => apiClient.get('/dashboard/charts'),
+}
+
+// Phase 6 — Findings as first-class, readable evidence.
+//
+// Before this, a Finding could only be seen through a case that already cited
+// it, which made the triage step unreachable from the UI. Both calls are pure
+// reads gated on read:findings; every mutation on a Finding continues to go
+// through its own existing capability-guarded route.
+export const findingService = {
+  // Bounded and paged. Invalid filter values are REJECTED by the backend with
+  // the field named, never silently ignored, so callers must not pre-clamp.
+  getFindings: (params) => apiClient.get('/findings', { params }),
+
+  // The full evidence view for one Finding: identity, lifecycle projection,
+  // current ownership, current risk score with its factor contributions,
+  // current IOC enrichment, active CVE associations and case links.
+  getFinding: (id) => apiClient.get(`/findings/${id}`),
 }
 
 export const threatService = {
@@ -139,6 +191,38 @@ export const frameworkMappingService = {
 
   removeMapping: (caseId, mappingId, reason) =>
     apiClient.post(`/cases/${caseId}/framework-mappings/${mappingId}/remove`, { reason }),
+
+  // Phase 6.3 — the explicit "no reference in this framework applies to this
+  // case" determination. A first-class recordable outcome, NOT the absence of a
+  // mapping: the point is that "we looked and nothing applies" stops being
+  // indistinguishable from "nobody has looked yet".
+  listNoApplicable: (caseId) =>
+    apiClient.get(`/cases/${caseId}/framework-mappings/no-applicable`),
+
+  assertNoApplicable: (caseId, framework, rationale) =>
+    apiClient.post(`/cases/${caseId}/framework-mappings/no-applicable`, { framework, rationale }),
+
+  withdrawNoApplicable: (caseId, assertionId, reason) =>
+    apiClient.post(`/cases/${caseId}/framework-mappings/no-applicable/${assertionId}/withdraw`, {
+      reason,
+    }),
+}
+
+// Phase 6.3 — the pinned MITRE ATT&CK catalogue and the navigator read model.
+//
+// Both are reads behind read:cases. Neither can be written over HTTP: the
+// catalogue changes only when a human re-runs the build script and commits the
+// result, and the navigator changes only as a consequence of mappings written
+// through the case-scoped routes above.
+export const attackService = {
+  // Mappable techniques only by default — the picker must not offer a technique
+  // the server will refuse. `retiredExcluded` reports how many were omitted, so
+  // the omission is visible rather than silent.
+  getCatalogue: (params) => apiClient.get('/attack/catalogue', { params }),
+
+  // Raw counts only. There is no coverage percentage in this response, and no
+  // denominator anywhere behind it.
+  getNavigator: (params) => apiClient.get('/attack/navigator', { params }),
 }
 
 // AI assistance is OPTIONAL and disabled by default. Every call below is safe

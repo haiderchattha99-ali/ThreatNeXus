@@ -1,13 +1,35 @@
-# ThreatNeXus — local development database only (Phase 0).
+# ThreatNeXus — local development and demonstration stack.
 #
-# This file starts PostgreSQL for local backend development and testing. It
-# does not run the backend or frontend, and it is not used for any deployed
-# environment — there is no production compose file.
+# WHAT THIS IS
+#   PostgreSQL + backend + frontend, for a developer's own machine or a
+#   demonstration. It is NOT a deployment: ThreatNeXus is a research prototype
+#   and there is no production compose file.
 #
-# If the T4-era disposable container "threatnexus-phase0-postgres" is already
-# running, it holds port 5432 and `docker compose up` here will fail to bind.
-# Stop that container first if you want to use this file instead:
-#   docker stop threatnexus-phase0-postgres
+# QUICK START
+#   1. Bring the stack up (the backend applies migrations on start):
+#        JWT_SECRET="$(openssl rand -base64 48)" docker compose up --build
+#   2. Create the four local accounts, once:
+#        docker compose exec -e SEED_USER_PASSWORD='<a-strong-local-password>' \
+#          backend npm run seed:users
+#   3. Optionally load the deterministic demonstration dataset:
+#        docker compose exec -e DEMO_MODE=true \
+#          -e DEMO_USER_PASSWORD='<the same password>' backend npm run seed:demo
+#   4. Open http://localhost:5173
+#
+# SECRETS
+#   No secret is baked into an image or committed here. JWT_SECRET has no
+#   default — the backend refuses to start without one, which is deliberate.
+#   Provider keys are optional and are only ever read by the backend.
+#
+# DATA SAFETY
+#   Nothing here resets, truncates or drops a database. `migrate deploy` only
+#   applies migrations that have not been applied yet. To start clean, remove
+#   the named volume explicitly:
+#        docker compose down -v
+#
+# PORT CONFLICT
+#   If an older container is holding 5432, stop it first:
+#        docker stop threatnexus-phase0-postgres
 
 services:
   postgres:
@@ -30,6 +52,70 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+
+  backend:
+    build:
+      context: ./backend
+    container_name: threatnexus-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        # Waits for the health check above, not merely for the container to
+        # exist — otherwise the first migrate would race the database's own
+        # startup and fail on a cold machine.
+        condition: service_healthy
+    environment:
+      NODE_ENV: development
+      PORT: 5000
+      DATABASE_URL: postgresql://threatnexus:${POSTGRES_PASSWORD:-threatnexus_local_dev_only}@postgres:5432/threatnexus?schema=public
+      # REQUIRED and deliberately un-defaulted. `docker compose up` fails fast
+      # with a clear message rather than starting with a guessable secret.
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET, e.g. JWT_SECRET="$(openssl rand -base64 48)" docker compose up}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-24h}
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:5173}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      UPLOAD_MAX_BYTES: ${UPLOAD_MAX_BYTES:-5242880}
+      REPORT_MAX_ROWS: ${REPORT_MAX_ROWS:-5000}
+      # Providers are OPTIONAL. With no key the application still starts and
+      # every core workflow still completes; enrichment simply records that the
+      # provider was unavailable. Pass a key from your own shell if you want to
+      # exercise a real provider — never write one into this file.
+      IOC_ENRICHMENT_PROVIDER: ${IOC_ENRICHMENT_PROVIDER:-mock}
+      ABUSEIPDB_API_KEY: ${ABUSEIPDB_API_KEY:-}
+      NVD_API_KEY: ${NVD_API_KEY:-}
+      # AI is off by default and there is no live provider in this repository.
+      AI_ENABLED: ${AI_ENABLED:-false}
+      AI_PROVIDER: ${AI_PROVIDER:-null}
+    ports:
+      - "5000:5000"
+    # Migrations are applied from zero on every start. `migrate deploy` is the
+    # non-interactive, non-destructive command: it never resets and never
+    # generates a new migration.
+    command: sh -c "npx prisma migrate deploy && node server.js"
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://127.0.0.1:5000/',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # Baked into the bundle at build time. Non-secret by construction — CI
+        # fails the build if anything secret-shaped reaches the bundle.
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:5000/api}
+    container_name: threatnexus-frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_started
+    ports:
+      # 5173 matches the Vite dev port, so CORS_ORIGIN and any bookmarked URL
+      # work the same whether the frontend is containerised or run with
+      # `npm run dev`.
+      - "5173:80"
 
 volumes:
   threatnexus_postgres_data:

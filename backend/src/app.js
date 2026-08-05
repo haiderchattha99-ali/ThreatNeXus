@@ -23,7 +23,9 @@ const findingVulnerabilityRoutes = require("./routes/findingVulnerabilityRoutes"
 const vulnerabilityEnrichmentRoutes = require("./routes/vulnerabilityEnrichmentRoutes");
 const vulnerabilityEnrichmentBatchRoutes = require("./routes/vulnerabilityEnrichmentBatchRoutes");
 const findingTriageRoutes = require("./routes/findingTriageRoutes");
+const findingReadRoutes = require("./routes/findingReadRoutes");
 const frameworkMappingRoutes = require("./routes/frameworkMappingRoutes");
+const attackRoutes = require("./routes/attackRoutes");
 const aiAssistanceRoutes = require("./routes/aiAssistanceRoutes");
 const app = express();
 
@@ -61,6 +63,11 @@ app.use("/api/findings", findingEnrichmentRoutes);
 app.use("/api/findings", findingRiskRoutes);
 app.use("/api/findings", findingVulnerabilityRoutes);
 app.use("/api/findings", findingTriageRoutes);
+// Phase 6 read surface. Registered LAST of the /api/findings routers so its
+// "/" and "/:id" declarations can never shadow a sibling's "/:id/<sub>" path —
+// an Express param segment matches one segment only, so "/:id" cannot swallow
+// "/12/triage", but the ordering makes that independent of Express internals.
+app.use("/api/findings", findingReadRoutes);
 app.use("/api/enrichment", enrichmentBatchRoutes);
 app.use("/api/vulnerabilities", vulnerabilityEnrichmentRoutes);
 app.use("/api/vulnerability-enrichment", vulnerabilityEnrichmentBatchRoutes);
@@ -68,6 +75,10 @@ app.use("/api/vulnerability-enrichment", vulnerabilityEnrichmentBatchRoutes);
 // a defined order — caseRoutes owns "/:id" and "/:id/workflow", neither of which
 // matches any framework-mapping or AI path, so nothing is shadowed either way.
 app.use("/api/cases", frameworkMappingRoutes);
+// Phase 6.3. Not under /api/cases: neither endpoint is scoped to a case — one
+// serves the pinned MITRE catalogue, the other aggregates across every case in
+// scope.
+app.use("/api/attack", attackRoutes);
 app.use("/api/ai", aiAssistanceRoutes);
 // Home Route
 app.get("/", (req, res) => {

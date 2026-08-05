@@ -61,6 +61,10 @@ const NIST = {
   rationale:
     "Administrative remote access is reachable from any network, indicating access permissions " +
     "are not constrained to authorised sources.",
+  evidenceQuote: "interactive administrative session was established",
+  evidenceQuoteSource: "CASE_RESPONSE",
+  evidenceConfidence: "HIGH",
+  mappingConfidence: "MEDIUM",
 };
 
 let prisma;
@@ -109,8 +113,22 @@ async function cleanup(client) {
   await client.findingTriage.deleteMany({
     where: { OR: [{ caseId: { in: caseIds } }, { findingId: { in: findingIds } }] },
   });
+  // Phase 6.3. makeCase() now records an organization response for evidence
+  // quotes to be verified against, and Case holds it under Restrict — so it has
+  // to go before the case does.
+  await client.caseOrganizationResponse.deleteMany({ where: { caseId: { in: caseIds } } });
+  await client.caseFrameworkNoMappingAssertion.deleteMany({ where: { caseId: { in: caseIds } } });
   await client.case.deleteMany({ where: { id: { in: caseIds } } });
   await client.findingOwnership.deleteMany({ where: { findingId: { in: findingIds } } });
+  // Risk scores are created by one test and deleted by it on the happy path.
+  // Deleting them here as well means a test that fails BEFORE reaching its own
+  // cleanup does not leave residue that makes every LATER run fail on a foreign
+  // key — a far more confusing failure than the original one, and one that
+  // makes the whole suite look broken when a single assertion regressed.
+  await client.riskFactorContribution.deleteMany({
+    where: { riskScore: { findingId: { in: findingIds } } },
+  });
+  await client.riskScore.deleteMany({ where: { findingId: { in: findingIds } } });
   await client.finding.deleteMany({ where: { id: { in: findingIds } } });
   await client.organization.deleteMany({ where: { name: { startsWith: MARKER } } });
   await client.user.deleteMany({ where: { email: { startsWith: MARKER } } });
@@ -156,6 +174,19 @@ async function makeCase(label, octet) {
       effectiveAt: T(1),
       supersededAt: null,
       currentLinkKey: `${record.id}:${finding.id}`,
+    },
+  });
+
+  // Phase 6.3. The record every CASE-scoped evidence quote below is
+  // verified against, against real PostgreSQL.
+  await prisma.caseOrganizationResponse.create({
+    data: {
+      caseId: record.id,
+      responseType: "ACKNOWLEDGED",
+      summary:
+        "The constituent confirmed an interactive administrative session was established " +
+        "outside their change window and has since disabled the account.",
+      occurredAt: T(1),
     },
   });
 
@@ -451,6 +482,10 @@ describeIfDb("Phase 5 framework mapping against real PostgreSQL", () => {
         mappingScope: "FINDING",
         evidenceBasis: "REMEDIATION_ALIGNMENT",
         rationale: "Remediation places remote management behind a VPN, aligning with 4.6.",
+        evidenceQuote: "interactive administrative session was established",
+        evidenceQuoteSource: "CASE_RESPONSE",
+        evidenceConfidence: "HIGH",
+        mappingConfidence: "MEDIUM",
         evidenceFindingId: finding.id,
       },
       { client: prisma, actorUserId: ACTOR_ID, effectiveAt: T(2) }
@@ -639,12 +674,16 @@ describeIfDb("Phase 5 framework mapping against real PostgreSQL", () => {
       caseRecord.id,
       {
         framework: "MITRE_ATTACK",
-        frameworkVersion: "v17.1",
+        frameworkVersion: "19.1",
         referenceId: "T1110.001",
         referenceTitle: "Brute Force: Password Guessing",
         mappingScope: "FINDING",
         evidenceBasis: "OBSERVED_BEHAVIOR",
         rationale: OBSERVED_BEHAVIOUR_RATIONALE,
+        evidenceQuote: "interactive administrative session was established",
+        evidenceQuoteSource: "CASE_RESPONSE",
+        evidenceConfidence: "HIGH",
+        mappingConfidence: "MEDIUM",
         evidenceFindingId: finding.id,
       },
       { client: prisma, actorUserId: ACTOR_ID, effectiveAt: T(2) }
@@ -668,7 +707,7 @@ describeIfDb("Phase 5 framework mapping against real PostgreSQL", () => {
         caseRecord.id,
         {
           framework: "MITRE_ATTACK",
-          frameworkVersion: "v17.1",
+          frameworkVersion: "19.1",
           referenceId: "T1021.001",
           referenceTitle: "Remote Services: Remote Desktop Protocol",
           mappingScope: "CASE",

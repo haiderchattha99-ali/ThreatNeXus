@@ -26,10 +26,10 @@ export const NOTIFICATION_STATE_LABELS = {
 }
 
 export const NOTIFICATION_STATE_COLORS = {
-  DRAFT: '#7688ff',
+  DRAFT: '#5AB6D9',
   PENDING_REVIEW: '#c08cff',
-  APPROVED: '#6ee7c7',
-  REJECTED: '#ff8795',
+  APPROVED: '#35C477',
+  REJECTED: '#F2617A',
 }
 
 export const DELIVERY_STATUS_OPTIONS = [
@@ -49,11 +49,11 @@ export const DELIVERY_STATUS_LABELS = {
 }
 
 export const DELIVERY_STATUS_COLORS = {
-  SENT_MANUALLY: '#7688ff',
-  DELIVERED: '#6ee7c7',
-  FAILED: '#ff8795',
-  BOUNCED: '#ffb768',
-  UNKNOWN: '#8491a4',
+  SENT_MANUALLY: '#5AB6D9',
+  DELIVERED: '#35C477',
+  FAILED: '#F2617A',
+  BOUNCED: '#E8A33D',
+  UNKNOWN: '#7C8AA0',
 }
 
 export const EXPORT_FORMAT_OPTIONS = ['EML', 'TXT']

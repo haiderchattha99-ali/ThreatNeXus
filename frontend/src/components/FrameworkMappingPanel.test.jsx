@@ -1,11 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 import { FrameworkMappingPanel } from './FrameworkMappingPanel'
 import { CAPABILITIES } from '../constants/capabilities'
 import * as useAuthModule from '../hooks/useAuth'
-import { aiMappingService, frameworkMappingService } from '../services/api'
+import { aiMappingService, attackService, frameworkMappingService } from '../services/api'
 
 // The Phase 5 framework-mapping workspace.
 //
@@ -35,6 +35,12 @@ vi.mock('../services/api', () => ({
     getHistory: vi.fn(),
     createMapping: vi.fn(),
     removeMapping: vi.fn(),
+    listNoApplicable: vi.fn(),
+    assertNoApplicable: vi.fn(),
+    withdrawNoApplicable: vi.fn(),
+  },
+  attackService: {
+    getCatalogue: vi.fn(),
   },
   aiMappingService: {
     getConfig: vi.fn(),
@@ -78,8 +84,26 @@ const DISCLAIMER =
   'Framework mappings record analyst-associated context only. An active mapping does not state ' +
   'that a control is implemented, audited, assessed or compliant.'
 const CATALOGUE_NOTE =
-  'Framework reference identifiers and titles are analyst-entered and format-checked only. This ' +
-  'system pins no local framework catalogue, so no reference is verified to exist.'
+  'MITRE ATT&CK references are checked against the pinned local Enterprise catalogue. NIST CSF ' +
+  'and CIS Controls remain analyst-entered and format-checked only.'
+
+const CATALOGUE_PAYLOAD = {
+  data: {
+    data: {
+      catalogue: { attackVersion: 'v19.1', checksum: 'abc123' },
+      tactics: [],
+      techniques: [
+        {
+          id: 'T1110.001',
+          name: 'Password Guessing',
+          displayName: 'Brute Force: Password Guessing',
+          tactics: ['credential-access'],
+        },
+      ],
+      retiredExcluded: 1,
+    },
+  },
+}
 
 const NIST_MAPPING = {
   id: 21,
@@ -93,6 +117,12 @@ const NIST_MAPPING = {
   evidenceBasis: 'CONTROL_GAP',
   rationale: 'Administrative remote access is reachable from any network.',
   evidenceFindingId: null,
+  evidenceQuote: 'Administrative remote access is reachable from any network.',
+  evidenceQuoteSource: 'CASE_RESPONSE',
+  evidenceQuoteLocator: 'CASE_RESPONSE:8:responseText',
+  evidenceConfidence: 'HIGH',
+  mappingConfidence: 'MEDIUM',
+  legacyUnverified: true,
   state: 'ACTIVE',
   source: 'MANUAL',
   effectiveAt: '2026-08-05T09:00:00.000Z',
@@ -122,6 +152,10 @@ const PENDING_SUGGESTION = {
   evidenceBasis: 'REMEDIATION_ALIGNMENT',
   rationale: 'The recommended remediation places remote management behind a VPN.',
   evidenceFindingId: null,
+  evidenceQuote: 'The recommended remediation places remote management behind a VPN.',
+  evidenceQuoteSource: 'CASE_RESPONSE',
+  evidenceConfidence: 'HIGH',
+  mappingConfidence: 'MEDIUM',
   providerConfidence: 62,
   providerConfidenceMeaning: 'PROVIDER_SELF_REPORTED_NOT_SYSTEM_ASSESSED',
   state: 'PENDING',
@@ -186,7 +220,11 @@ function suggestionsPayload(suggestions = []) {
 
 function mockAuth(capabilities) {
   vi.spyOn(useAuthModule, 'useAuth').mockReturnValue({
-    user: { id: 1, name: 'Test', role: 'ANALYST', capabilities },
+    // Deliberately does NOT carry `capabilities`: GET /api/profile returns them
+    // as a sibling of loggedInUser, so a mock that also nests them inside the
+    // user object can hide a component reading the wrong one.
+    user: { id: 1, name: 'Test', role: 'ANALYST' },
+    capabilities,
   })
 }
 
@@ -202,6 +240,10 @@ beforeEach(() => {
   frameworkMappingService.getHistory.mockResolvedValue({
     data: { data: { caseId: 4, total: 0, take: 50, skip: 0, history: [] } },
   })
+  frameworkMappingService.listNoApplicable.mockResolvedValue({
+    data: { data: { caseId: 4, standing: [], history: [], disclaimer: DISCLAIMER } },
+  })
+  attackService.getCatalogue.mockResolvedValue(CATALOGUE_PAYLOAD)
   aiMappingService.getConfig.mockResolvedValue(aiConfig({}))
   aiMappingService.listSuggestions.mockResolvedValue(suggestionsPayload())
 })
@@ -215,7 +257,7 @@ describe('compliance language', () => {
     await renderPanel(ANALYST_CAPABILITIES)
     const alert = screen.getByTestId('framework-disclaimer')
     expect(alert).toHaveTextContent(/analyst-associated context only/i)
-    expect(alert).toHaveTextContent(/pins no local framework catalogue/i)
+    expect(alert).toHaveTextContent(/pinned local Enterprise catalogue/i)
   })
 
   it('never claims a control is implemented, audited or compliant', async () => {
@@ -457,21 +499,29 @@ describe('manual mapping actions', () => {
     })
     await renderPanel(ANALYST_CAPABILITIES)
 
-    await user.type(screen.getByLabelText(/^Framework version/), '2.0')
-    await user.type(screen.getByLabelText(/^Reference id/), 'PR.AA-01')
-    await user.type(screen.getByLabelText(/^Reference title/), 'Identities and credentials')
-    await user.type(
-      screen.getByLabelText(/^Rationale/),
-      'Administrative remote access is reachable from any network.',
-    )
+    fireEvent.change(screen.getByLabelText(/^Framework version/), { target: { value: '2.0' } })
+    fireEvent.change(screen.getByLabelText(/^Reference id/), { target: { value: 'PR.AA-01' } })
+    fireEvent.change(screen.getByLabelText(/^Reference title/), { target: { value: 'Identities and credentials' } })
+    fireEvent.change(screen.getByLabelText(/^Evidence finding id/), { target: { value: '2' } })
+    fireEvent.change(screen.getByLabelText(/^Verbatim evidence quote/), {
+      target: { value: 'Administrative remote access is reachable from any network.' },
+    })
+    fireEvent.change(screen.getByLabelText(/^Rationale/), {
+      target: { value: 'Administrative remote access is reachable from any network.' },
+    })
     await user.click(screen.getByRole('button', { name: /save mapping/i }))
 
     await waitFor(() => expect(frameworkMappingService.createMapping).toHaveBeenCalled())
     const [, payload] = frameworkMappingService.createMapping.mock.calls[0]
     expect(Object.keys(payload).sort()).toEqual([
       'evidenceBasis',
+      'evidenceConfidence',
+      'evidenceFindingId',
+      'evidenceQuote',
+      'evidenceQuoteSource',
       'framework',
       'frameworkVersion',
+      'mappingConfidence',
       'mappingScope',
       'rationale',
       'referenceId',
@@ -502,7 +552,7 @@ describe('manual mapping actions', () => {
     await user.click(screen.getByRole('button', { name: /^remove$/i }))
     expect(frameworkMappingService.removeMapping).not.toHaveBeenCalled()
 
-    await user.type(screen.getByLabelText(/Reason to withdraw PR.AA-01/i), 'Reassessed.')
+    fireEvent.change(screen.getByLabelText(/Reason to withdraw PR.AA-01/i), { target: { value: 'Reassessed.' } })
     await user.click(screen.getByRole('button', { name: /^remove$/i }))
     await waitFor(() =>
       expect(frameworkMappingService.removeMapping).toHaveBeenCalledWith('4', 21, 'Reassessed.'),

@@ -24,14 +24,17 @@ const {
 const {
   COMPLIANCE_DISCLAIMER,
   CATALOGUE_DISCLAIMER,
+  LEGACY_MAPPING_NOTE,
   serializeMapping,
   serializeMappingGroups,
+  serializeNoMappingAssertion,
   serializeSuggestion,
   serializeRun,
   serializeDecision,
 } = require("./frameworkMappingSerializers");
 
 const { listMappingHistory, countMappingHistory } = require("./frameworkMappingService");
+const { listStandingAssertions } = require("./frameworkNoMappingService");
 
 const DEFAULT_PAGE_SIZE = 50;
 const MAX_PAGE_SIZE = 200;
@@ -74,11 +77,23 @@ async function getCaseFrameworkMappings(caseId, { client } = {}) {
   assertPositiveInteger(caseId, "caseId");
   const caseRecord = await loadCaseOr404(client, caseId);
 
-  const rows = await client.caseFrameworkMapping.findMany({
-    where: { caseId, state: MAPPING_STATES.ACTIVE, supersededAt: null },
-    orderBy: [{ framework: "asc" }, { referenceId: "asc" }, { id: "asc" }],
-    include: { actor: { select: { id: true, name: true, role: true } } },
-  });
+  const [rows, standingAssertions] = await Promise.all([
+    client.caseFrameworkMapping.findMany({
+      where: { caseId, state: MAPPING_STATES.ACTIVE, supersededAt: null },
+      orderBy: [{ framework: "asc" }, { referenceId: "asc" }, { id: "asc" }],
+      include: { actor: { select: { id: true, name: true, role: true } } },
+    }),
+    // Phase 6.3. Returned ALONGSIDE the mappings, in the same payload, on
+    // purpose: a screen that fetched mappings and then made a second call for
+    // determinations would render "no ATT&CK mappings" for a moment before
+    // learning that an analyst had explicitly determined none apply. Those two
+    // states must never be momentarily confusable, not even during a load.
+    listStandingAssertions(client, caseId),
+  ]);
+
+  const legacyCount = rows.filter(
+    (row) => row.catalogueVerified !== true || !row.evidenceQuote
+  ).length;
 
   return {
     caseId: caseRecord.id,
@@ -87,6 +102,13 @@ async function getCaseFrameworkMappings(caseId, { client } = {}) {
     activeCount: rows.length,
     countMeaning: "MAPPING_COUNT_NOT_COVERAGE",
     groups: serializeMappingGroups(rows),
+    // The explicit, attributed "we looked, and nothing in this family applies".
+    // Its ABSENCE is not evidence that nobody looked, and its presence is not a
+    // mapping — which is exactly why it is a separate field with its own name
+    // rather than a synthetic entry in `groups`.
+    noApplicableDeterminations: standingAssertions.map(serializeNoMappingAssertion),
+    legacyUnverifiedCount: legacyCount,
+    legacyNote: legacyCount > 0 ? LEGACY_MAPPING_NOTE : null,
     disclaimer: COMPLIANCE_DISCLAIMER,
     catalogueNote: CATALOGUE_DISCLAIMER,
   };

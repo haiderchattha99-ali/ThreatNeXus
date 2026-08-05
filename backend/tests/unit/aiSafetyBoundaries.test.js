@@ -123,6 +123,23 @@ async function seed() {
     },
   });
 
+  // Phase 6.3. A recorded organization response, so the CASE_RESPONSE-sourced
+  // evidence quotes in this suite's candidates have a real record to be
+  // verified against. Seeded rather than the check being relaxed: a suite that
+  // could promote a suggestion whose quote matched nothing would prove the
+  // opposite of what it claims.
+  await client.caseOrganizationResponse.create({
+    data: {
+      caseId: CASE_ID,
+      responseType: "ACKNOWLEDGED",
+      summary:
+        "The constituent confirmed an interactive administrative session was established " +
+        "outside their change window and has since disabled the account.",
+      occurredAt: T(1),
+      recordedByUserId: ACTOR_ID,
+    },
+  });
+
   // A deterministic Risk v1 snapshot AI must never alter.
   const score = await client.riskScore.create({
     data: {
@@ -350,6 +367,14 @@ describe("behavioural boundary: a hostile provider changes nothing", () => {
       },
     });
 
+    // Captured BEFORE the run. Phase 6.3 seeds one organization response so
+    // evidence quotes have a record to verify against, so "the provider created
+    // no response" is now an UNCHANGED assertion rather than a zero one. The
+    // claim under test is unaffected — what matters is that the hostile
+    // provider added nothing — and asserting zero would have quietly become an
+    // assertion about the fixture instead of about the provider.
+    const responsesBefore = state.caseOrganizationResponses.length;
+
     await aiService.requestMappingSuggestions(CASE_ID, {
       ...base(),
       runtime: runtimeFor(provider),
@@ -360,7 +385,7 @@ describe("behavioural boundary: a hostile provider changes nothing", () => {
     expect(state.notificationRevisions).toHaveLength(0);
     expect(state.notificationExports).toHaveLength(0);
     expect(state.notificationDeliveryEvents).toHaveLength(0);
-    expect(state.caseOrganizationResponses).toHaveLength(0);
+    expect(state.caseOrganizationResponses).toHaveLength(responsesBefore);
   });
 
   it("cannot attach a CVE, create ownership, retriage, or link evidence", async () => {
@@ -433,6 +458,12 @@ describe("behavioural boundary: a hostile provider changes nothing", () => {
               mappingScope: "CASE",
               evidenceBasis: "CONTROL_GAP",
               rationale: "Access permissions are not constrained to authorised networks at all.",
+              // Phase 6.3 evidence obligations, so this candidate fails (or passes)
+              // for the reason the test is actually about.
+              evidenceQuote: "interactive administrative session was established",
+              evidenceQuoteSource: "CASE_RESPONSE",
+              evidenceConfidence: "MEDIUM",
+              mappingConfidence: "MEDIUM",
               state: "APPROVED",
             },
           ],
@@ -471,6 +502,12 @@ describe("behavioural boundary: a hostile provider changes nothing", () => {
               mappingScope: "CASE",
               evidenceBasis: "CONTROL_GAP",
               rationale: "Access permissions are not constrained to authorised networks at all.",
+              // Phase 6.3 evidence obligations, so this candidate fails (or passes)
+              // for the reason the test is actually about.
+              evidenceQuote: "interactive administrative session was established",
+              evidenceQuoteSource: "CASE_RESPONSE",
+              evidenceConfidence: "MEDIUM",
+              mappingConfidence: "MEDIUM",
             },
           ],
         };
@@ -517,6 +554,14 @@ describe("behavioural boundary: a hostile provider changes nothing", () => {
               mappingScope: "CASE",
               evidenceBasis: "REMEDIATION_ALIGNMENT",
               rationale: "Remediation places remote management behind a VPN, aligning with 4.6.",
+              // Phase 6.3 evidence obligations. This candidate has to be
+              // genuinely acceptable, because the test needs a real
+              // generate-and-approve cycle to complete before it can claim that
+              // cycle left Risk v1 untouched.
+              evidenceQuote: "interactive administrative session was established",
+              evidenceQuoteSource: "CASE_RESPONSE",
+              evidenceConfidence: "MEDIUM",
+              mappingConfidence: "MEDIUM",
             },
           ],
         };

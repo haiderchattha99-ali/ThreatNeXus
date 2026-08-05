@@ -19,6 +19,11 @@ const decisionService = require("../../src/services/ai/aiSuggestionDecisionServi
 const { buildAiRuntime } = require("../../src/services/ai/aiRuntime");
 const { MOCK_SCENARIOS } = require("../../src/services/ai/mockAiMappingProvider");
 const { buildCaseEvidenceSnapshot } = require("../../src/services/ai/caseEvidenceSnapshot");
+const {
+  pinnedAttackVersion,
+  evidenceFields,
+  CASE_RESPONSE_EVIDENCE_TEXT,
+} = require("../fixtures/frameworkEvidenceFixtures");
 
 const {
   MAPPING_REJECTION_CODES,
@@ -48,6 +53,10 @@ const NIST = {
   rationale:
     "Administrative remote access is reachable from any network, indicating access permissions " +
     "are not constrained to authorised sources.",
+  // Phase 6.3. CASE_RESPONSE-sourced, because this fixture is CASE-scoped and
+  // cites no Finding — and a Finding-anchored quote source would have nothing
+  // to be located in. seed() records the matching response.
+  ...evidenceFields(),
 };
 
 const CIS = {
@@ -60,6 +69,7 @@ const CIS = {
   rationale:
     "The recommended remediation places remote management behind a VPN, which aligns with " +
     "securely managing enterprise assets.",
+  ...evidenceFields(),
 };
 
 let fake;
@@ -119,6 +129,20 @@ async function seed() {
       effectiveAt: T(1),
       supersededAt: null,
       currentLinkKey: `${CASE_ID}:${FINDING_ID}`,
+    },
+  });
+
+  // Phase 6.3. A recorded organization response gives the CASE-scoped fixtures
+  // a real record to quote. Without it the verbatim check would correctly
+  // refuse every mapping below — which is the point of the check, and the
+  // reason this fixture seeds evidence rather than the check being relaxed.
+  await client.caseOrganizationResponse.create({
+    data: {
+      caseId: CASE_ID,
+      responseType: "ACKNOWLEDGED",
+      summary: CASE_RESPONSE_EVIDENCE_TEXT,
+      occurredAt: T(1),
+      recordedByUserId: ACTOR_ID,
     },
   });
 }
@@ -417,12 +441,13 @@ describe("evidence linkage", () => {
         empty.id,
         {
           framework: "MITRE_ATTACK",
-          frameworkVersion: "v17.1",
+          frameworkVersion: pinnedAttackVersion(),
           referenceId: "T1110.001",
           referenceTitle: "Brute Force: Password Guessing",
           mappingScope: "CASE",
           evidenceBasis: "OBSERVED_BEHAVIOR",
           rationale: OBSERVED_BEHAVIOUR_RATIONALE,
+          ...evidenceFields(),
         },
         { ...base(), effectiveAt: T(2) }
       );

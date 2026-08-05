@@ -47,6 +47,11 @@ const MOCK_SCENARIOS = Object.freeze({
   MIXED_VALID_AND_INVALID: "MIXED_VALID_AND_INVALID",
   // Every candidate fails validation.
   ALL_INVALID: "ALL_INVALID",
+  // Phase 6.3: every candidate is refused by a gate that did not exist in
+  // Phase 5 (unknown technique, revoked technique, title mismatch, no evidence
+  // quote). A run over this scenario that accepts anything is proof the
+  // catalogue and evidence gates are not running.
+  CATALOGUE_AND_EVIDENCE_INVALID: "CATALOGUE_AND_EVIDENCE_INVALID",
   // The provider ran and proposed nothing.
   EMPTY: "EMPTY",
   // The provider itself failed.
@@ -68,6 +73,11 @@ const CLEAN_CSF_CANDIDATE = Object.freeze({
     "Administrative remote access to the affected asset is reachable without a network boundary " +
     "control, which suggests access permissions are not constrained to authorised networks.",
   confidence: 62,
+  // Phase 6.3. CASE_RESPONSE, not FINDING_RECORD: this candidate is CASE-scoped
+  evidenceQuote: "interactive administrative session was established",
+  evidenceQuoteSource: "CASE_RESPONSE",
+  evidenceConfidence: "HIGH",
+  mappingConfidence: "MEDIUM",
 });
 
 const CLEAN_CIS_CANDIDATE = Object.freeze({
@@ -81,11 +91,15 @@ const CLEAN_CIS_CANDIDATE = Object.freeze({
     "The recommended remediation is to place remote management behind a VPN or jump host, which " +
     "aligns with securely managing enterprise assets and software.",
   confidence: 55,
+  evidenceQuote: "interactive administrative session was established",
+  evidenceQuoteSource: "CASE_RESPONSE",
+  evidenceConfidence: "MEDIUM",
+  mappingConfidence: "MEDIUM",
 });
 
 const CLEAN_ATTACK_CANDIDATE = Object.freeze({
   framework: "MITRE_ATTACK",
-  frameworkVersion: "v17.1",
+  frameworkVersion: "19.1",
   referenceId: "T1110.001",
   referenceTitle: "Brute Force: Password Guessing",
   mappingScope: "CASE",
@@ -95,6 +109,10 @@ const CLEAN_ATTACK_CANDIDATE = Object.freeze({
     "logon attempts against a single administrator account from one external source within an " +
     "hour, followed by an authentication success that the account owner did not perform.",
   confidence: 71,
+  evidenceQuote: "interactive administrative session was established",
+  evidenceQuoteSource: "CASE_RESPONSE",
+  evidenceConfidence: "HIGH",
+  mappingConfidence: "HIGH",
 });
 
 // --- Deliberately invalid candidates ---------------------------------------
@@ -103,7 +121,7 @@ const CLEAN_ATTACK_CANDIDATE = Object.freeze({
 // exposure and enrichment signals alone.
 const EXPOSURE_ONLY_ATTACK_CANDIDATE = Object.freeze({
   framework: "MITRE_ATTACK",
-  frameworkVersion: "v17.1",
+  frameworkVersion: "19.1",
   referenceId: "T1021.001",
   referenceTitle: "Remote Services: Remote Desktop Protocol",
   mappingScope: "CASE",
@@ -112,12 +130,16 @@ const EXPOSURE_ONLY_ATTACK_CANDIDATE = Object.freeze({
     "Port 3389 is exposed to the internet, CVE-2019-0708 applies, the KEV catalogue lists it, " +
     "the EPSS score is elevated and the AbuseIPDB reputation score is high for this sector.",
   confidence: 93,
+  evidenceQuote: "interactive administrative session was established",
+  evidenceQuoteSource: "CASE_RESPONSE",
+  evidenceConfidence: "HIGH",
+  mappingConfidence: "HIGH",
 });
 
 // An ATT&CK mapping on a non-behavioural basis — refused structurally.
 const WRONG_BASIS_ATTACK_CANDIDATE = Object.freeze({
   framework: "MITRE_ATTACK",
-  frameworkVersion: "v17.1",
+  frameworkVersion: "19.1",
   referenceId: "T1133",
   referenceTitle: "External Remote Services",
   mappingScope: "CASE",
@@ -126,6 +148,10 @@ const WRONG_BASIS_ATTACK_CANDIDATE = Object.freeze({
     "External remote services are reachable from the public internet without multifactor " +
     "authentication in front of them.",
   confidence: 80,
+  evidenceQuote: "interactive administrative session was established",
+  evidenceQuoteSource: "CASE_RESPONSE",
+  evidenceConfidence: "MEDIUM",
+  mappingConfidence: "LOW",
 });
 
 // A reference id that does not match its family's shape.
@@ -138,6 +164,12 @@ const MALFORMED_REFERENCE_CANDIDATE = Object.freeze({
   evidenceBasis: "CONTROL_GAP",
   rationale: "This reference does not follow the CSF 2.0 subcategory identifier shape at all.",
   confidence: 99,
+  // Carries valid evidence so this candidate fails for the reason it is
+  // NAMED after, not incidentally for a missing quote.
+  evidenceQuote: "interactive administrative session was established",
+  evidenceQuoteSource: "CASE_RESPONSE",
+  evidenceConfidence: "MEDIUM",
+  mappingConfidence: "MEDIUM",
 });
 
 // Carries a field the contract does not define. Rejected, never dropped.
@@ -150,6 +182,12 @@ const UNKNOWN_FIELD_CANDIDATE = Object.freeze({
   evidenceBasis: "CONTROL_GAP",
   rationale: "Network architecture does not segment administrative access from general traffic.",
   confidence: 40,
+  // Carries valid evidence so this candidate fails for the reason it is
+  // NAMED after, not incidentally for a missing quote.
+  evidenceQuote: "interactive administrative session was established",
+  evidenceQuoteSource: "CASE_RESPONSE",
+  evidenceConfidence: "MEDIUM",
+  mappingConfidence: "MEDIUM",
   // Not in ALLOWED_CANDIDATE_KEYS.
   autoApprove: true,
 });
@@ -166,6 +204,92 @@ const FOREIGN_EVIDENCE_CANDIDATE = Object.freeze({
   rationale: "Security event alerting is not centralised for the affected estate.",
   evidenceFindingId: 999999999,
   confidence: 30,
+  // Carries valid evidence so this candidate fails for the reason it is
+  // NAMED after, not incidentally for a missing quote.
+  evidenceQuote: "interactive administrative session was established",
+  evidenceQuoteSource: "CASE_RESPONSE",
+  evidenceConfidence: "MEDIUM",
+  mappingConfidence: "MEDIUM",
+});
+
+// --- Phase 6.3 invalid candidates -------------------------------------------
+// The failures the catalogue and evidence gates exist to catch. As with the
+// Phase 5 fixtures above, a mock that only produced clean output would prove
+// nothing about whether the gates run.
+
+// A technique id that is well formed and names NOTHING. This is the exact
+// output Phase 5 could not stop — it passes the ATT&CK id pattern, so a
+// format-only check accepts it and an analyst sees a suggestion for a technique
+// that has never existed.
+const UNKNOWN_TECHNIQUE_ATTACK_CANDIDATE = Object.freeze({
+  framework: "MITRE_ATTACK",
+  frameworkVersion: "19.1",
+  referenceId: "T9999",
+  referenceTitle: "Invented Technique",
+  mappingScope: "CASE",
+  evidenceBasis: "OBSERVED_BEHAVIOR",
+  rationale:
+    "The constituent's SOC observed an interactive session and reported credential theft " +
+    "activity on the affected host, confirmed against their own authentication telemetry.",
+  evidenceQuote: "interactive administrative session was established",
+  evidenceQuoteSource: "CASE_RESPONSE",
+  evidenceConfidence: "HIGH",
+  mappingConfidence: "HIGH",
+  confidence: 88,
+});
+
+// A real technique MITRE revoked. Refused with its own code so the analyst can
+// be told what replaced it (T1002 was revoked in favour of T1560).
+const REVOKED_TECHNIQUE_ATTACK_CANDIDATE = Object.freeze({
+  framework: "MITRE_ATTACK",
+  frameworkVersion: "19.1",
+  referenceId: "T1002",
+  referenceTitle: "Data Compressed",
+  mappingScope: "CASE",
+  evidenceBasis: "OBSERVED_BEHAVIOR",
+  rationale:
+    "The constituent reported that an attacker staged and compressed an archive before " +
+    "exfiltration, observed in their endpoint telemetry during the incident.",
+  evidenceQuote: "interactive administrative session was established",
+  evidenceQuoteSource: "CASE_RESPONSE",
+  evidenceConfidence: "MEDIUM",
+  mappingConfidence: "MEDIUM",
+  confidence: 66,
+});
+
+// A well-formed technique with a title naming a DIFFERENT technique. Refused
+// rather than silently corrected: the mismatch is the signal that the model
+// meant something else, and overwriting the title would destroy it.
+const TITLE_MISMATCH_ATTACK_CANDIDATE = Object.freeze({
+  framework: "MITRE_ATTACK",
+  frameworkVersion: "19.1",
+  referenceId: "T1021.001",
+  referenceTitle: "SQL Injection",
+  mappingScope: "CASE",
+  evidenceBasis: "OBSERVED_BEHAVIOR",
+  rationale:
+    "The constituent observed an interactive remote desktop session established by an " +
+    "unrecognised account and reported it through their incident process.",
+  evidenceQuote: "interactive administrative session was established",
+  evidenceQuoteSource: "CASE_RESPONSE",
+  evidenceConfidence: "HIGH",
+  mappingConfidence: "HIGH",
+  confidence: 77,
+});
+
+// Carries no evidence quote at all — a conclusion with nothing behind it.
+const NO_EVIDENCE_QUOTE_CANDIDATE = Object.freeze({
+  framework: "NIST_CSF",
+  frameworkVersion: "2.0",
+  referenceId: "PR.AA-05",
+  referenceTitle: "Access permissions and authorizations are defined and managed",
+  mappingScope: "CASE",
+  evidenceBasis: "CONTROL_GAP",
+  rationale:
+    "Administrative access appears to be reachable without a boundary control in front of it.",
+  evidenceConfidence: "MEDIUM",
+  mappingConfidence: "MEDIUM",
+  confidence: 58,
 });
 
 const SCENARIO_CANDIDATES = Object.freeze({
@@ -183,6 +307,15 @@ const SCENARIO_CANDIDATES = Object.freeze({
     MALFORMED_REFERENCE_CANDIDATE,
     UNKNOWN_FIELD_CANDIDATE,
     FOREIGN_EVIDENCE_CANDIDATE,
+  ],
+  // Phase 6.3. Every candidate here is refused by a gate that did not exist in
+  // Phase 5, so a run over this scenario producing any accepted suggestion is
+  // proof the new gates are not running.
+  CATALOGUE_AND_EVIDENCE_INVALID: [
+    UNKNOWN_TECHNIQUE_ATTACK_CANDIDATE,
+    REVOKED_TECHNIQUE_ATTACK_CANDIDATE,
+    TITLE_MISMATCH_ATTACK_CANDIDATE,
+    NO_EVIDENCE_QUOTE_CANDIDATE,
   ],
   EMPTY: [],
   OVER_CAP: [

@@ -66,11 +66,11 @@ function parseDatetimeInputValue(value) {
 function Section({ title, subtitle, children, testId }) {
   return (
     <Card className="surface" sx={{ p: 3, mb: 3 }} data-testid={testId}>
-      <Typography sx={{ fontSize: 15, fontWeight: 700, color: '#e7eef9' }}>{title}</Typography>
+      <Typography sx={{ fontSize: 15, fontWeight: 700, color: '#EAF1F9' }}>{title}</Typography>
       {subtitle && (
-        <Typography sx={{ fontSize: 12, color: '#8290a5', mt: 0.5 }}>{subtitle}</Typography>
+        <Typography sx={{ fontSize: 12, color: '#9DAFC2', mt: 0.5 }}>{subtitle}</Typography>
       )}
-      <Divider sx={{ my: 2, borderColor: '#233247' }} />
+      <Divider sx={{ my: 2, borderColor: '#243549' }} />
       {children}
     </Card>
   )
@@ -94,8 +94,9 @@ function Section({ title, subtitle, children, testId }) {
 export const CaseDetail = () => {
   const { id } = useParams()
   const navigate = useNavigate()
-  const { user } = useAuth()
-  const capabilities = user?.capabilities
+  // See FindingTriagePanel: capabilities live on the AuthContext, not on the
+  // user object that GET /api/profile returns alongside them.
+  const { capabilities } = useAuth()
   const canManage = hasCapability(capabilities, CAPABILITIES.MANAGE_CASES)
   const canReviewClosure = hasCapability(capabilities, CAPABILITIES.REVIEW_CASE_CLOSURE)
   // Phase 4 — drafting a notification is a notification-workflow grant, not a
@@ -193,8 +194,8 @@ export const CaseDetail = () => {
   if (!view) {
     return (
       <Box sx={{ p: { xs: 2, md: 4 } }}>
-        <Typography sx={{ color: '#8290a5' }}>This case could not be loaded.</Typography>
-        <Button sx={{ mt: 2, color: '#6ee7c7' }} onClick={() => navigate('/cases')}>
+        <Typography sx={{ color: '#9DAFC2' }}>This case could not be loaded.</Typography>
+        <Button sx={{ mt: 2, color: '#35C477' }} onClick={() => navigate('/cases')}>
           Back to cases
         </Button>
       </Box>
@@ -222,13 +223,13 @@ export const CaseDetail = () => {
           <Button
             startIcon={<FiArrowLeft />}
             onClick={() => navigate('/cases')}
-            sx={{ color: '#8290a5', mb: 1 }}
+            sx={{ color: '#9DAFC2', mb: 1 }}
           >
             All cases
           </Button>
           <Typography className="page-title">{record.title}</Typography>
           <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mt: 1.5, flexWrap: 'wrap' }}>
-            <Typography className="mono" sx={{ fontSize: 12, color: '#9eafc5' }}>
+            <Typography className="mono" sx={{ fontSize: 12, color: '#9DAFC2' }}>
               {record.caseReference || `#${record.id}`}
             </Typography>
             <Chip
@@ -236,8 +237,8 @@ export const CaseDetail = () => {
               label={CASE_STATE_LABELS[record.lifecycleState] || record.lifecycleState}
               data-testid="case-lifecycle-state"
               sx={{
-                bgcolor: `${CASE_STATE_COLORS[record.lifecycleState] || '#8491a4'}20`,
-                color: CASE_STATE_COLORS[record.lifecycleState] || '#8491a4',
+                bgcolor: `${CASE_STATE_COLORS[record.lifecycleState] || '#7C8AA0'}20`,
+                color: CASE_STATE_COLORS[record.lifecycleState] || '#7C8AA0',
                 fontWeight: 700,
               }}
             />
@@ -246,18 +247,18 @@ export const CaseDetail = () => {
                 size="small"
                 label={`Reopened by recurrence ×${record.reopenedCount}`}
                 data-testid="recurrence-reopened-indicator"
-                sx={{ bgcolor: '#ff879520', color: '#ff8795', fontWeight: 700 }}
+                sx={{ bgcolor: '#F2617A20', color: '#F2617A', fontWeight: 700 }}
               />
             )}
             {record.closureReason && (
               <Chip
                 size="small"
                 label={`Closed: ${CLOSURE_REASON_LABELS[record.closureReason] || record.closureReason}`}
-                sx={{ bgcolor: '#8491a420', color: '#b9c6d8', fontWeight: 700 }}
+                sx={{ bgcolor: '#7C8AA020', color: '#9DAFC2', fontWeight: 700 }}
               />
             )}
           </Box>
-          <Typography sx={{ mt: 1.5, fontSize: 13, color: '#91a1b7' }}>
+          <Typography sx={{ mt: 1.5, fontSize: 13, color: '#9DAFC2' }}>
             {record.ownerOrganization
               ? `${record.ownerOrganization.name} · ${record.ownerOrganization.sector}`
               : 'Legacy case — not bound to an organization'}
@@ -270,15 +271,15 @@ export const CaseDetail = () => {
           startIcon={<FiRefreshCw />}
           onClick={load}
           variant="outlined"
-          sx={{ borderColor: '#33445c', color: '#b9c6d8', alignSelf: 'flex-start' }}
+          sx={{ borderColor: '#33485F', color: '#9DAFC2', alignSelf: 'flex-start' }}
         >
           Refresh
         </Button>
       </Box>
 
       {!permittedActions.isOrganizationBound && (
-        <Card className="surface" sx={{ p: 2, mb: 3, borderColor: '#ffb768' }}>
-          <Typography sx={{ color: '#ffb768', fontSize: 13 }}>
+        <Card className="surface" sx={{ p: 2, mb: 3, borderColor: '#E8A33D' }}>
+          <Typography sx={{ color: '#E8A33D', fontSize: 13 }}>
             This case predates Phase 3 and is not bound to an organization. It stays readable, and
             every workflow action is refused on it.
           </Typography>
@@ -315,14 +316,14 @@ export const CaseDetail = () => {
                     )
                     if (ok) setStateNote('')
                   }}
-                  sx={{ borderColor: '#33445c', color: '#b9c6d8' }}
+                  sx={{ borderColor: '#33485F', color: '#9DAFC2' }}
                 >
                   Move to {CASE_STATE_LABELS[target]}
                 </Button>
               ))}
             </Box>
           ) : (
-            <Typography sx={{ fontSize: 12, color: '#8290a5' }}>
+            <Typography sx={{ fontSize: 12, color: '#9DAFC2' }}>
               No state change is available while the case is{' '}
               {CASE_STATE_LABELS[record.lifecycleState]}.
             </Typography>
@@ -349,7 +350,7 @@ export const CaseDetail = () => {
                   )
                   if (ok) setReopenReason('')
                 }}
-                sx={{ bgcolor: '#ffb768', color: '#091018' }}
+                sx={{ bgcolor: '#E8A33D', color: '#06100A' }}
               >
                 Reopen case
               </Button>
@@ -390,7 +391,7 @@ export const CaseDetail = () => {
                 )
                 if (ok) setLinkFindingId('')
               }}
-              sx={{ bgcolor: '#6ee7c7', color: '#091018' }}
+              sx={{ bgcolor: '#35C477', color: '#06100A' }}
             >
               Link finding
             </Button>
@@ -398,7 +399,7 @@ export const CaseDetail = () => {
         )}
 
         {linkedFindings.length === 0 ? (
-          <Typography sx={{ fontSize: 13, color: '#8290a5' }}>
+          <Typography sx={{ fontSize: 13, color: '#9DAFC2' }}>
             No findings are currently linked to this case.
           </Typography>
         ) : (
@@ -422,7 +423,7 @@ export const CaseDetail = () => {
                         <Typography className="mono" sx={{ fontSize: 12 }}>
                           {link.finding?.indicatorValue || `Finding ${link.findingId}`}
                         </Typography>
-                        <Typography sx={{ fontSize: 10, color: '#718096' }}>
+                        <Typography sx={{ fontSize: 10, color: '#75899E' }}>
                           ID {link.findingId}
                         </Typography>
                       </TableCell>
@@ -440,7 +441,7 @@ export const CaseDetail = () => {
                       <TableCell align="right">
                         <Button
                           size="small"
-                          sx={{ color: '#7688ff' }}
+                          sx={{ color: '#5AB6D9' }}
                           data-testid={`toggle-triage-${link.findingId}`}
                           onClick={() =>
                             setExpandedFindingId(
@@ -453,7 +454,7 @@ export const CaseDetail = () => {
                         {canManage && permittedActions.canUnlinkFindings && (
                           <Button
                             size="small"
-                            sx={{ color: '#ff8795' }}
+                            sx={{ color: '#F2617A' }}
                             disabled={busy}
                             data-testid={`unlink-finding-${link.findingId}`}
                             onClick={async () => {
@@ -525,7 +526,7 @@ export const CaseDetail = () => {
                 Draft notification
               </Button>
               {!permittedActions.isOrganizationBound && (
-                <Typography sx={{ fontSize: 12, color: '#8290a5', mt: 1 }}>
+                <Typography sx={{ fontSize: 12, color: '#9DAFC2', mt: 1 }}>
                   This legacy case has no organization, so a notification cannot be addressed from
                   it.
                 </Typography>
@@ -534,7 +535,7 @@ export const CaseDetail = () => {
           )}
 
           {notifications.length === 0 ? (
-            <Typography sx={{ fontSize: 13, color: '#8290a5' }} data-testid="no-case-notifications">
+            <Typography sx={{ fontSize: 13, color: '#9DAFC2' }} data-testid="no-case-notifications">
               No notification has been drafted from this case.
             </Typography>
           ) : (
@@ -679,7 +680,7 @@ export const CaseDetail = () => {
                   })
                 }
               }}
-              sx={{ bgcolor: '#6ee7c7', color: '#091018' }}
+              sx={{ bgcolor: '#35C477', color: '#06100A' }}
             >
               Record
             </Button>
@@ -687,7 +688,7 @@ export const CaseDetail = () => {
         )}
 
         {organizationResponses.length === 0 ? (
-          <Typography sx={{ fontSize: 13, color: '#8290a5' }}>
+          <Typography sx={{ fontSize: 13, color: '#9DAFC2' }}>
             No responses recorded yet. That is different from a recorded &ldquo;no response&rdquo;.
           </Typography>
         ) : (
@@ -698,18 +699,18 @@ export const CaseDetail = () => {
                   size="small"
                   label={RESPONSE_LABELS[response.responseType] || response.responseType}
                   sx={{
-                    bgcolor: `${RESPONSE_COLORS[response.responseType] || '#8491a4'}20`,
-                    color: RESPONSE_COLORS[response.responseType] || '#8491a4',
+                    bgcolor: `${RESPONSE_COLORS[response.responseType] || '#7C8AA0'}20`,
+                    color: RESPONSE_COLORS[response.responseType] || '#7C8AA0',
                     fontWeight: 700,
                     fontSize: 10,
                   }}
                 />
-                <Typography sx={{ fontSize: 11, color: '#8290a5' }}>
+                <Typography sx={{ fontSize: 11, color: '#9DAFC2' }}>
                   {formatInstant(response.occurredAt)}
                   {response.reference ? ` · ref ${response.reference}` : ''}
                 </Typography>
               </Box>
-              <Typography sx={{ fontSize: 13, color: '#d6dfeb', mt: 0.5 }}>
+              <Typography sx={{ fontSize: 13, color: '#EAF1F9', mt: 0.5 }}>
                 {response.summary}
               </Typography>
             </Box>
@@ -730,10 +731,10 @@ export const CaseDetail = () => {
               {CLOSURE_REASON_LABELS[pendingClosureRequest.closureReason] ||
                 pendingClosureRequest.closureReason}
             </Typography>
-            <Typography sx={{ fontSize: 13, color: '#d6dfeb', mt: 1 }}>
+            <Typography sx={{ fontSize: 13, color: '#EAF1F9', mt: 1 }}>
               {pendingClosureRequest.justification}
             </Typography>
-            <Typography sx={{ fontSize: 11, color: '#8290a5', mt: 0.5 }}>
+            <Typography sx={{ fontSize: 11, color: '#9DAFC2', mt: 0.5 }}>
               Requested {formatInstant(pendingClosureRequest.requestedAt)}
               {pendingClosureRequest.requestedBy
                 ? ` by ${pendingClosureRequest.requestedBy.name}`
@@ -766,7 +767,7 @@ export const CaseDetail = () => {
                     )
                     if (ok) setReviewNote('')
                   }}
-                  sx={{ bgcolor: '#6ee7c7', color: '#091018' }}
+                  sx={{ bgcolor: '#35C477', color: '#06100A' }}
                 >
                   Approve closure
                 </Button>
@@ -787,13 +788,13 @@ export const CaseDetail = () => {
                     )
                     if (ok) setReviewNote('')
                   }}
-                  sx={{ borderColor: '#ff8795', color: '#ff8795' }}
+                  sx={{ borderColor: '#F2617A', color: '#F2617A' }}
                 >
                   Reject closure
                 </Button>
               </Box>
             ) : (
-              <Typography sx={{ fontSize: 12, color: '#8290a5', mt: 2 }}>
+              <Typography sx={{ fontSize: 12, color: '#9DAFC2', mt: 2 }}>
                 A reviewer must decide this request.
               </Typography>
             )}
@@ -848,7 +849,7 @@ export const CaseDetail = () => {
                   )
                   if (ok) setClosureForm({ closureReason: 'OTHER', justification: '' })
                 }}
-                sx={{ bgcolor: '#c08cff', color: '#091018' }}
+                sx={{ bgcolor: '#c08cff', color: '#06100A' }}
               >
                 Request closure
               </Button>
@@ -858,11 +859,11 @@ export const CaseDetail = () => {
 
         {closureRequests.length > 0 && (
           <Box sx={{ mt: 3 }} data-testid="closure-history">
-            <Typography sx={{ fontSize: 12, color: '#75849a', textTransform: 'uppercase' }}>
+            <Typography sx={{ fontSize: 12, color: '#75899E', textTransform: 'uppercase' }}>
               Closure history
             </Typography>
             {closureRequests.map((request) => (
-              <Typography key={request.id} sx={{ fontSize: 12, color: '#9eafc5', mt: 0.75 }}>
+              <Typography key={request.id} sx={{ fontSize: 12, color: '#9DAFC2', mt: 0.75 }}>
                 {formatInstant(request.requestedAt)} ·{' '}
                 {CLOSURE_REASON_LABELS[request.closureReason] || request.closureReason} ·{' '}
                 {request.state}
@@ -896,11 +897,11 @@ export const CaseDetail = () => {
       >
         {lifecycleEvents.map((event) => (
           <Box key={event.id} sx={{ mb: 1.25 }} data-testid={`lifecycle-event-${event.id}`}>
-            <Typography sx={{ fontSize: 13, color: '#d6dfeb' }}>
+            <Typography sx={{ fontSize: 13, color: '#EAF1F9' }}>
               {LIFECYCLE_EVENT_LABELS[event.eventType] || event.eventType}
               {event.fromState ? ` · ${event.fromState} → ${event.toState}` : ` · ${event.toState}`}
             </Typography>
-            <Typography sx={{ fontSize: 11, color: '#8290a5' }}>
+            <Typography sx={{ fontSize: 11, color: '#9DAFC2' }}>
               {formatInstant(event.occurredAt)} ·{' '}
               {LIFECYCLE_REASON_LABELS[event.reasonCode] || event.reasonCode}
               {event.actor ? ` · ${event.actor.name}` : ' · system'}
@@ -918,7 +919,7 @@ export const CaseDetail = () => {
           testId="recurrence-ledger"
         >
           {recurrenceReopens.map((row) => (
-            <Typography key={row.id} sx={{ fontSize: 12, color: '#9eafc5', mb: 0.75 }}>
+            <Typography key={row.id} sx={{ fontSize: 12, color: '#9DAFC2', mb: 0.75 }}>
               {formatInstant(row.observedAt)} · finding {row.findingId} ·{' '}
               {RECURRENCE_OUTCOME_LABELS[row.outcome] || row.outcome}
             </Typography>

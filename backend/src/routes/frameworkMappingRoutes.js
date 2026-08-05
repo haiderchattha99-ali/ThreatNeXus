@@ -76,6 +76,41 @@ router.post(
   controller.removeMapping
 );
 
+// --- Phase 6.3: "no reference in this framework applies" ---------------------
+//
+// Capability table, and why:
+//
+//   read:cases                  GET  /:id/framework-mappings/no-applicable
+//        Reading that an analyst determined nothing applies IS reading the
+//        case's framework position. Same grant as reading the mappings.
+//
+//   manage:framework-mappings   POST /:id/framework-mappings/no-applicable
+//                               POST /:id/framework-mappings/no-applicable/:assertionId/withdraw
+//        Recording "nothing applies" is a determination about this case's
+//        framework position, exactly as recording a mapping is. It carries the
+//        SAME grant deliberately: if it were easier to obtain, the cheapest way
+//        to clear a queue would be to assert that nothing applies everywhere.
+//
+// "no-applicable" is a LITERAL third segment, so it cannot be captured by
+// ":mappingId" on the remove route (which needs four segments) and cannot
+// shadow or be shadowed by "/history". No route here depends on registration
+// order for correctness.
+router.get(
+  "/:id/framework-mappings/no-applicable",
+  canReadCase,
+  controller.listNoApplicableMappings
+);
+router.post(
+  "/:id/framework-mappings/no-applicable",
+  canManageMappings,
+  controller.assertNoApplicableMapping
+);
+router.post(
+  "/:id/framework-mappings/no-applicable/:assertionId/withdraw",
+  canManageMappings,
+  controller.withdrawNoApplicableMapping
+);
+
 // --- AI mapping assistance ---------------------------------------------------
 router.get("/:id/ai/mapping-suggestions", canReadSuggestions, controller.listSuggestions);
 router.post("/:id/ai/mapping-suggestions", canRequestSuggestions, controller.requestSuggestions);

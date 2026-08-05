@@ -30,6 +30,7 @@ import {
   describeNotificationError,
   formatInstant,
 } from '../constants/notificationWorkflow'
+import { PageHeader } from '../components/ui'
 
 // The constituent-notification workflow list (Phase 4).
 //
@@ -103,18 +104,14 @@ export const Notifications = () => {
           mb: 3,
         }}
       >
-        <Box>
-          <Typography sx={{ fontSize: 22, fontWeight: 700, color: '#e7eef9' }}>
-            Notifications
-          </Typography>
-          <Typography sx={{ fontSize: 13, color: '#8290a5', mt: 0.5 }}>
-            Constituent notifications drafted from case evidence. ThreatNeXus never sends a
-            message — an approved notification is exported manually and its delivery recorded by
-            hand.
-          </Typography>
-        </Box>
+        <PageHeader
+          eyebrow="Response / constituent communications"
+          title="Notifications"
+          description="Drafted from persisted case evidence. ThreatNeXus never sends a message; approved artifacts are exported for manual delivery and any outcome is recorded by a person."
+          sx={{ mb: 0, flex: '1 1 440px' }}
+        />
 
-        <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center' }}>
+        <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center', flexWrap: 'wrap', flex: '1 1 280px', justifyContent: { xs: 'stretch', sm: 'flex-end' }, '& .MuiTextField-root': { flex: { xs: '1 1 100%', sm: '0 0 auto' } } }}>
           <TextField
             select
             size="small"
@@ -149,7 +146,7 @@ export const Notifications = () => {
             sx={{ px: 2.5, py: 1.5, minWidth: 150, flex: '1 1 150px' }}
             data-testid={`tile-${state}`}
           >
-            <Typography sx={{ fontSize: 12, color: '#8290a5' }}>
+            <Typography sx={{ fontSize: 12, color: '#9DAFC2' }}>
               {NOTIFICATION_STATE_LABELS[state]}
             </Typography>
             <Typography
@@ -168,10 +165,10 @@ export const Notifications = () => {
           </Box>
         ) : data.notifications.length === 0 ? (
           <Box sx={{ p: 6, textAlign: 'center' }} data-testid="empty-state">
-            <Typography sx={{ fontSize: 15, color: '#e7eef9', fontWeight: 600 }}>
+            <Typography sx={{ fontSize: 15, color: '#EAF1F9', fontWeight: 600 }}>
               No notifications yet
             </Typography>
-            <Typography sx={{ fontSize: 13, color: '#8290a5', mt: 1 }}>
+            <Typography sx={{ fontSize: 13, color: '#9DAFC2', mt: 1 }}>
               A notification is drafted from a case, so its content comes from that case&apos;s real
               linked evidence. Open a case and use &ldquo;Draft notification&rdquo;.
             </Typography>
@@ -180,7 +177,7 @@ export const Notifications = () => {
             </Button>
           </Box>
         ) : (
-          <TableContainer sx={{ overflowX: 'auto' }}>
+          <TableContainer sx={{ overflowX: 'auto', maxWidth: '100%' }}>
             <Table size="small">
               <TableHead>
                 <TableRow>
@@ -224,7 +221,7 @@ export const Notifications = () => {
                         <Chip
                           size="small"
                           label="Exportable"
-                          sx={{ ml: 1, bgcolor: '#6ee7c722', color: '#6ee7c7', fontWeight: 700 }}
+                          sx={{ ml: 1, bgcolor: '#35C47722', color: '#35C477', fontWeight: 700 }}
                           data-testid={`exportable-${row.id}`}
                         />
                       )}
@@ -263,7 +260,7 @@ export const Notifications = () => {
       </Card>
 
       {data.total > data.notifications.length && (
-        <Typography sx={{ fontSize: 12, color: '#8290a5', mt: 2 }} data-testid="page-note">
+        <Typography sx={{ fontSize: 12, color: '#9DAFC2', mt: 2 }} data-testid="page-note">
           Showing {data.notifications.length} of {data.total}. Refine the state filter to narrow the
           list.
         </Typography>

@@ -55,13 +55,14 @@ describe('Sidebar navigation visibility', () => {
     renderSidebar(CAPABILITY_VALUES)
 
     ;[
-      'Command center',
-      'Threat findings',
-      'Intelligence upload',
+      'Operations overview',
+      'Findings',
+      'Report ingestion',
       'Cases',
       'Notifications',
       'Organizations',
       'Analytics',
+      'ATT&CK navigator',
       'Settings',
     ].forEach((label) => expect(screen.getByText(label)).toBeInTheDocument())
   })
@@ -72,8 +73,9 @@ describe('Sidebar navigation visibility', () => {
     expect(screen.queryByText('Organizations')).not.toBeInTheDocument()
     expect(screen.queryByText('Settings')).not.toBeInTheDocument()
     // ANALYST still gets the work it's granted for.
-    expect(screen.getByText('Intelligence upload')).toBeInTheDocument()
+    expect(screen.getByText('Report ingestion')).toBeInTheDocument()
     expect(screen.getByText('Cases')).toBeInTheDocument()
+    expect(screen.getByText('ATT&CK navigator')).toBeInTheDocument()
     // Phase 4: an analyst drafts, edits and exports notifications, so the
     // section is theirs too — it is no longer reviewer-only.
     expect(screen.getByText('Notifications')).toBeInTheDocument()
@@ -82,11 +84,12 @@ describe('Sidebar navigation visibility', () => {
   it('hides upload and admin settings from REVIEWER, but not the cases they review', () => {
     renderSidebar(REVIEWER_CAPABILITIES)
 
-    expect(screen.queryByText('Intelligence upload')).not.toBeInTheDocument()
+    expect(screen.queryByText('Report ingestion')).not.toBeInTheDocument()
     expect(screen.queryByText('Organizations')).not.toBeInTheDocument()
     expect(screen.queryByText('Settings')).not.toBeInTheDocument()
     // Phase 3: a reviewer cannot decide a closure on a case they cannot open.
     expect(screen.getByText('Cases')).toBeInTheDocument()
+    expect(screen.getByText('ATT&CK navigator')).toBeInTheDocument()
     // REVIEWER still gets its own review-specific surface.
     expect(screen.getByText('Notifications')).toBeInTheDocument()
   })
@@ -94,12 +97,13 @@ describe('Sidebar navigation visibility', () => {
   it('shows only read-only navigation to VIEWER', () => {
     renderSidebar(VIEWER_CAPABILITIES)
 
-    expect(screen.getByText('Command center')).toBeInTheDocument()
-    expect(screen.getByText('Threat findings')).toBeInTheDocument()
+    expect(screen.getByText('Operations overview')).toBeInTheDocument()
+    expect(screen.getByText('Findings')).toBeInTheDocument()
     expect(screen.getByText('Analytics')).toBeInTheDocument()
     // Phase 3 read-only case oversight is an explicit requirement.
     expect(screen.getByText('Cases')).toBeInTheDocument()
-    ;['Intelligence upload', 'Notifications', 'Organizations', 'Settings'].forEach((label) =>
+    expect(screen.getByText('ATT&CK navigator')).toBeInTheDocument()
+    ;['Report ingestion', 'Notifications', 'Organizations', 'Settings'].forEach((label) =>
       expect(screen.queryByText(label)).not.toBeInTheDocument()
     )
   })
@@ -107,13 +111,14 @@ describe('Sidebar navigation visibility', () => {
   it('never renders a menu item the user lacks the capability for', () => {
     renderSidebar([])
     ;[
-      'Command center',
-      'Threat findings',
-      'Intelligence upload',
+      'Operations overview',
+      'Findings',
+      'Report ingestion',
       'Cases',
       'Notifications',
       'Organizations',
       'Analytics',
+      'ATT&CK navigator',
       'Settings',
     ].forEach((label) => expect(screen.queryByText(label)).not.toBeInTheDocument())
   })

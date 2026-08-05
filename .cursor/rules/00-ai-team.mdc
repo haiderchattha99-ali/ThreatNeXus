@@ -1,0 +1,9 @@
+---
+description: Ismail AI team workflow and one-active-writer rules
+alwaysApply: true
+---
+
+Read AGENTS.md, docs/ai/STATE.yaml, and docs/ai/HANDOFF.md before substantive work.
+
+Ask and Plan modes are read-only. Agent mode may edit only when `.ai-team/WRITER_LOCK.json` names cursor as the active writer. Inspect Git state and run baseline validation first. Stay within the ticket. Record architecture changes. Before stopping, validate, update state/handoff, checkpoint, and record the exact next action.
+

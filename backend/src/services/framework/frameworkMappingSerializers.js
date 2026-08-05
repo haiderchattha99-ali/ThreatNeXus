@@ -29,9 +29,23 @@
 // A dedicated test file (frameworkSerializerSafety.test.js) proves these
 // exclusions against real row shapes rather than merely asserting them here.
 
+// Phase 6.3 note on ONE deliberate addition to what crosses this boundary.
+//
+// `evidenceQuote` IS emitted. It is drawn from ingested report data or from an
+// analyst-recorded organization response, so it is more sensitive than most
+// fields here — but it is also the entire point of the evidence obligation. A
+// mapping list that showed "an analyst asserted T1021.001 with HIGH confidence"
+// and withheld the one sentence that assertion rests on would be showing the
+// conclusion while hiding the evidence, which is the opposite of what a review
+// surface is for. It sits at exactly the sensitivity of `rationale`, which this
+// serializer has always emitted, and behind the same read:cases capability.
+//
+// `evidenceQuoteLocator` is emitted for the same reason and carries less: a
+// record id and a field name, no content.
 const {
   COMPLIANCE_DISCLAIMER,
   CATALOGUE_DISCLAIMER,
+  LEGACY_MAPPING_NOTE,
 } = require("./frameworkMappingRules");
 
 // Actor identity reduced to id + name + role, exactly as Phase 3 does. Email is
@@ -48,14 +62,23 @@ function serializeActor(user) {
  * currentMappingKey, the same substitution caseWorkflowSerializers makes for
  * currentForFindingId.
  *
- * `referenceValidated: false` is emitted on EVERY row, always, as a literal.
- * This phase pins no framework catalogue, so the honest answer is that the
- * reference was format-checked and nothing more. Emitting the field (rather
- * than omitting it) means a future catalogue can flip it to true and every
- * existing consumer already renders the distinction.
+ * `referenceValidated` was a hard-coded `false` in Phase 5, with a note saying a
+ * future catalogue could flip it. Phase 6.3 is that future: it now reports the
+ * row's OWN stored catalogueVerified flag. It is read per row and never inferred
+ * — a legacy row whose technique happens to exist in today's catalogue still
+ * reports false, because nothing verified it when it was written and this
+ * serializer is not the place to invent a verification.
+ *
+ * `legacyUnverified` is the single flag a UI needs to decide whether to badge a
+ * row. True when the reference was never catalogue-checked OR the row carries no
+ * evidence quote — i.e. whenever the row predates the Phase 6.3 obligations.
  */
 function serializeMapping(row) {
   if (!row) return null;
+  const catalogueVerified = row.catalogueVerified === true;
+  const hasEvidenceQuote = typeof row.evidenceQuote === "string" && row.evidenceQuote.length > 0;
+  const legacyUnverified = !catalogueVerified || !hasEvidenceQuote;
+
   return {
     id: row.id,
     caseId: row.caseId,
@@ -64,13 +87,52 @@ function serializeMapping(row) {
     frameworkVersion: row.frameworkVersion,
     referenceId: row.referenceId,
     referenceTitle: row.referenceTitle,
-    referenceValidated: false,
+    referenceValidated: catalogueVerified,
+    catalogueVersion: row.catalogueVersion === undefined ? null : row.catalogueVersion,
+    catalogueChecksum: row.catalogueChecksum === undefined ? null : row.catalogueChecksum,
     mappingScope: row.mappingScope,
     evidenceBasis: row.evidenceBasis,
     rationale: row.rationale,
     evidenceFindingId: row.evidenceFindingId === undefined ? null : row.evidenceFindingId,
+    // --- Phase 6.3 evidence integrity -----------------------------------
+    evidenceQuote: hasEvidenceQuote ? row.evidenceQuote : null,
+    evidenceQuoteSource: row.evidenceQuoteSource === undefined ? null : row.evidenceQuoteSource,
+    evidenceQuoteLocator:
+      row.evidenceQuoteLocator === undefined ? null : row.evidenceQuoteLocator,
+    evidenceConfidence: row.evidenceConfidence === undefined ? null : row.evidenceConfidence,
+    mappingConfidence: row.mappingConfidence === undefined ? null : row.mappingConfidence,
+    // Travels with the pair so no screen can render them as one figure, and no
+    // consumer can assume a composite exists to be read.
+    confidenceMeaning: "EVIDENCE_AND_MAPPING_CONFIDENCE_ARE_SEPARATE_NEVER_COMBINED",
+    legacyUnverified,
+    legacyNote: legacyUnverified ? LEGACY_MAPPING_NOTE : null,
     state: row.state,
     source: row.source,
+    actorUserId: row.actorUserId === undefined ? null : row.actorUserId,
+    actor: row.actor ? serializeActor(row.actor) : undefined,
+    effectiveAt: row.effectiveAt,
+    supersededAt: row.supersededAt === undefined ? null : row.supersededAt,
+    createdAt: row.createdAt,
+    isCurrent: row.supersededAt === null || row.supersededAt === undefined,
+  };
+}
+
+/**
+ * One "no reference in this framework applies" determination.
+ *
+ * Carries the rationale, because an unexplained determination is exactly as
+ * unreviewable as an unexplained mapping — and this one points at no reference
+ * a reviewer could go and check instead.
+ */
+function serializeNoMappingAssertion(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    caseId: row.caseId,
+    organizationId: row.organizationId,
+    framework: row.framework,
+    rationale: row.rationale,
+    state: row.state,
     actorUserId: row.actorUserId === undefined ? null : row.actorUserId,
     actor: row.actor ? serializeActor(row.actor) : undefined,
     effectiveAt: row.effectiveAt,
@@ -124,11 +186,26 @@ function serializeSuggestion(row) {
     frameworkVersion: row.frameworkVersion,
     referenceId: row.referenceId,
     referenceTitle: row.referenceTitle,
-    referenceValidated: false,
+    referenceValidated: row.catalogueVerified === true,
+    catalogueVersion: row.catalogueVersion === undefined ? null : row.catalogueVersion,
     mappingScope: row.mappingScope,
     evidenceBasis: row.evidenceBasis,
     rationale: row.rationale,
     evidenceFindingId: row.evidenceFindingId === undefined ? null : row.evidenceFindingId,
+    // Phase 6.3: a suggestion carries the same evidence obligations a manual
+    // mapping carries, and carries them from the moment it is STORED — so a
+    // reviewer has the quote in front of them while deciding, rather than
+    // discovering at promotion time that there was never anything to check.
+    evidenceQuote:
+      typeof row.evidenceQuote === "string" && row.evidenceQuote.length > 0
+        ? row.evidenceQuote
+        : null,
+    evidenceQuoteSource: row.evidenceQuoteSource === undefined ? null : row.evidenceQuoteSource,
+    evidenceConfidence: row.evidenceConfidence === undefined ? null : row.evidenceConfidence,
+    mappingConfidence: row.mappingConfidence === undefined ? null : row.mappingConfidence,
+    confidenceMeaning: "EVIDENCE_AND_MAPPING_CONFIDENCE_ARE_SEPARATE_NEVER_COMBINED",
+    // Distinct from the two analyst confidences above and never merged with
+    // them: this one is the model talking about itself.
     providerConfidence: row.providerConfidence === undefined ? null : row.providerConfidence,
     providerConfidenceMeaning: "PROVIDER_SELF_REPORTED_NOT_SYSTEM_ASSESSED",
     state: row.state,
@@ -210,8 +287,10 @@ function serializeAiConfigState(state) {
 module.exports = {
   COMPLIANCE_DISCLAIMER,
   CATALOGUE_DISCLAIMER,
+  LEGACY_MAPPING_NOTE,
   serializeActor,
   serializeMapping,
+  serializeNoMappingAssertion,
   serializeMappingGroups,
   serializeSuggestion,
   serializeRun,

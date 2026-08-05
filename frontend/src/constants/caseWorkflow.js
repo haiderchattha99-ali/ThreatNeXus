@@ -24,10 +24,10 @@ export const CASE_STATE_LABELS = {
 }
 
 export const CASE_STATE_COLORS = {
-  OPEN: '#7688ff',
-  WAITING_FOR_ORG: '#ffb768',
+  OPEN: '#5AB6D9',
+  WAITING_FOR_ORG: '#E8A33D',
   CLOSURE_PENDING: '#c08cff',
-  CLOSED: '#8491a4',
+  CLOSED: '#7C8AA0',
 }
 
 export const TRIAGE_DECISIONS = {
@@ -49,10 +49,10 @@ export const TRIAGE_LABELS = {
 }
 
 export const TRIAGE_COLORS = {
-  UNTRIAGED: '#8491a4',
-  IN_REVIEW: '#7688ff',
-  ESCALATED: '#ff8795',
-  DISMISSED: '#6ee7c7',
+  UNTRIAGED: '#7C8AA0',
+  IN_REVIEW: '#5AB6D9',
+  ESCALATED: '#F2617A',
+  DISMISSED: '#35C477',
 }
 
 // A dismissal with no stated reason is not defensible, so the form requires one.
@@ -77,12 +77,12 @@ export const RESPONSE_LABELS = {
 }
 
 export const RESPONSE_COLORS = {
-  ACKNOWLEDGED: '#7688ff',
-  INVESTIGATING: '#ffb768',
-  REMEDIATED: '#6ee7c7',
-  DISPUTED: '#ff8795',
-  NO_RESPONSE: '#8491a4',
-  OTHER: '#9eafc5',
+  ACKNOWLEDGED: '#5AB6D9',
+  INVESTIGATING: '#E8A33D',
+  REMEDIATED: '#35C477',
+  DISPUTED: '#F2617A',
+  NO_RESPONSE: '#7C8AA0',
+  OTHER: '#9DAFC2',
 }
 
 export const CLOSURE_REASONS = [

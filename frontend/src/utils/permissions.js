@@ -14,8 +14,15 @@ import { CAPABILITIES } from '../constants/capabilities'
 // route of their own.
 export const PAGE_CAPABILITIES = {
   dashboard: CAPABILITIES.READ_DASHBOARD,
-  threats: CAPABILITIES.READ_FINDINGS,
+  // Phase 6 — the Findings list and Finding detail screens. Both are pure
+  // reads over persisted evidence, so both gate on READ_FINDINGS, which every
+  // role holds. The write controls inside them (triage, ownership override,
+  // enrichment trigger, risk recalculation, CVE association) are each gated
+  // separately, and the backend re-checks every one of them per request.
+  findings: CAPABILITIES.READ_FINDINGS,
+  findingDetail: CAPABILITIES.READ_FINDINGS,
   analytics: CAPABILITIES.READ_FINDINGS,
+  attack: CAPABILITIES.READ_CASES,
   upload: CAPABILITIES.INGEST_REPORTS,
   // Phase 3 split the case group's reads from its writes. The PAGE capability
   // is the READ one, because REVIEWER (who must read a case to decide its

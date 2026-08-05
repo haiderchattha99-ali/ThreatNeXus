@@ -6,7 +6,7 @@ import React, {
 } from 'react'
 
 import axios from 'axios'
-import { authService } from '../services/api'
+import { authService, SESSION_EXPIRED_EVENT } from '../services/api'
 
 export const AuthContext = createContext()
 
@@ -102,6 +102,28 @@ export const AuthProvider = ({ children }) => {
     return () => {
       cancelled = true
     }
+  }, [])
+
+  // Phase 6 — session expiry. Any authenticated request the backend answers
+  // with 401 (expired, revoked or tampered token) clears the stored session and
+  // sends the user back to sign-in with an explanation, instead of leaving them
+  // on a page whose every request now fails silently.
+  //
+  // 403 is deliberately NOT handled here: a capability refusal means the
+  // session is valid and must survive. See services/api.js.
+  useEffect(() => {
+    const onExpired = () => {
+      clearStoredSession()
+      setToken(null)
+      setUser(null)
+      setCapabilities([])
+      if (!window.location.pathname.startsWith('/login')) {
+        window.location.assign('/login?reason=session-expired')
+      }
+    }
+
+    window.addEventListener(SESSION_EXPIRED_EVENT, onExpired)
+    return () => window.removeEventListener(SESSION_EXPIRED_EVENT, onExpired)
   }, [])
 
   const login = useCallback((jwtToken, userData, userCapabilities = []) => {

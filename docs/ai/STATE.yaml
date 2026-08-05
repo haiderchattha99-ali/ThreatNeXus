@@ -1,0 +1,67 @@
+﻿{
+    "schema_version":  1,
+    "ticket":  "TNX-P6.3-ATTACK-CATALOGUE",
+    "title":  "Catalogue-backed ATT\u0026CK evidence integrity and navigator",
+    "status":  "handoff_ready",
+    "owner":  "unassigned",
+    "reviewer":  "codex",
+    "branch":  "review/tnx-p6-2",
+    "push_target":  "feat/phase-6-frontend-demo-hardening",
+    "worktree":  "F:\\AI-Worktrees\\ThreatNeXus\\review-tnx-p6-2",
+    "starting_commit":  "96db6ce71e5f3cb853802729b229015d9f435345",
+    "goal":  "Pin and verify Enterprise ATT\u0026CK 19.1, enforce exact catalogue and verbatim evidence integrity for manual and AI-promoted mappings, support explicit no-applicable determinations, and deliver a truthful role-readable navigator without a fabricated coverage percentage.",
+    "scope":  {
+                  "included":  [
+                                   "Pinned local ATT\u0026CK catalogue and integrity manifest",
+                                   "Additive Prisma evidence-integrity migration",
+                                   "Manual and AI mapping validation parity",
+                                   "Explicit no-applicable mapping decisions",
+                                   "Read-only ATT\u0026CK catalogue and navigator APIs",
+                                   "Role-aware responsive ATT\u0026CK frontend",
+                                   "Evaluator, unit, integration, Playwright, and CI gates",
+                                   "Demo seed and AI-team documentation"
+                               ],
+                  "excluded":  [
+                                   "Live AI providers",
+                                   "New intelligence providers",
+                                   "Scheduled Shadowserver ingestion",
+                                   "ATT\u0026CK coverage percentages",
+                                   "Risk v1 or lifecycle changes",
+                                   "backend/.env"
+                               ]
+              },
+    "completed":  [
+                      "Pinned official MITRE Enterprise ATT\u0026CK 19.1 at upstream commit 6c37199 with SHA-256 d59e40e9d114a92af2f170a0af729bcbd578f960c7b12f51b0f104305e816398",
+                      "Verified 15 tactics, 858 techniques, 493 sub-techniques, and 697 currently mappable references",
+                      "Added fail-closed runtime catalogue validation and preserved honest historical reads",
+                      "Added bounded verbatim quote/source evidence plus separate evidence and mapping confidence",
+                      "Applied identical catalogue and evidence gates to manual and AI-promoted mappings",
+                      "Added explicit reasoned no-applicable determinations with audit-safe withdrawal",
+                      "Added the read-only ATT\u0026CK navigator API and premium responsive frontend for all four roles",
+                      "Added raw mapping counts, review queue, case/finding evidence links, provenance, and catalogue checksum display",
+                      "Kept AI disabled by default and performed no live provider calls",
+                      "Updated CI migration order, catalogue verification, Phase 6.3 evaluator, and Chromium coverage",
+                      "Stabilized the dashboard keyboard-focus E2E gate by waiting for the GSAP entrance to reach its user-visible state before asserting focus; the focused path passed 5/5 and the full Chromium suite passed 42/42"
+                  ],
+    "validation":  {
+                       "catalogue":  "PASS — Enterprise v19.1 checksum, 15 tactics, 858 techniques, 697 mappable",
+                       "prisma":  "PASS — schema valid, 18 migrations deploy from zero, none pending, no schema drift",
+                       "backend":  "PASS — 122 files / 2,984 tests against real PostgreSQL with serial file execution",
+                       "frontend":  "PASS — lint exit 0 with the same six pre-existing Fast Refresh warnings; 12 files / 143 tests; production build passed",
+                       "browser":  "PASS — Chromium 42/42 against the real REST stack; four roles; desktop/tablet/mobile; keyboard and reduced motion",
+                       "evaluators":  "PASS — Phase 1 (9), Risk v1 (contract + 19), Phase 3 (12/151 assertions), Phase 4 (14/151), Phase 5 (14/150), Phase 6.3 (13/108)",
+                       "live_browser":  "PASS — ADMIN, ANALYST, REVIEWER, VIEWER; 1440x900, 1024x768, 390x844; no console warnings/errors; no invisible regions or horizontal overflow",
+                       "ci_workflow":  "PASS — code-bearing Phase 6.3 head 8ec6a5a passed GitHub Actions run 30997649820; the final stabilization checkpoint is pending publish and final CI",
+                       "secret_hygiene":  "PASS — no live key read, printed, transmitted, copied, placed in frontend code, or committed"
+                   },
+    "known_issues":  [
+                         "Finding closure still has no production write path, so recurrence/reopen remains evaluator-proven but unreachable through the running UI.",
+                         "Chromium is the committed browser gate; Firefox and WebKit are not claimed.",
+                         "The existing React Router RSC-only advisory remains unreachable in this client-only SPA.",
+                         "A parallel full backend run produced one NOT_CLAIM_OWNER lease collision; the exact file passed 19/19 alone and the complete suite passed 2,984/2,984 with serial file execution."
+                     ],
+    "next_action":  "Verify the final Phase 6.3 checkpoint and green CI, merge the accepted Phase 6 branch into main, then create feat/phase-7-release-candidate from updated main and run the provided Phase 7 goal and execution prompts.",
+    "checkpoint_ref":  "c501de9864d3fe8568c7720cf205a26eed21e097",
+    "updated_at":  "2026-08-05T10:50:42.8462180Z",
+    "next_writer":  "claude"
+}

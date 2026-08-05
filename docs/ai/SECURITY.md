@@ -1,0 +1,87 @@
+# Project Security
+
+Orientation note for the AI team. The binding rules are in `/AGENTS.md`, `/CLAUDE.md` and the
+build-guard skill referenced there; where they disagree with this file, they win.
+
+## Assets and sensitive data
+
+Constituent exposure evidence (synthetic only — no real victim data has ever been held), analyst
+decisions, the audit log, provider API keys, and JWT signing material. **No secret and no real
+victim data may ever be committed.**
+
+## Actors and roles
+
+`ADMIN`, `ANALYST`, `REVIEWER`, `VIEWER`. Capabilities are server-derived and returned alongside the
+profile; they are never inferred from anything the client stores.
+
+## Trust boundaries
+
+The backend is the sole authorization boundary. The frontend's route guards and hidden controls are
+UX only and fail closed (a protected route with no declared capability and no explicit
+`requireAuthOnly` opt-in is denied).
+
+## Authentication
+
+JWT bearer tokens. `JWT_SECRET` is required at startup, must be at least 32 characters, and is
+rejected if it is a recognisable placeholder. **401 and 403 are treated as opposites**: a 401 on any
+authenticated request clears the stored session and returns to sign-in with an explanation; a 403 is
+a capability refusal, the session survives it, and the page renders its denied state. Both are now
+covered by `frontend/e2e/session.spec.js`.
+
+## Authorization and ownership
+
+`requireCapability` / `requireRole` middleware on every route. Cases are organization-bound. **Two
+self-approval prohibitions hold and are proven by the demo seed and the evaluators**: the analyst
+who requests a case closure cannot approve it, and the analyst who drafts a notification cannot
+approve it. Notification approval binds to an exact immutable revision — editing invalidates it.
+
+## Input and output validation
+
+Every write path validates its input and names the offending field. Ingestion rejects structurally
+invalid rows without failing the whole report. Error responses never echo secrets.
+
+Enterprise ATT&CK mappings are validated against the pinned local catalogue and cannot accept an
+invented or obsolete current reference. They must preserve a bounded verbatim quote from stored
+case/finding evidence, its locator/source, and separate evidence and mapping confidence. AI output
+passes through the same validation and remains only a suggestion; it cannot approve itself or
+bypass the human mapping writer. Explicit no-applicable determinations are reasoned, auditable
+analyst decisions, not inferred empty states.
+
+## Secret handling
+
+API keys come from environment variables only and never appear in logs, error responses, the browser
+bundle, screenshots, fixtures, test reports or commits. `tests/setup.js` sets `TNX_SKIP_DOTENV=true`
+so the suite never inherits a developer `.env`; the same variable is used for local gate runs.
+`seedUsers.js` and `seedDemo.js` take their passwords from the environment, have no defaults, refuse
+to run under `NODE_ENV=production`, and never print a password.
+
+## Logging and audit
+
+Audit logging is cross-cutting and began in Phase 0. **Every write path appends its own `AuditLog`
+event in the same change** — never retrofitted. Audit failure must never turn a valid response into
+an error.
+
+## Abuse controls
+
+Rate limits and upload size limits on the ingestion path. Providers are behind an abstraction with a
+`MockProvider` used by every automated test, so no test consumes live quota. Enrichment failure never
+blocks ingestion.
+
+## Security tests
+
+`backend/tests/` (unit, middleware, integration, including real-PostgreSQL concurrency),
+`eval/run_*_gate.js`, and `frontend/e2e/`. CI additionally scans for committed `.env` files,
+credential-shaped literals, generated artifacts, and secret-shaped literals in the production bundle.
+It also verifies the pinned ATT&CK catalogue checksum and runs the Phase 6.3 evidence-integrity gate.
+
+## Known risks and accepted exceptions
+
+- **`react-router-dom` is pinned to 7.18.2.** One advisory remains open; it is RSC-mode-only and
+  unreachable in a client-only SPA. A 7.11.0 downgrade was tested and rejected — it trades one
+  unreachable advisory for fourteen reachable ones.
+- **AI is disabled by default (`AI_ENABLED=false`)** and cannot approve, send, score, close, resolve
+  or make a final framework mapping. Every core workflow must complete with AI off.
+- **No SMTP or webhook client exists**, not even a disabled one. Export is not delivery.
+- **`backend/.env` on the development machine holds live provider keys.** It is correctly gitignored,
+  has never been tracked, and is absent from history. It must never be read, printed, copied,
+  transmitted or modified by an agent.

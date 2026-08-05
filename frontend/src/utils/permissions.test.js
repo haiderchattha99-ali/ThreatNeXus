@@ -81,6 +81,8 @@ describe('canAccessPage', () => {
   it('requires the mapped capability for a gated page', () => {
     expect(canAccessPage([], 'cases')).toBe(false)
     expect(canAccessPage([CAPABILITIES.READ_CASES], 'cases')).toBe(true)
+    expect(canAccessPage([], 'attack')).toBe(false)
+    expect(canAccessPage([CAPABILITIES.READ_CASES], 'attack')).toBe(true)
   })
 
   // Phase 3 split the case group's reads from its writes. The PAGE gate is the

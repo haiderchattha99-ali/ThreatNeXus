@@ -1,537 +1,182 @@
-import React from "react";
-import {
-  Avatar,
-  Box,
-  Button,
-  Card,
-  Chip,
-  Divider,
-  Grid,
-  Stack,
-  Typography,
-} from "@mui/material";
+// Profile — Phase 6.2 truth cleanup.
+//
+// WHAT THIS PAGE USED TO CLAIM
+// ----------------------------
+//   - "Backend Connected", "Session Active", "Active Session" status chips that
+//     were static JSX. None was wired to a connection, a session record or a
+//     heartbeat; they rendered green whether or not anything was reachable.
+//   - "Department: Threat Intelligence" — a hardcoded string. The User model
+//     has no department column.
+//   - A "Security Information" grid marking "JWT Authentication", "Backend
+//     Connected", "Role Based Access" and "Encrypted Session" as "Enabled".
+//     Two of those are real architectural facts, one was a duplicate of the
+//     fake connection chip, and "Encrypted Session" asserted transport
+//     security this page cannot observe.
+//   - "Analyst Statistics": Threats Reviewed / Cases Assigned / Reports
+//     Uploaded / Notifications, all four hardcoded to the string "0". They were
+//     not queried, and a real zero and a literal zero are not the same claim.
+//
+// The sibling Settings card additionally showed `new Date().toLocaleString()`
+// as "Last Login" and offered editable name/email fields that wrote to
+// localStorage and reported "Profile saved successfully." No server account was
+// ever modified. Both are gone.
+//
+// WHAT IT SHOWS NOW
+// -----------------
+// Only what the server actually returned for this token from GET /api/profile,
+// plus the capability list that response carried. There is no editable field,
+// because this application exposes no authenticated account-update route — and
+// an input that silently edits nothing is worse than no input.
+//
+// "Last login" is absent, and stays absent, because the User model persists no
+// login timestamp. Rendering the current clock in its place — which is what the
+// previous version did — states a fact the database does not hold.
 
-import {
-  FiArrowLeft,
-  FiShield,
-  FiMail,
-  FiUser,
-  FiActivity,
-  FiClock,
-  FiCheckCircle,
-  FiBriefcase,
-} from "react-icons/fi";
+import React from 'react'
+import { Box, Button } from '@mui/material'
+import { Link as RouterLink } from 'react-router-dom'
+import { FiSettings } from 'react-icons/fi'
 
-import { useNavigate } from "react-router-dom";
-import { useAuth } from "../hooks/useAuth";
+import { useAuth } from '../hooks/useAuth'
+import {
+  PageHeader,
+  Panel,
+  Field,
+  FieldGrid,
+  SectionLabel,
+  ScopeNote,
+  EmptyState,
+} from '../components/ui'
+import { color, type, radius, font } from '../theme/tokens'
 
 export const Profile = () => {
-  const { user } = useAuth();
-  const navigate = useNavigate();
+  const { user, capabilities } = useAuth()
 
   if (!user) {
     return (
-      <Box
-        sx={{
-          height: "100vh",
-          display: "flex",
-          justifyContent: "center",
-          alignItems: "center",
-          bgcolor: "#0F172A",
-        }}
-      >
-        <Typography color="white">
-          User not found.
-        </Typography>
-      </Box>
-    );
+      <>
+        <PageHeader eyebrow="Workspace / account" title="Account" />
+        <Panel>
+          <EmptyState title="No account is loaded">
+            This browser is not holding a validated session. Sign in again to
+            view your account.
+          </EmptyState>
+        </Panel>
+      </>
+    )
   }
 
   return (
-    <Box
-      sx={{
-        bgcolor: "#0F172A",
-        minHeight: "100vh",
-        p: 4,
-      }}
-    >
-      <Button
-        variant="outlined"
-        startIcon={<FiArrowLeft />}
-        onClick={() => navigate("/dashboard")}
-        sx={{
-          mb: 3,
-          color: "#2563EB",
-          borderColor: "#2563EB",
-          "&:hover": {
-            borderColor: "#3B82F6",
-            background: "rgba(37,99,235,.08)",
-          },
-        }}
+    <>
+      <PageHeader
+        eyebrow="Workspace / account"
+        title="Account"
+        description="The identity and role the server resolved for this session."
+        breadcrumbs={[{ label: 'ThreatNeXus', to: '/dashboard' }, { label: 'Account' }]}
+        actions={
+          <Button component={RouterLink} to="/settings" size="small" variant="outlined" startIcon={<FiSettings />}>
+            Settings
+          </Button>
+        }
+      />
+
+      <Panel
+        title="Account"
+        description="Returned by GET /api/profile for the token this browser is holding."
+        sx={{ mb: 2 }}
       >
-        Dashboard
-      </Button>
+        <FieldGrid>
+          <Field label="Name">{user.name}</Field>
+          <Field label="Email" mono>{user.email}</Field>
+          <Field label="Role">{user.role}</Field>
+          <Field label="Account identifier" mono>{user.id}</Field>
+        </FieldGrid>
 
-      <Typography
-        variant="h4"
-        sx={{
-          color: "white",
-          fontWeight: 700,
-          mb: 4,
-        }}
+        <Box
+          sx={{
+            mt: 2.5,
+            p: 1.5,
+            backgroundColor: color.surfaceSunken,
+            borderRadius: `${radius.sm}px`,
+            ...type.caption,
+            color: color.textMuted,
+            maxWidth: '78ch',
+          }}
+        >
+          These details are not editable here. Local accounts are created and
+          changed by an administrator directly against the database — this
+          application exposes no authenticated account-update route, so a form
+          on this page would save nothing.
+        </Box>
+      </Panel>
+
+      <Panel
+        title="What this role may do"
+        description="The capability list the server returned with your session. Every route re-checks these server-side on each request."
+        sx={{ mb: 2 }}
       >
-        My Profile
-      </Typography>
-
-      <Grid container spacing={3}>
-        {/* LEFT PANEL */}
-
-        <Grid item xs={12} md={4}>
-          <Card
-            sx={{
-              bgcolor: "#111827",
-              border: "1px solid #1E293B",
-              borderRadius: 3,
-              p: 4,
-              textAlign: "center",
-            }}
-          >
-            <Avatar
-              sx={{
-                width: 130,
-                height: 130,
-                bgcolor: "#2563EB",
-                mx: "auto",
-                mb: 3,
-                fontSize: 45,
-                fontWeight: "bold",
-              }}
-            >
-              {user?.name?.charAt(0)?.toUpperCase()}
-            </Avatar>
-
-            <Typography
-              variant="h5"
-              sx={{
-                color: "white",
-                fontWeight: 700,
-              }}
-            >
-              {user.name}
-            </Typography>
-
-            <Typography
-              sx={{
-                color: "#94A3B8",
-                mt: 1,
-              }}
-            >
-              {user.role}
-            </Typography>
-
-            <Chip
-              icon={<FiCheckCircle />}
-              label="Active Session"
-              sx={{
-                mt: 3,
-                bgcolor: "rgba(34,197,94,.15)",
-                color: "#22C55E",
-                fontWeight: 600,
-              }}
-            />
-
-            <Divider
-              sx={{
-                my: 4,
-                borderColor: "#1E293B",
-              }}
-            />
-
-            <Stack spacing={2}>
-
-              <Box display="flex" alignItems="center">
-                <FiShield color="#2563EB" size={18} />
-                <Typography
-                  sx={{
-                    ml: 2,
-                    color: "#CBD5E1",
-                  }}
-                >
-                  PKCERT Security Platform
-                </Typography>
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75 }}>
+          {(capabilities || []).length ? (
+            capabilities.map((capability) => (
+              <Box
+                key={capability}
+                sx={{
+                  ...type.caption,
+                  fontFamily: font.mono,
+                  color: color.text,
+                  border: `1px solid ${color.border}`,
+                  borderRadius: `${radius.sm}px`,
+                  px: 0.9,
+                  py: 0.35,
+                }}
+              >
+                {capability}
               </Box>
-
-              <Box display="flex" alignItems="center">
-                <FiActivity color="#22C55E" size={18} />
-                <Typography
-                  sx={{
-                    ml: 2,
-                    color: "#CBD5E1",
-                  }}
-                >
-                  Backend Connected
-                </Typography>
-              </Box>
-
-              <Box display="flex" alignItems="center">
-                <FiClock color="#F59E0B" size={18} />
-                <Typography
-                  sx={{
-                    ml: 2,
-                    color: "#CBD5E1",
-                  }}
-                >
-                  Session Active
-                </Typography>
-              </Box>
-
-            </Stack>
-          </Card>
-        </Grid>
-
-        {/* RIGHT PANEL */}
-
-        <Grid item xs={12} md={8}>
-
-          <Card
-            sx={{
-              bgcolor: "#111827",
-              border: "1px solid #1E293B",
-              borderRadius: 3,
-              p: 4,
-              mb: 3,
-            }}
-          >
-            <Typography
-              variant="h6"
-              sx={{
-                color: "white",
-                mb: 3,
-                fontWeight: 700,
-              }}
-            >
-              Account Information
-            </Typography>
-
-            <Grid container spacing={3}>
-
-              <Grid item xs={12} md={6}>
-                <Box>
-
-                  <Typography color="#94A3B8">
-                    Full Name
-                  </Typography>
-
-                  <Stack
-                    direction="row"
-                    spacing={1}
-                    mt={1}
-                    alignItems="center"
-                  >
-                    <FiUser color="#2563EB" />
-                    <Typography color="white">
-                      {user.name}
-                    </Typography>
-                  </Stack>
-
-                </Box>
-              </Grid>
-
-              <Grid item xs={12} md={6}>
-                <Box>
-
-                  <Typography color="#94A3B8">
-                    Email
-                  </Typography>
-
-                  <Stack
-                    direction="row"
-                    spacing={1}
-                    mt={1}
-                    alignItems="center"
-                  >
-                    <FiMail color="#2563EB" />
-                    <Typography color="white">
-                      {user.email}
-                    </Typography>
-                  </Stack>
-
-                </Box>
-              </Grid>
-
-              <Grid item xs={12} md={6}>
-                <Typography color="#94A3B8">
-                  User ID
-                </Typography>
-
-                <Typography
-                  mt={1}
-                  color="white"
-                >
-                  {user.id}
-                </Typography>
-              </Grid>
-
-              <Grid item xs={12} md={6}>
-                <Typography color="#94A3B8">
-                  Role
-                </Typography>
-
-                <Stack
-                  direction="row"
-                  spacing={1}
-                  mt={1}
-                  alignItems="center"
-                >
-                  <FiBriefcase color="#2563EB" />
-                  <Typography color="white">
-                    {user.role}
-                  </Typography>
-                </Stack>
-              </Grid>
-                            <Grid item xs={12} md={6}>
-                <Typography color="#94A3B8">
-                  Department
-                </Typography>
-
-                <Typography mt={1} color="white">
-                  Threat Intelligence
-                </Typography>
-              </Grid>
-
-              <Grid item xs={12} md={6}>
-                <Typography color="#94A3B8">
-                  Account Status
-                </Typography>
-
-                <Chip
-                  label="Active"
-                  size="small"
-                  sx={{
-                    mt: 1,
-                    bgcolor: "rgba(34,197,94,.15)",
-                    color: "#22C55E",
-                    fontWeight: 600,
-                  }}
-                />
-              </Grid>
-
-            </Grid>
-          </Card>
-
-          {/* Security Information */}
-
-          <Card
-            sx={{
-              bgcolor: "#111827",
-              border: "1px solid #1E293B",
-              borderRadius: 3,
-              p: 4,
-              mb: 3,
-            }}
-          >
-            <Typography
-              variant="h6"
-              sx={{
-                color: "white",
-                fontWeight: 700,
-                mb: 3,
-              }}
-            >
-              Security Information
-            </Typography>
-
-            <Grid container spacing={2}>
-
-              {[
-                "JWT Authentication",
-                "Backend Connected",
-                "Role Based Access",
-                "Encrypted Session",
-              ].map((item) => (
-                <Grid item xs={12} sm={6} key={item}>
-                  <Box
-                    sx={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "center",
-                      bgcolor: "#0F172A",
-                      p: 2,
-                      borderRadius: 2,
-                    }}
-                  >
-                    <Typography color="#CBD5E1">
-                      {item}
-                    </Typography>
-
-                    <Chip
-                      label="Enabled"
-                      size="small"
-                      sx={{
-                        bgcolor: "rgba(34,197,94,.15)",
-                        color: "#22C55E",
-                      }}
-                    />
-                  </Box>
-                </Grid>
-              ))}
-
-            </Grid>
-          </Card>
-
-          {/* Statistics */}
-
-          <Card
-            sx={{
-              bgcolor: "#111827",
-              border: "1px solid #1E293B",
-              borderRadius: 3,
-              p: 4,
-              mb: 3,
-            }}
-          >
-            <Typography
-              variant="h6"
-              sx={{
-                color: "white",
-                fontWeight: 700,
-                mb: 3,
-              }}
-            >
-              Analyst Statistics
-            </Typography>
-
-            <Grid container spacing={3}>
-
-              {[
-                {
-                  title: "Threats Reviewed",
-                  value: "0",
-                },
-                {
-                  title: "Cases Assigned",
-                  value: "0",
-                },
-                {
-                  title: "Reports Uploaded",
-                  value: "0",
-                },
-                {
-                  title: "Notifications",
-                  value: "0",
-                },
-              ].map((card) => (
-                <Grid item xs={6} md={3} key={card.title}>
-                  <Box
-                    sx={{
-                      textAlign: "center",
-                      bgcolor: "#0F172A",
-                      borderRadius: 2,
-                      p: 3,
-                    }}
-                  >
-                    <Typography
-                      variant="h4"
-                      sx={{
-                        color: "#2563EB",
-                        fontWeight: 700,
-                      }}
-                    >
-                      {card.value}
-                    </Typography>
-
-                    <Typography
-                      sx={{
-                        mt: 1,
-                        color: "#94A3B8",
-                        fontSize: 14,
-                      }}
-                    >
-                      {card.title}
-                    </Typography>
-                  </Box>
-                </Grid>
-              ))}
-
-            </Grid>
-          </Card>
-
-          {/* About */}
-
-          <Card
-            sx={{
-              bgcolor: "#111827",
-              border: "1px solid #1E293B",
-              borderRadius: 3,
-              p: 4,
-            }}
-          >
-            <Typography
-              variant="h6"
-              sx={{
-                color: "white",
-                mb: 3,
-                fontWeight: 700,
-              }}
-            >
-              About ThreatNeXus
-            </Typography>
-
-            <Typography
-              sx={{
-                color: "#CBD5E1",
-                lineHeight: 2,
-              }}
-            >
-              ThreatNeXus is an AI-assisted Cyber Threat Intelligence and
-              Incident Response Platform developed for PKCERT. It enables
-              analysts to collect, correlate, analyze, and respond to
-              cybersecurity threats through a centralized dashboard.
-            </Typography>
-
-            <Box sx={{ mt: 3 }}>
-
-              <Chip
-                label="Threat Intelligence"
-                sx={{ mr: 1, mb: 1 }}
-                color="primary"
-              />
-
-              <Chip
-                label="IOC Management"
-                sx={{ mr: 1, mb: 1 }}
-                color="primary"
-              />
-
-              <Chip
-                label="Risk Scoring"
-                sx={{ mr: 1, mb: 1 }}
-                color="primary"
-              />
-
-              <Chip
-                label="Case Management"
-                sx={{ mr: 1, mb: 1 }}
-                color="primary"
-              />
-
-              <Chip
-                label="AI Notifications"
-                sx={{ mr: 1, mb: 1 }}
-                color="primary"
-              />
-
-              <Chip
-                label="Reporting"
-                sx={{ mr: 1, mb: 1 }}
-                color="primary"
-              />
-
+            ))
+          ) : (
+            <Box sx={{ ...type.small, color: color.textMuted }}>
+              No capabilities were returned for this session.
             </Box>
-          </Card>
+          )}
+        </Box>
+      </Panel>
 
-        </Grid>
-      </Grid>
-    </Box>
-  );
-};
+      <Panel title="Not recorded for this account">
+        <Box component="ul" sx={{ ...type.small, color: color.textMuted, pl: 2.5, m: 0, maxWidth: '78ch' }}>
+          <li>
+            <strong style={{ color: color.text }}>Last sign-in time.</strong> No
+            login timestamp is persisted on the account, so none is shown. The
+            previous version of this screen displayed the current clock in this
+            position, which described the moment the page was opened rather than
+            any sign-in that occurred.
+          </li>
+          <li>
+            <strong style={{ color: color.text }}>Per-analyst activity counts.</strong>{' '}
+            Audit events record the actor behind every state change, but no
+            per-user rollup is queried or exposed by any current route. Numbers
+            in this position would have to be invented, so there are none.
+          </li>
+          <li>
+            <strong style={{ color: color.text }}>Session or connection health.</strong>{' '}
+            This page observes neither. A request either succeeded or it did
+            not — that is visible from whether these fields loaded at all.
+          </li>
+        </Box>
+        <Box sx={{ mt: 2 }}>
+          <SectionLabel component="h3">About ThreatNeXus</SectionLabel>
+          <Box sx={{ ...type.small, color: color.textMuted, mt: 1, maxWidth: '78ch' }}>
+            A defensive cyber-threat-intelligence orchestration and
+            incident-response research prototype built for PKCERT. Reports in;
+            deduplicated findings, explainable Risk v1 scores, analyst-owned
+            cases and reviewer-approved constituent notifications out. It
+            performs no autonomous scanning, no automatic remediation and no
+            automatic sending.
+          </Box>
+        </Box>
+        <ScopeNote sx={{ mt: 2 }} />
+      </Panel>
+    </>
+  )
+}
+
+export default Profile

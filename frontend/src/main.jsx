@@ -1,75 +1,14 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
+import { ThemeProvider } from '@mui/material/styles'
+import CssBaseline from '@mui/material/CssBaseline'
+import { Toaster } from 'react-hot-toast'
+
 import App from './App.jsx'
-import "leaflet/dist/leaflet.css";
 import './index.css'
 import { AuthProvider } from './context/AuthContext'
-import { Toaster } from 'react-hot-toast'
-import { ThemeProvider, createTheme } from '@mui/material/styles'
-import CssBaseline from '@mui/material/CssBaseline'
-
-const theme = createTheme({
-  palette: {
-    mode: 'dark',
-    primary: {
-      main: '#6ee7c7',
-    },
-    secondary: {
-      main: '#7688ff',
-    },
-    background: {
-      default: '#080c14',
-      paper: '#101723',
-    },
-    error: {
-      main: '#f85149',
-    },
-    warning: {
-      main: '#d29922',
-    },
-    info: {
-      main: '#58a6ff',
-    },
-    success: {
-      main: '#3fb950',
-    },
-  },
-  typography: {
-    fontFamily: '"Manrope", "Segoe UI", sans-serif',
-    h1: {
-      fontSize: '2.5rem',
-      fontWeight: 600,
-    },
-    h2: {
-      fontSize: '2rem',
-      fontWeight: 600,
-    },
-    h3: {
-      fontSize: '1.5rem',
-      fontWeight: 600,
-    },
-  },
-  components: {
-    MuiCard: {
-      styleOverrides: {
-        root: {
-          borderRadius: 16,
-          backgroundColor: '#101723',
-          border: '1px solid #202d40',
-        },
-      },
-    },
-    MuiButton: {
-      styleOverrides: {
-        root: {
-          borderRadius: 10,
-          textTransform: 'none',
-          fontWeight: 600,
-        },
-      },
-    },
-  },
-})
+import theme from './theme'
+import { color, radius, font } from './theme/tokens'
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
@@ -77,8 +16,25 @@ ReactDOM.createRoot(document.getElementById('root')).render(
       <CssBaseline />
       <AuthProvider>
         <App />
-        <Toaster position="top-right" />
+        {/* Toasts are transient confirmations only. Anything an analyst must be
+            able to re-read — an error, a denial, a validation failure — is
+            rendered in the page as well, because a toast that has faded is
+            unreachable to a screen-reader user who arrived late. */}
+        <Toaster
+          position="bottom-right"
+          toastOptions={{
+            duration: 4000,
+            style: {
+              background: color.surfaceRaised,
+              color: color.text,
+              border: `1px solid ${color.borderStrong}`,
+              borderRadius: `${radius.sm}px`,
+              fontFamily: font.ui,
+              fontSize: 13,
+            },
+          }}
+        />
       </AuthProvider>
     </ThemeProvider>
-  </React.StrictMode>,
+  </React.StrictMode>
 )

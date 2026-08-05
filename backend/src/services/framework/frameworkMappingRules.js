@@ -40,7 +40,21 @@
 // an address did elsewhere is not what happened to this constituent), the
 // organization's sector, and the deterministic Risk v1 score.
 //
-// So an ATT&CK mapping must clear four gates, three structural and one
+// Phase 6.3 added two more gates in front of these, and they are the ones that
+// close the hole Phase 5 documented:
+//
+//   0a. CATALOGUE. The technique id must exist in the pinned, checksum-verified
+//       local MITRE ATT&CK Enterprise catalogue, must not be revoked or
+//       deprecated, and its title must name it. `T9999` — which passes every
+//       gate below — is now refused. See frameworkCatalogueRules; it fails
+//       CLOSED, so a missing catalogue refuses the mapping rather than
+//       reverting to the format-only check.
+//   0b. EVIDENCE INTEGRITY. Every mapping, in every family, must carry a
+//       verbatim quote from a named source record plus SEPARATE evidence and
+//       mapping confidences. The quote's verbatim-ness is checked against the
+//       real record inside the write transaction, by frameworkEvidenceService.
+//
+// So an ATT&CK mapping must clear four further gates, three structural and one
 // lexical:
 //
 //   1. evidenceBasis MUST be OBSERVED_BEHAVIOR. The other three bases are
@@ -103,11 +117,35 @@ const COMPLIANCE_DISCLAIMER =
   "state that a control is implemented, audited, assessed or compliant, and does not state " +
   "that an ATT&CK technique was executed beyond what its rationale asserts.";
 
-// Carried alongside every reference id and title. This phase pins no local
-// catalogue, so claiming validation would be a fabrication.
+// Carried alongside every reference id and title.
+//
+// Phase 6.3 changed what this can honestly say. MITRE ATT&CK references are now
+// validated against a pinned, hash-verified local Enterprise catalogue, so the
+// Phase 5 admission ("this system pins no local framework catalogue") is no
+// longer true FOR ATT&CK. It is still exactly true for NIST CSF and CIS
+// Controls, which remain format-checked only — so the disclaimer now
+// distinguishes the two rather than making one claim about all three. Saying
+// "validated" about a CSF subcategory nothing here checks would be the same
+// fabrication in the opposite direction.
 const CATALOGUE_DISCLAIMER =
-  "Framework reference identifiers and titles are analyst-entered and format-checked only. " +
-  "This system pins no local framework catalogue, so no reference is verified to exist.";
+  "MITRE ATT&CK references are validated against a pinned, checksum-verified local Enterprise " +
+  "catalogue: an unknown, revoked or deprecated technique id is refused. NIST CSF and CIS " +
+  "Controls references remain analyst-entered and format-checked only — no catalogue is pinned " +
+  "for those families, so no CSF or CIS reference is verified to exist.";
+
+// Carried on every read path beside a row that predates catalogue validation,
+// or that carries no evidence quote and confidences.
+//
+// Rows written before Phase 6.3 are NOT retro-validated and NOT rewritten. The
+// mapping history is evidence; silently re-checking an old row against a
+// catalogue that did not exist when it was written would either destroy the
+// record of what was actually known at the time, or — worse — mark it verified
+// when nothing verified it. So old rows keep their nulls and every read path
+// labels them for what they are.
+const LEGACY_MAPPING_NOTE =
+  "Recorded before catalogue validation and evidence-quote verification were introduced. " +
+  "Its reference was format-checked only, and it carries no verbatim evidence quote or " +
+  "confidence values. It is shown unchanged and is not claimed to be verified.";
 
 // --- Bounds -----------------------------------------------------------------
 const MAX_FRAMEWORK_VERSION_LENGTH = 32;
@@ -124,10 +162,15 @@ const MAX_REMOVAL_REASON_LENGTH = 1000;
 // "ATT&CK v17.1 Enterprise" — and refuses an empty or control-character value.
 const FRAMEWORK_VERSION_PATTERN = /^[A-Za-z0-9][A-Za-z0-9 .&_+/-]{0,31}$/;
 
-// Per-family reference id shapes. These are FORMAT checks, not catalogue
-// lookups: T9999 passes the ATT&CK pattern and does not exist. That limitation
-// is stated in CATALOGUE_DISCLAIMER and repeated on every read path rather
-// than being quietly hidden behind a pattern that looks authoritative.
+// Per-family reference id shapes.
+//
+// For NIST CSF and CIS Controls these are still FORMAT checks and nothing more:
+// no catalogue is pinned for those families, so a well-shaped id that names
+// nothing passes. CATALOGUE_DISCLAIMER says so on every read path.
+//
+// For MITRE ATT&CK the pattern is now only a cheap pre-filter. The AUTHORITY is
+// frameworkCatalogueRules.assertAttackCatalogueReference, which looks the id up
+// in the pinned catalogue — so T9999, which passes this pattern, is refused.
 const REFERENCE_ID_PATTERNS = Object.freeze({
   // Enterprise technique or sub-technique: T1021 / T1021.001
   MITRE_ATTACK: /^T\d{4}(\.\d{3})?$/,
@@ -262,48 +305,33 @@ const RESIDUAL_STOPWORDS = Object.freeze(
 // ATT&CK rationale counts as saying something beyond the exposure signals.
 const MIN_ATTACK_RESIDUAL_WORDS = 6;
 
-// Closed rejection vocabulary. Returned to the caller (an analyst needs to be
-// told what to fix) and safe to place in an audit reason: every value is a
-// literal from this table, never free text and never a database message.
-const MAPPING_REJECTION_CODES = Object.freeze({
-  ATTACK_REQUIRES_OBSERVED_BEHAVIOR: "ATTACK_REQUIRES_OBSERVED_BEHAVIOR",
-  ATTACK_RATIONALE_TOO_SHORT: "ATTACK_RATIONALE_TOO_SHORT",
-  ATTACK_RATIONALE_NOT_BEHAVIOURAL: "ATTACK_RATIONALE_NOT_BEHAVIOURAL",
-  ATTACK_EXPOSURE_ONLY_RATIONALE: "ATTACK_EXPOSURE_ONLY_RATIONALE",
-  ATTACK_EVIDENCE_NOT_LINKED: "ATTACK_EVIDENCE_NOT_LINKED",
-  EVIDENCE_FINDING_NOT_LINKED: "EVIDENCE_FINDING_NOT_LINKED",
-  EVIDENCE_FINDING_REQUIRED_FOR_SCOPE: "EVIDENCE_FINDING_REQUIRED_FOR_SCOPE",
-  CASE_NOT_ORGANIZATION_BOUND: "CASE_NOT_ORGANIZATION_BOUND",
-  MAPPING_NOT_CURRENT: "MAPPING_NOT_CURRENT",
-  MAPPING_NOT_FOR_CASE: "MAPPING_NOT_FOR_CASE",
-});
+// The closed rejection vocabulary and the three error types moved to
+// frameworkMappingErrors.js in Phase 6.3, so the new pure rule modules
+// (frameworkCatalogueRules, frameworkEvidenceRules) can throw the same types
+// without a require cycle back through this module. Re-exported below, so every
+// existing import site keeps working unchanged.
+const {
+  MAPPING_REJECTION_CODES,
+  FrameworkMappingValidationError,
+  FrameworkMappingNotFoundError,
+  FrameworkMappingStateError,
+} = require("./frameworkMappingErrors");
 
-class FrameworkMappingValidationError extends Error {
-  constructor(message, fields, code) {
-    super(message);
-    this.name = "FrameworkMappingValidationError";
-    this.fields = Array.isArray(fields) ? fields : [];
-    this.code = typeof code === "string" ? code : null;
-  }
-}
+const {
+  assertAttackCatalogueReference,
+  assertAttackFrameworkVersion,
+  titleMatchesTechnique,
+} = require("./frameworkCatalogueRules");
 
-class FrameworkMappingNotFoundError extends Error {
-  constructor(message) {
-    super(message);
-    this.name = "FrameworkMappingNotFoundError";
-  }
-}
-
-// A well-formed request the durable state refuses (case not organization-bound,
-// evidence not linked, mapping row not current). Controllers map it to 409,
-// never 400 — the caller's input was fine, the world is not.
-class FrameworkMappingStateError extends Error {
-  constructor(message, code) {
-    super(message);
-    this.name = "FrameworkMappingStateError";
-    this.code = typeof code === "string" ? code : null;
-  }
-}
+const {
+  CONFIDENCE_LEVELS,
+  CONFIDENCE_LEVEL_VALUES,
+  EVIDENCE_QUOTE_SOURCES,
+  EVIDENCE_QUOTE_SOURCE_VALUES,
+  MIN_EVIDENCE_QUOTE_LENGTH,
+  MAX_EVIDENCE_QUOTE_LENGTH,
+  normalizeEvidenceIntegrity,
+} = require("./frameworkEvidenceRules");
 
 function isPlainObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -405,7 +433,18 @@ function normalizeReferenceId(value, framework) {
   if (!pattern || !pattern.test(canonical)) {
     throw new FrameworkMappingValidationError(
       REFERENCE_ID_HINTS[framework] || "referenceId is not valid for this framework",
-      ["referenceId"]
+      ["referenceId"],
+      // Phase 6.3: for ATT&CK this carries the catalogue code rather than a
+      // null one. A malformed id is definitionally not in the catalogue, and an
+      // analyst who typed "T1021.1" gets the same closed code — and the same
+      // "this technique does not exist" meaning — as one who typed "T9999",
+      // rather than a rejection with no machine-readable reason at all.
+      //
+      // CSF and CIS keep a null code: no catalogue is pinned for them, so
+      // "not in the catalogue" would be a claim this system cannot make.
+      framework === FRAMEWORK_FAMILIES.MITRE_ATTACK
+        ? MAPPING_REJECTION_CODES.ATTACK_TECHNIQUE_NOT_IN_CATALOGUE
+        : undefined
     );
   }
   return canonical;
@@ -489,13 +528,26 @@ function assertFrameworkObligations({ framework, evidenceBasis, rationale }) {
  * Normalizes and validates one mapping's content, whether it came from an
  * analyst form or from an AI provider. ONE function so a suggestion can never
  * be held to a weaker standard than a hand-written mapping — that equivalence
- * is the reason promotion is safe.
+ * is the reason promotion is safe, and Phase 6.3 preserved it deliberately:
+ * the catalogue gate and the evidence-integrity gate were added HERE rather
+ * than in the manual controller, so both arrive on the AI path for free and
+ * neither can be relaxed for one caller without being relaxed for both.
  *
  * Deliberately does NOT accept actor, source, state, effectiveAt, current keys
  * or any other internal field: those are server-decided, and a caller that
- * could set them could forge provenance.
+ * could set them could forge provenance. `catalogueVerified`,
+ * `catalogueVersion`, `catalogueChecksum` and `evidenceQuoteLocator` are on that
+ * list too — a caller that could set them could claim a verification that never
+ * ran. They are derived here and by the service, never read from `raw`.
+ *
+ * @param {object} raw
+ * @param {object} [options]
+ * @param {object} [options.attackCatalogue] the pinned catalogue, exposing
+ *        `attackVersion`, `checksum` and `findTechnique(id)`. REQUIRED for a
+ *        MITRE_ATTACK mapping — its absence is a rejection, never a downgrade
+ *        to format-only checking. See frameworkCatalogueRules.
  */
-function normalizeMappingContent(raw) {
+function normalizeMappingContent(raw, options = {}) {
   if (!isPlainObject(raw)) {
     throw new FrameworkMappingValidationError("mapping content must be an object", []);
   }
@@ -503,9 +555,9 @@ function normalizeMappingContent(raw) {
   const framework = assertMemberOf(raw.framework, FRAMEWORK_FAMILY_VALUES, "framework");
   const mappingScope = assertMemberOf(raw.mappingScope, MAPPING_SCOPE_VALUES, "mappingScope");
   const evidenceBasis = assertMemberOf(raw.evidenceBasis, EVIDENCE_BASIS_VALUES, "evidenceBasis");
-  const frameworkVersion = normalizeFrameworkVersion(raw.frameworkVersion);
-  const referenceId = normalizeReferenceId(raw.referenceId, framework);
-  const referenceTitle = normalizeBoundedText(raw.referenceTitle, {
+  let frameworkVersion = normalizeFrameworkVersion(raw.frameworkVersion);
+  let referenceId = normalizeReferenceId(raw.referenceId, framework);
+  let referenceTitle = normalizeBoundedText(raw.referenceTitle, {
     field: "referenceTitle",
     maxLength: MAX_REFERENCE_TITLE_LENGTH,
     required: true,
@@ -534,6 +586,47 @@ function normalizeMappingContent(raw) {
 
   assertFrameworkObligations({ framework, evidenceBasis, rationale });
 
+  // --- Evidence integrity (Phase 6.3) -------------------------------------
+  // Required for EVERY family, not only ATT&CK. A CSF or CIS mapping is a
+  // weaker claim than a technique assertion, but it is still a claim about
+  // this constituent's situation, and "which record made you think so?" is a
+  // fair question to be able to answer about all three.
+  const evidence = normalizeEvidenceIntegrity({
+    evidenceQuote: raw.evidenceQuote,
+    evidenceQuoteSource: raw.evidenceQuoteSource,
+    evidenceConfidence: raw.evidenceConfidence,
+    mappingConfidence: raw.mappingConfidence,
+    evidenceFindingId,
+  });
+
+  // --- Catalogue validation (Phase 6.3) -----------------------------------
+  // ATT&CK only: it is the only family with a pinned catalogue. NIST CSF and
+  // CIS keep their format check and their honest disclaimer.
+  let catalogueVerified = false;
+  let catalogueVersion = null;
+  let catalogueChecksum = null;
+  let attackIsSubTechnique = null;
+  let attackParentTechniqueId = null;
+  let attackTactics = null;
+
+  if (framework === FRAMEWORK_FAMILIES.MITRE_ATTACK) {
+    const resolved = assertAttackCatalogueReference(
+      { referenceId, referenceTitle, frameworkVersion },
+      options.attackCatalogue
+    );
+    referenceId = resolved.referenceId;
+    // Canonical MITRE spelling, adopted only after the supplied title was
+    // confirmed to name this technique. A mismatch threw above.
+    referenceTitle = resolved.referenceTitle;
+    frameworkVersion = resolved.frameworkVersion;
+    catalogueVerified = true;
+    catalogueVersion = resolved.catalogueVersion;
+    catalogueChecksum = resolved.catalogueChecksum;
+    attackIsSubTechnique = resolved.isSubTechnique;
+    attackParentTechniqueId = resolved.parentTechniqueId;
+    attackTactics = resolved.tactics;
+  }
+
   return Object.freeze({
     framework,
     frameworkVersion,
@@ -543,6 +636,20 @@ function normalizeMappingContent(raw) {
     evidenceBasis,
     rationale,
     evidenceFindingId,
+    evidenceQuote: evidence.evidenceQuote,
+    evidenceQuoteSource: evidence.evidenceQuoteSource,
+    evidenceConfidence: evidence.evidenceConfidence,
+    mappingConfidence: evidence.mappingConfidence,
+    catalogueVerified,
+    catalogueVersion,
+    catalogueChecksum,
+    // Derived catalogue facts. Not persisted on the mapping row — they belong
+    // to the catalogue, not to this assertion, and duplicating them would let
+    // the two disagree after a catalogue upgrade. Carried here so the service
+    // and the analytics surface can use them without a second lookup.
+    attackIsSubTechnique,
+    attackParentTechniqueId,
+    attackTactics: attackTactics === null ? null : Object.freeze(attackTactics),
   });
 }
 
@@ -583,6 +690,20 @@ module.exports = {
   ATTACK_REQUIRED_EVIDENCE_BASIS,
   COMPLIANCE_DISCLAIMER,
   CATALOGUE_DISCLAIMER,
+  LEGACY_MAPPING_NOTE,
+  // Phase 6.3 evidence-integrity vocabulary, re-exported so a consumer needs
+  // only this module for the enum values it validates against.
+  CONFIDENCE_LEVELS,
+  CONFIDENCE_LEVEL_VALUES,
+  EVIDENCE_QUOTE_SOURCES,
+  EVIDENCE_QUOTE_SOURCE_VALUES,
+  MIN_EVIDENCE_QUOTE_LENGTH,
+  MAX_EVIDENCE_QUOTE_LENGTH,
+  normalizeEvidenceIntegrity,
+  // Phase 6.3 catalogue validation.
+  assertAttackCatalogueReference,
+  assertAttackFrameworkVersion,
+  titleMatchesTechnique,
   MAX_FRAMEWORK_VERSION_LENGTH,
   MAX_REFERENCE_ID_LENGTH,
   MAX_REFERENCE_TITLE_LENGTH,
