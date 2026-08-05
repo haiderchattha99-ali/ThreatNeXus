@@ -69,7 +69,7 @@ async function auditDenial(req, reason, auditLogger) {
 function createGuard(check, reason, options = {}) {
   const auditLogger = options.auditLogger || safeLogAuditEvent;
 
-  return async function authorize(req, res, next) {
+  const guard = async function authorize(req, res, next) {
     if (!req || !req.user) {
       await auditDenial(req, `${reason} (unauthenticated)`, auditLogger);
       return sendDenial(req, res, 401, UNAUTHENTICATED_MESSAGE);
@@ -90,6 +90,23 @@ function createGuard(check, reason, options = {}) {
 
     return next();
   };
+
+  // Phase 7 — a machine-readable marker so the route census in
+  // tests/integration/phase7RouteCensus.test.js can state, for every route the
+  // application mounts, which authorization guard actually stands in front of
+  // it. Reading that off the function NAME would be guesswork: Express reports
+  // most wrapped handlers as "handle" or "<anonymous>", so a route that lost
+  // its guard and a route whose guard is minified look identical.
+  //
+  // This is metadata only. Nothing in the request path reads it, and removing
+  // it would not change a single authorization decision — it would only make
+  // the census unable to see the decision being made.
+  Object.defineProperty(guard, "tnxGuard", {
+    value: Object.freeze({ ...(options.describe || {}), reason }),
+    enumerable: false,
+  });
+
+  return guard;
 }
 
 // Exact role match — see hasRole. requireRole("ANALYST") does not admit ADMIN;
@@ -99,7 +116,7 @@ function requireRole(requiredRole, options) {
   return createGuard(
     (userRole) => hasRole(userRole, requiredRole),
     `Requires role: ${requiredRole}`,
-    options
+    { ...options, describe: { kind: "role", roles: [requiredRole] } }
   );
 }
 
@@ -112,7 +129,7 @@ function requireAnyRole(requiredRoles, options) {
   return createGuard(
     (userRole) => hasAnyRole(userRole, requiredRoles),
     `Requires one of roles: ${requiredRoles.join(", ")}`,
-    options
+    { ...options, describe: { kind: "role", roles: [...requiredRoles] } }
   );
 }
 
@@ -121,7 +138,7 @@ function requireCapability(capability, options) {
   return createGuard(
     (userRole) => hasCapability(userRole, capability),
     `Requires capability: ${capability}`,
-    options
+    { ...options, describe: { kind: "capability", capabilities: [capability] } }
   );
 }
 
@@ -134,7 +151,7 @@ function requireAnyCapability(capabilities, options) {
   return createGuard(
     (userRole) => hasAnyCapability(userRole, capabilities),
     `Requires one of capabilities: ${capabilities.join(", ")}`,
-    options
+    { ...options, describe: { kind: "capability", capabilities: [...capabilities] } }
   );
 }
 

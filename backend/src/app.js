@@ -2,6 +2,10 @@ const express = require("express");
 const cors = require("cors");
 
 const env = require("./config/env");
+const {
+  authRateLimiter,
+  uploadRateLimiter,
+} = require("./config/rateLimiters");
 const requestContext = require("./middleware/requestContext");
 const normalizeMulterError = require("./middleware/normalizeMulterError");
 const errorHandler = require("./middleware/errorHandler");
@@ -49,10 +53,18 @@ app.use(
 app.use(express.json({ limit: env.UPLOAD_MAX_BYTES }));
 
 // Routes
-app.use("/api/auth", authRoutes);
+//
+// Phase 7 — the auth and upload buckets are mounted at the router prefix
+// because every route inside each of those two routers belongs to the surface
+// being limited (authRoutes is login + register; reportRoutes is the single
+// upload endpoint). The provider bucket is NOT mounted this way: its routers
+// also carry read endpoints, and rate-limiting a read because it shares a
+// prefix with a write would be an availability bug, not a control. It is
+// applied per-route inside those routers instead.
+app.use("/api/auth", authRateLimiter, authRoutes);
 app.use("/api/profile", profileRoutes);
 app.use("/api/threats", threatRoutes);
-app.use("/api/reports", reportRoutes);
+app.use("/api/reports", uploadRateLimiter, reportRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/cases", caseRoutes);
 app.use("/api/notifications", notificationRoutes);
