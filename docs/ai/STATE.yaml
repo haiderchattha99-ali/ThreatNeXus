@@ -1,82 +1,65 @@
 {
   "schema_version": 1,
-  "ticket": "TNX-P6.2.1",
-  "title": "Cleanup checkpoint: dashboard refresh 403 UX + CI comment correction",
+  "ticket": "TNX-P6.3-ATTACK-CATALOGUE",
+  "title": "Catalogue-backed ATT&CK evidence integrity and navigator",
   "status": "handoff_ready",
-  "owner": "claude",
-  "next_writer": "codex",
+  "owner": "codex",
+  "next_writer": "claude",
   "reviewer": "codex",
-  "branch": "feat/phase-6-frontend-demo-hardening",
-  "worktree": "F:/AI-Worktrees/ThreatNeXus/review-tnx-p6-2",
-  "goal": "Fix the two Phase 6.2 review follow-ups (docs/ai/reviews/TNX-P6.2-REVIEW.md), validate, commit, push. Do not begin Phase 6.3.",
+  "branch": "review/tnx-p6-2",
+  "push_target": "feat/phase-6-frontend-demo-hardening",
+  "worktree": "F:\\AI-Worktrees\\ThreatNeXus\\review-tnx-p6-2",
+  "starting_commit": "96db6ce71e5f3cb853802729b229015d9f435345",
+  "goal": "Pin and verify Enterprise ATT&CK 19.1, enforce exact catalogue and verbatim evidence integrity for manual and AI-promoted mappings, support explicit no-applicable determinations, and deliver a truthful role-readable navigator without a fabricated coverage percentage.",
   "scope": {
-    "allowed": [
-      ".github/workflows/ci.yml",
-      "frontend/src/pages/Dashboard.jsx",
-      "frontend/e2e/session.spec.js",
-      "docs/ai/"
+    "included": [
+      "Pinned local ATT&CK catalogue and integrity manifest",
+      "Additive Prisma evidence-integrity migration",
+      "Manual and AI mapping validation parity",
+      "Explicit no-applicable mapping decisions",
+      "Read-only ATT&CK catalogue and navigator APIs",
+      "Role-aware responsive ATT&CK frontend",
+      "Evaluator, unit, integration, Playwright, and CI gates",
+      "Demo seed and AI-team documentation"
     ],
     "excluded": [
-      "backend/tests/integration/phase6ReadRouteAuthorization.test.js",
-      "docs/codex/",
-      "backend/.env",
-      "prisma/migrations/",
-      "backend/src/"
+      "Live AI providers",
+      "New intelligence providers",
+      "Scheduled Shadowserver ingestion",
+      "ATT&CK coverage percentages",
+      "Risk v1 or lifecycle changes",
+      "backend/.env"
     ]
   },
-  "acceptance_criteria": [
-    "A dashboard refresh 403 preserves the session and the last valid snapshot, and renders explicit access-refused wording instead of the generic refresh-failure banner",
-    "The locked 401-signs-out / 403-does-not axios interceptor behavior is unchanged",
-    "No backend authorization semantics changed",
-    "frontend/e2e/session.spec.js asserts the new wording",
-    "The CI comment about the disposable E2E password states honestly that it is an intentional CI-only literal, not a secret that is never committed",
-    "No GitHub secret introduced for the dummy password; CI behavior otherwise unchanged",
-    "All exit gates pass; no live key read, printed, transmitted, or committed",
-    "Branch fast-forward pushed to feat/phase-6-frontend-demo-hardening"
-  ],
   "completed": [
-    "Dashboard.jsx: added errorStatus state captured from the failed refresh's response status",
-    "Dashboard.jsx: refresh-failure banner renders explicit 'Access refused...' wording when errorStatus === 403, keeping the generic 'Refresh failed.' wording for all other failures; session and last snapshot preservation unchanged (no interceptor or auth logic touched)",
-    "frontend/e2e/session.spec.js: 403 test now asserts the 'Access refused.' text and asserts the generic 'Refresh failed.' text is absent",
-    ".github/workflows/ci.yml: corrected the seed-step comment to state the E2E password is an intentional disposable CI-only literal, not a secret that is 'never committed'",
-    "Ran full local validation against the real stack (see validation block)"
-  ],
-  "current_work": "None. Fixes committed and pushed; ticket closed pending independent review.",
-  "files_changed": [
-    ".github/workflows/ci.yml",
-    "frontend/src/pages/Dashboard.jsx",
-    "frontend/e2e/session.spec.js",
-    "docs/ai/"
+    "Pinned official MITRE Enterprise ATT&CK 19.1 at upstream commit 6c37199 with SHA-256 d59e40e9d114a92af2f170a0af729bcbd578f960c7b12f51b0f104305e816398",
+    "Verified 15 tactics, 858 techniques, 493 sub-techniques, and 697 currently mappable references",
+    "Added fail-closed runtime catalogue validation and preserved honest historical reads",
+    "Added bounded verbatim quote/source evidence plus separate evidence and mapping confidence",
+    "Applied identical catalogue and evidence gates to manual and AI-promoted mappings",
+    "Added explicit reasoned no-applicable determinations with audit-safe withdrawal",
+    "Added the read-only ATT&CK navigator API and premium responsive frontend for all four roles",
+    "Added raw mapping counts, review queue, case/finding evidence links, provenance, and catalogue checksum display",
+    "Kept AI disabled by default and performed no live provider calls",
+    "Updated CI migration order, catalogue verification, Phase 6.3 evaluator, and Chromium coverage"
   ],
   "validation": {
-    "baseline": [
-      "cd frontend && npm run lint && npm test && npm run build",
-      "cd backend && TNX_SKIP_DOTENV=true DATABASE_URL=<disposable> npx prisma migrate deploy && node src/scripts/seedUsers.js && npm run seed:demo",
-      "cd backend && TNX_SKIP_DOTENV=true DATABASE_URL=<disposable> PORT=5057 JWT_SECRET=<ci-only> CORS_ORIGIN=http://127.0.0.1:4182 IOC_ENRICHMENT_PROVIDER=mock AI_ENABLED=false node server.js",
-      "cd frontend && VITE_API_BASE_URL=http://127.0.0.1:5057/api npm run build && npx vite preview --port 4182 --strictPort",
-      "cd frontend && E2E_SKIP_WEBSERVER=1 E2E_BASE_URL=http://127.0.0.1:4182 E2E_PASSWORD=<ci-only> npx playwright test e2e/session.spec.js",
-      "cd frontend && E2E_SKIP_WEBSERVER=1 E2E_BASE_URL=http://127.0.0.1:4182 E2E_PASSWORD=<ci-only> npx playwright test"
-    ],
-    "passing": [
-      "frontend lint exit 0 (same 6 pre-existing non-blocking warnings, unrelated to this change)",
-      "frontend unit tests: 11 files / 139 passed",
-      "frontend production build: ~292 kB gzip, no secret-shaped strings in dist/",
-      "disposable PostgreSQL database migrated from zero (17 migrations, unchanged) and seeded via real REST/seed scripts, on dedicated ports 5057/4182 to avoid the known stale-server trap",
-      "focused e2e/session.spec.js: 3/3 passed, including the updated 403 access-refused wording assertion",
-      "full Chromium Playwright suite: 36/36 passed",
-      "no backend/.env present or read in this worktree; only .env.example / .env.test.example tracked",
-      "git diff of touched files reviewed; no credential-shaped literal introduced"
-    ],
-    "failing": []
+    "catalogue": "PASS — Enterprise v19.1 checksum, 15 tactics, 858 techniques, 697 mappable",
+    "prisma": "PASS — schema valid, 18 migrations deploy from zero, none pending, no schema drift",
+    "backend": "PASS — 122 files / 2,984 tests against real PostgreSQL with serial file execution",
+    "frontend": "PASS — lint exit 0 with the same six pre-existing Fast Refresh warnings; 12 files / 143 tests; production build passed",
+    "browser": "PASS — Chromium 42/42 against the real REST stack; four roles; desktop/tablet/mobile; keyboard and reduced motion",
+    "evaluators": "PASS — Phase 1 (9), Risk v1 (contract + 19), Phase 3 (12/151 assertions), Phase 4 (14/151), Phase 5 (14/150), Phase 6.3 (13/108)",
+    "live_browser": "PASS — ADMIN, ANALYST, REVIEWER, VIEWER; 1440x900, 1024x768, 390x844; no console warnings/errors; no invisible regions or horizontal overflow",
+    "ci_workflow": "PASS local parse; remote GitHub Actions pending first push of this checkpoint",
+    "secret_hygiene": "PASS — no live key read, printed, transmitted, copied, placed in frontend code, or committed"
   },
   "known_issues": [
-    "Finding closure still has no production write path; recurrence and recurrence-driven case reopening are proven only by the evaluators, not reachable through the running application. This is locked lifecycle semantics and was deliberately not changed.",
-    "The browser suite is Chromium-only by design; no Firefox or WebKit claim is made.",
-    "Stale backend/preview/dev servers from earlier sessions may still be bound to ports 5000, 4173, 5173. This run used dedicated ports 5057/4182 and left no new stale processes; the older ones were not this ticket's responsibility to clean up."
+    "Finding closure still has no production write path, so recurrence/reopen remains evaluator-proven but unreachable through the running UI.",
+    "Chromium is the committed browser gate; Firefox and WebKit are not claimed.",
+    "The existing React Router RSC-only advisory remains unreachable in this client-only SPA.",
+    "A parallel full backend run produced one NOT_CLAIM_OWNER lease collision; the exact file passed 19/19 alone and the complete suite passed 2,984/2,984 with serial file execution."
   ],
-  "decisions": [],
-  "next_action": "Codex reviews the TNX-P6.2.1 diff (docs/ai/reviews/) before Phase 6.3 is authorized. Read-only until the review is recorded.",
-  "next_command": "git fetch origin && git log --oneline origin/feat/phase-6-frontend-demo-hardening -3 && git diff <prior-tip>..HEAD",
-  "checkpoint_ref": "see git log on feat/phase-6-frontend-demo-hardening for the TNX-P6.2.1 commit hash",
-  "updated_at": "2026-08-05"
+  "next_action": "Push this checkpoint, wait for GitHub Actions to pass, release the writer lock, merge accepted Phase 6 work into main, then begin Phase 7 from updated main.",
+  "updated_at": "2026-08-05T10:27:35.2017610Z"
 }

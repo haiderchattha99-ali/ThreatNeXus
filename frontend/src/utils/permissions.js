@@ -22,6 +22,7 @@ export const PAGE_CAPABILITIES = {
   findings: CAPABILITIES.READ_FINDINGS,
   findingDetail: CAPABILITIES.READ_FINDINGS,
   analytics: CAPABILITIES.READ_FINDINGS,
+  attack: CAPABILITIES.READ_CASES,
   upload: CAPABILITIES.INGEST_REPORTS,
   // Phase 3 split the case group's reads from its writes. The PAGE capability
   // is the READ one, because REVIEWER (who must read a case to decide its

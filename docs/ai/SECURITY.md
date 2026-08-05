@@ -40,6 +40,13 @@ approve it. Notification approval binds to an exact immutable revision — editi
 Every write path validates its input and names the offending field. Ingestion rejects structurally
 invalid rows without failing the whole report. Error responses never echo secrets.
 
+Enterprise ATT&CK mappings are validated against the pinned local catalogue and cannot accept an
+invented or obsolete current reference. They must preserve a bounded verbatim quote from stored
+case/finding evidence, its locator/source, and separate evidence and mapping confidence. AI output
+passes through the same validation and remains only a suggestion; it cannot approve itself or
+bypass the human mapping writer. Explicit no-applicable determinations are reasoned, auditable
+analyst decisions, not inferred empty states.
+
 ## Secret handling
 
 API keys come from environment variables only and never appear in logs, error responses, the browser
@@ -65,6 +72,7 @@ blocks ingestion.
 `backend/tests/` (unit, middleware, integration, including real-PostgreSQL concurrency),
 `eval/run_*_gate.js`, and `frontend/e2e/`. CI additionally scans for committed `.env` files,
 credential-shaped literals, generated artifacts, and secret-shaped literals in the production bundle.
+It also verifies the pinned ATT&CK catalogue checksum and runs the Phase 6.3 evidence-integrity gate.
 
 ## Known risks and accepted exceptions
 

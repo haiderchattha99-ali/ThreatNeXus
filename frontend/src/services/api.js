@@ -191,6 +191,38 @@ export const frameworkMappingService = {
 
   removeMapping: (caseId, mappingId, reason) =>
     apiClient.post(`/cases/${caseId}/framework-mappings/${mappingId}/remove`, { reason }),
+
+  // Phase 6.3 — the explicit "no reference in this framework applies to this
+  // case" determination. A first-class recordable outcome, NOT the absence of a
+  // mapping: the point is that "we looked and nothing applies" stops being
+  // indistinguishable from "nobody has looked yet".
+  listNoApplicable: (caseId) =>
+    apiClient.get(`/cases/${caseId}/framework-mappings/no-applicable`),
+
+  assertNoApplicable: (caseId, framework, rationale) =>
+    apiClient.post(`/cases/${caseId}/framework-mappings/no-applicable`, { framework, rationale }),
+
+  withdrawNoApplicable: (caseId, assertionId, reason) =>
+    apiClient.post(`/cases/${caseId}/framework-mappings/no-applicable/${assertionId}/withdraw`, {
+      reason,
+    }),
+}
+
+// Phase 6.3 — the pinned MITRE ATT&CK catalogue and the navigator read model.
+//
+// Both are reads behind read:cases. Neither can be written over HTTP: the
+// catalogue changes only when a human re-runs the build script and commits the
+// result, and the navigator changes only as a consequence of mappings written
+// through the case-scoped routes above.
+export const attackService = {
+  // Mappable techniques only by default — the picker must not offer a technique
+  // the server will refuse. `retiredExcluded` reports how many were omitted, so
+  // the omission is visible rather than silent.
+  getCatalogue: (params) => apiClient.get('/attack/catalogue', { params }),
+
+  // Raw counts only. There is no coverage percentage in this response, and no
+  // denominator anywhere behind it.
+  getNavigator: (params) => apiClient.get('/attack/navigator', { params }),
 }
 
 // AI assistance is OPTIONAL and disabled by default. Every call below is safe

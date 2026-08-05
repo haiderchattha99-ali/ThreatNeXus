@@ -6,7 +6,7 @@ name: CI
 #   1. nothing secret or generated is committed
 #   2. the Prisma schema is valid and its migration history is intact
 #   3. `migrate deploy` succeeds from an EMPTY database (not from a dev drift)
-#   4. the migration COUNT and ORDER are exactly what Phase 6 froze
+#   4. the migration COUNT and ORDER match the reviewed Phase 6.3 history
 #   5. the backend suite passes against real PostgreSQL
 #   6. the frontend lints, tests and builds for production
 #   7. the core evaluators pass against a disposable database
@@ -113,10 +113,14 @@ jobs:
           DATABASE_URL: ${{ env.TEST_DATABASE_URL }}
         run: npx prisma validate
 
-      - name: Migration count and order are exactly what Phase 6 froze
+      - name: Verify the pinned MITRE ATT&CK catalogue
+        working-directory: backend
+        run: npm run attack:verify
+
+      - name: Migration count and order match the reviewed Phase 6.3 history
         working-directory: backend
         run: |
-          # Phase 6 added NO migration. Raw filesystem enumeration order (what
+          # Raw filesystem enumeration order (what
           # `find` returns before any explicit sort) is a directory-entry
           # artifact of the underlying filesystem, not a stable contract — it
           # can differ from lexical order on a given runner even though the
@@ -124,7 +128,7 @@ jobs:
           # ask "is find's output already sorted"; it explicitly sorts the
           # actual names and compares them against the frozen canonical list
           # below. If this list changes, the change is deliberate and must be
-          # updated in the same commit — a silent 18th migration, a rename, or
+          # updated in the same commit — a silent migration, a rename, or
           # a reordering cannot slip through.
           expected_migrations=(
             20260718144049_init
@@ -144,6 +148,7 @@ jobs:
             20260731120000_add_phase3_analyst_workflow
             20260803120000_add_phase4_notification_workflow
             20260803140000_add_phase5_framework_mapping_ai_assistance
+            20260805062717_add_phase6_3_attack_catalogue_evidence_integrity
           )
           expected="$(printf '%s\n' "${expected_migrations[@]}")"
           actual="$(find prisma/migrations -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort)"
@@ -154,7 +159,7 @@ jobs:
             echo "::error::Expected $expected_count migrations, found $actual_count."; exit 1
           fi
           if [ "$actual" != "$expected" ]; then
-            echo "::error::Migration directory names do not match the frozen Phase 6 history."
+            echo "::error::Migration directory names do not match the reviewed Phase 6.3 history."
             diff <(echo "$expected") <(echo "$actual") || true
             exit 1
           fi
@@ -473,6 +478,16 @@ jobs:
           ABUSEIPDB_API_KEY: ''
           AI_ENABLED: 'false'
         run: npm run eval:phase5
+
+      - name: eval:phase6.3 (ATT&CK catalogue and evidence integrity)
+        working-directory: backend
+        env:
+          JWT_SECRET: ${{ env.TEST_JWT_SECRET }}
+          CORS_ORIGIN: ${{ env.TEST_CORS_ORIGIN }}
+          IOC_ENRICHMENT_PROVIDER: mock
+          ABUSEIPDB_API_KEY: ''
+          AI_ENABLED: 'false'
+        run: npm run eval:phase6.3
 
   # --------------------------------------------------------------------------
   # Deliberately NOT in the default pipeline.

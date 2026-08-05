@@ -10,6 +10,7 @@ import {
   FiUsers,
   FiSettings,
   FiBarChart2,
+  FiTarget,
 } from 'react-icons/fi'
 
 import { useAuth } from '../hooks/useAuth'
@@ -42,6 +43,7 @@ export const NAV_GROUPS = [
     heading: 'Administration',
     items: [
       { label: 'Analytics', path: '/analytics', icon: FiBarChart2, permission: 'analytics' },
+      { label: 'ATT&CK navigator', path: '/attack', icon: FiTarget, permission: 'attack' },
       { label: 'Organizations', path: '/organizations', icon: FiUsers, permission: 'organizations' },
       { label: 'Settings', path: '/settings', icon: FiSettings, permission: 'settings' },
     ],

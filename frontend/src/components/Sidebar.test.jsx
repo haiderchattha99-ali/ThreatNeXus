@@ -62,6 +62,7 @@ describe('Sidebar navigation visibility', () => {
       'Notifications',
       'Organizations',
       'Analytics',
+      'ATT&CK navigator',
       'Settings',
     ].forEach((label) => expect(screen.getByText(label)).toBeInTheDocument())
   })
@@ -74,6 +75,7 @@ describe('Sidebar navigation visibility', () => {
     // ANALYST still gets the work it's granted for.
     expect(screen.getByText('Report ingestion')).toBeInTheDocument()
     expect(screen.getByText('Cases')).toBeInTheDocument()
+    expect(screen.getByText('ATT&CK navigator')).toBeInTheDocument()
     // Phase 4: an analyst drafts, edits and exports notifications, so the
     // section is theirs too — it is no longer reviewer-only.
     expect(screen.getByText('Notifications')).toBeInTheDocument()
@@ -87,6 +89,7 @@ describe('Sidebar navigation visibility', () => {
     expect(screen.queryByText('Settings')).not.toBeInTheDocument()
     // Phase 3: a reviewer cannot decide a closure on a case they cannot open.
     expect(screen.getByText('Cases')).toBeInTheDocument()
+    expect(screen.getByText('ATT&CK navigator')).toBeInTheDocument()
     // REVIEWER still gets its own review-specific surface.
     expect(screen.getByText('Notifications')).toBeInTheDocument()
   })
@@ -99,6 +102,7 @@ describe('Sidebar navigation visibility', () => {
     expect(screen.getByText('Analytics')).toBeInTheDocument()
     // Phase 3 read-only case oversight is an explicit requirement.
     expect(screen.getByText('Cases')).toBeInTheDocument()
+    expect(screen.getByText('ATT&CK navigator')).toBeInTheDocument()
     ;['Report ingestion', 'Notifications', 'Organizations', 'Settings'].forEach((label) =>
       expect(screen.queryByText(label)).not.toBeInTheDocument()
     )
@@ -114,6 +118,7 @@ describe('Sidebar navigation visibility', () => {
       'Notifications',
       'Organizations',
       'Analytics',
+      'ATT&CK navigator',
       'Settings',
     ].forEach((label) => expect(screen.queryByText(label)).not.toBeInTheDocument())
   })

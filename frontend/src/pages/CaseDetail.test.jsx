@@ -8,6 +8,7 @@ import { CAPABILITIES } from '../constants/capabilities'
 import * as useAuthModule from '../hooks/useAuth'
 import {
   aiMappingService,
+  attackService,
   caseWorkflowService,
   findingTriageService,
   frameworkMappingService,
@@ -59,6 +60,12 @@ vi.mock('../services/api', () => ({
     getHistory: vi.fn(),
     createMapping: vi.fn(),
     removeMapping: vi.fn(),
+    listNoApplicable: vi.fn(),
+    assertNoApplicable: vi.fn(),
+    withdrawNoApplicable: vi.fn(),
+  },
+  attackService: {
+    getCatalogue: vi.fn(),
   },
   aiMappingService: {
     getConfig: vi.fn(),
@@ -199,12 +206,18 @@ beforeEach(() => {
         countMeaning: 'MAPPING_COUNT_NOT_COVERAGE',
         groups: [],
         disclaimer: 'Framework mappings record analyst-associated context only.',
-        catalogueNote: 'This system pins no local framework catalogue.',
+        catalogueNote: 'MITRE ATT&CK references use the pinned local catalogue.',
       },
     },
   })
   frameworkMappingService.getHistory.mockResolvedValue({
     data: { data: { caseId: 4, total: 0, take: 50, skip: 0, history: [] } },
+  })
+  frameworkMappingService.listNoApplicable.mockResolvedValue({
+    data: { data: { caseId: 4, standing: [], history: [] } },
+  })
+  attackService.getCatalogue.mockResolvedValue({
+    data: { data: { catalogue: { attackVersion: 'v19.1', checksum: 'abc123' }, tactics: [], techniques: [], retiredExcluded: 0 } },
   })
   aiMappingService.getConfig.mockResolvedValue({
     data: {

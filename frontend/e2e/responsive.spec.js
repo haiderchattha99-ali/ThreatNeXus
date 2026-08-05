@@ -7,7 +7,7 @@
 import { test, expect } from '@playwright/test'
 import { signIn, expectNoHorizontalOverflow, BREAKPOINTS, collectConsoleProblems } from './support.js'
 
-const PAGES = ['/dashboard', '/analytics', '/findings', '/settings', '/profile', '/organizations']
+const PAGES = ['/dashboard', '/analytics', '/attack', '/findings', '/settings', '/profile', '/organizations']
 
 for (const [name, size] of Object.entries(BREAKPOINTS)) {
   test(`no horizontal overflow at ${name} (${size.width}x${size.height})`, async ({ page }) => {

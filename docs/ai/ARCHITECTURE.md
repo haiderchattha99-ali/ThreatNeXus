@@ -19,7 +19,7 @@ real constituent data.
 |---|---|---|
 | REST API | `backend/src/routes`, `backend/src/controllers` | Everything mounted under `/api` |
 | Domain services | `backend/src/services` | Ingestion, dedup, enrichment, risk, workflow, notification, mapping |
-| Persistence | `backend/prisma` | Prisma + PostgreSQL. **17 migrations, all additive** |
+| Persistence | `backend/prisma` | Prisma + PostgreSQL. **18 migrations, all additive** |
 | Evaluation harness | `eval/` | Drives the real services against a disposable database and hand-authored ground truth |
 | Analyst UI | `frontend/src` | React 19 · Vite 8 (rolldown/oxc) · MUI v9 · React Router 7 · GSAP. No charting library |
 | Browser exit gate | `frontend/e2e` | Playwright, Chromium only, against the real stack |
@@ -36,6 +36,14 @@ notification draft → immutable revision → reviewer approval bound to that ex
 The dashboard reads **one** bounded, read-only snapshot (`GET /api/dashboard/overview`) and performs
 no provider lookup of its own.
 
+Phase 6.3 adds a local, build-time-pinned Enterprise ATT&CK 19.1 catalogue. The runtime never fetches
+MITRE data: `backend/scripts/buildAttackCatalogue.js` produces the reduced catalogue and manifest,
+`attack:verify` checks their SHA-256 integrity, and the API serves one bounded, read-only navigator
+snapshot. Manual and AI-suggested mappings share the same catalogue and evidence validation. A
+mapping cites a verbatim stored quote and carries separate evidence and mapping confidence; an
+analyst may instead record an explicit, reasoned no-applicable determination. Historical mappings
+remain readable even if a future catalogue no longer contains their reference.
+
 ## Trust boundaries
 
 The **backend is the only authorization boundary.** Frontend permission checks are presentation
@@ -46,6 +54,9 @@ server-side and fails closed.
 
 `docs/API_CONTRACT_PHASE0.md` plus the route files under `backend/src/routes/`. Every dashboard
 figure is returned as `{ value, availability, source, asOf }`.
+
+The ATT&CK navigator exposes raw mapping counts only. It does not calculate or display a coverage
+percentage because the system has no truthful denominator for which techniques should apply.
 
 ## Data model
 

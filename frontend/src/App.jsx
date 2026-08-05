@@ -17,6 +17,7 @@ import NotificationDetail from './pages/NotificationDetail'
 import Analytics from './pages/Analytics'
 import Organizations from './pages/Organizations'
 import Settings from './pages/Settings'
+import AttackNavigator from './pages/AttackNavigator'
 import { PAGE_CAPABILITIES } from './utils/permissions'
 import { PageHeader } from './components/ui'
 
@@ -45,6 +46,7 @@ const APP_ROUTES = [
   { path: '/cases', element: <Cases />, capability: PAGE_CAPABILITIES.cases },
   { path: '/cases/:id', element: <CaseDetail />, capability: PAGE_CAPABILITIES.caseDetail },
   { path: '/analytics', element: <Analytics />, capability: PAGE_CAPABILITIES.analytics },
+  { path: '/attack', element: <AttackNavigator />, capability: PAGE_CAPABILITIES.attack },
   // Registered after the list so "/notifications" is never matched as an id.
   { path: '/notifications', element: <Notifications />, capability: PAGE_CAPABILITIES.notifications },
   {
