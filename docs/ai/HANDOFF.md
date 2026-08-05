@@ -123,3 +123,17 @@ provider integration or AI assistance.
   lifecycle rules to make a gate pass.
 - **The D-AI-001 dirty-worktree exception is spent.** All future work starts in a clean AI-team
   worktree under the normal writer-lock protocol. See `docs/ai/DECISIONS.md`.
+
+## Independent review outcome — 2026-08-05
+
+**Decision: APPROVE WITH FOLLOW-UPS.** Codex independently reviewed `252555f..5c2580b`, the
+finalization handoff `c655808`, the six-spec Playwright suite, the E2E CI job, and the changed
+frontend code. There are **0 critical, 0 high, 1 medium, and 1 low** findings. The review found no
+secret exposure, provider call, data fabrication, migration change, authorization regression, or
+test substitution that blocks Phase 6.3.
+
+The detailed review is `docs/ai/reviews/TNX-P6.2-REVIEW.md`.
+
+Phase 6.3 is authorized, but only in a new clean AI-team worktree with the normal writer lock. The
+two follow-ups are recorded in the review and deliberately remain outside Phase 6.3 unless their
+scope is explicitly approved.

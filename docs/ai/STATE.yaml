@@ -1,115 +1,119 @@
-{
-  "schema_version": 1,
-  "ticket": "TNX-P6.2-FINALIZE",
-  "title": "Finalize and publish the Phase 6.2 browser-testing, CI, frontend-hardening and AI-team onboarding checkpoint",
-  "status": "complete",
-  "owner": "claude",
-  "next_writer": "codex",
-  "reviewer": "codex",
-  "branch": "feat/phase-6-frontend-demo-hardening",
-  "worktree": "C:/Users/LENOVO/Desktop/ThreatNeXus",
-  "goal": "Verify, commit with explicit paths, and push the already-started Phase 6.2 checkpoint. Do not begin Phase 6.3.",
-  "scope": {
-    "allowed": [
-      ".github/workflows/ci.yml",
-      "STATUS.md",
-      "frontend/.gitignore",
-      "frontend/README.md",
-      "frontend/docs/archive/",
-      "frontend/package.json",
-      "frontend/package-lock.json",
-      "frontend/playwright.config.js",
-      "frontend/e2e/",
-      "frontend/vite.config.js",
-      "frontend/src/pages/Dashboard.jsx",
-      "frontend/src/components/dashboard/DashboardSections.jsx",
-      "frontend/src/components/ui/States.jsx",
-      ".cursor/rules/00-ai-team.mdc",
-      "GEMINI.md",
-      "docs/ai/"
-    ],
-    "excluded": [
-      "backend/tests/integration/phase6ReadRouteAuthorization.test.js",
-      "docs/codex/",
-      "backend/.env",
-      "prisma/migrations/",
-      "backend/src/"
-    ]
-  },
-  "acceptance_criteria": [
-    "Every owned diff audited and attributable to Phase 6.2 or the requested AI-team initialization",
-    "Playwright suite drives the real frontend and real backend against an isolated migrated database, with providers and AI off",
-    "No test-only credential, synthetic seed value or provider key reaches a committed artifact, bundle or report",
-    "All legitimate exit gates pass without weakening authentication, authorization, validation, auditability or truthful-data semantics",
-    "Protected foreign paths remain unedited and unstaged",
-    "Branch fast-forward pushed and required GitHub Actions jobs green"
-  ],
-  "completed": [
-    "Audited the full owned diff, including the untracked AI-team and Playwright surfaces",
-    "Confirmed LoadingState uses a real 1px screen-reader element instead of MUI numeric width/height",
-    "Confirmed the dashboard entrance skips absent selectors, so an empty reviewer queue raises no GSAP target warning",
-    "Confirmed gsap.fromTo + timeline.revert() + revertOnUpdate leaves nothing stranded at opacity zero under StrictMode",
-    "Confirmed reduced motion (OS and in-app) constructs no timeline and renders the complete final state",
-    "Confirmed data-count-to is absent from the em dash that stands in for a restricted or unavailable figure",
-    "Added frontend/e2e/session.spec.js: real-backend 401 ends the session, 403 does not",
-    "Ran the browser suite against a disposable migrated PostgreSQL database seeded through the real REST routes",
-    "Re-ran backend, frontend and evaluator gates from fresh processes",
-    "Recorded exact validation evidence in STATUS.md",
-    "Recorded the one-time dirty-worktree onboarding exception in docs/ai/DECISIONS.md"
-  ],
-  "current_work": "None. The checkpoint is committed and pushed; the ticket is closed pending independent review.",
-  "files_changed": [
-    ".github/workflows/ci.yml",
-    "STATUS.md",
-    "frontend/.gitignore",
-    "frontend/README.md",
-    "frontend/docs/archive/ (6 files moved + archive notice)",
-    "frontend/package.json",
-    "frontend/package-lock.json",
-    "frontend/playwright.config.js",
-    "frontend/e2e/ (support.js + 6 spec files)",
-    "frontend/vite.config.js",
-    "frontend/src/pages/Dashboard.jsx",
-    "frontend/src/components/dashboard/DashboardSections.jsx",
-    "frontend/src/components/ui/States.jsx",
-    ".cursor/rules/00-ai-team.mdc",
-    "GEMINI.md",
-    "docs/ai/"
-  ],
-  "validation": {
-    "baseline": [
-      "cd backend && env -u JWT_SECRET TEST_DATABASE_URL=<disposable> npx vitest run",
-      "cd frontend && npm run lint && npm test && npm run build",
-      "cd frontend && E2E_SKIP_WEBSERVER=1 E2E_BASE_URL=<preview> E2E_PASSWORD=<local> npx playwright test",
-      "cd backend && EVAL_DATABASE_URL=<disposable> npm run eval:phase1|risk|phase3|phase4|phase5",
-      "cd backend && DATABASE_URL=<fresh> npx prisma validate && npx prisma migrate deploy && npx prisma migrate status"
-    ],
-    "passing": [
-      "backend 118 files / 2922 tests passed, 1 file + 2 tests skipped (real PostgreSQL)",
-      "frontend lint exit 0 (6 pre-existing non-blocking warnings)",
-      "frontend 11 files / 139 tests passed",
-      "frontend production build, ~292 kB gzip, bundle secret scan clean",
-      "Playwright Chromium 36 discovered / 36 passed",
-      "eval:phase1, eval:risk, eval:phase3, eval:phase4, eval:phase5 all PASS",
-      "prisma validate, 17 migrations in canonical order, migrate-from-zero, no drift",
-      "docker compose config valid and fails fast without JWT_SECRET",
-      "CI workflow YAML parses, 7 jobs",
-      "no committed .env, credential literal or generated artifact"
-    ],
-    "failing": []
-  },
-  "known_issues": [
-    "Finding closure still has no production write path; recurrence and recurrence-driven case reopening are proven only by the evaluators, not reachable through the running application. This is locked lifecycle semantics and was deliberately not changed.",
-    "The demonstration dataset contains no recurrence-reopened case, for the reason above.",
-    "seed:demo cannot link two Cedarline Telecom findings because ownership is ISP-attributed; the run reports the 409 honestly rather than forcing the link.",
-    "Stale backend/preview/dev servers from earlier sessions remain bound to ports 5000, 4173 and 5173. They were left untouched. A future browser run must either stop them deliberately or use dedicated ports, because Playwright's reuseExistingServer will otherwise attach to a stale build.",
-    "The browser suite is Chromium-only by design; no Firefox or WebKit claim is made."
-  ],
-  "decisions": [
-    "D-AI-001 — one-time dirty-worktree onboarding exception for this checkpoint only (see docs/ai/DECISIONS.md)"
-  ],
-  "next_action": "Codex performs an independent review of the Phase 6.2 checkpoint on feat/phase-6-frontend-demo-hardening before Phase 6.3 is authorized. Read-only until the review is recorded in docs/ai/reviews/.",
-  "next_command": "git fetch origin && git log --oneline origin/feat/phase-6-frontend-demo-hardening -3 && git diff 252555f..origin/feat/phase-6-frontend-demo-hardening",
-  "checkpoint_ref": "5c2580b56bf14daffaca819b68ab744db16fb8c1 — [TNX-P6.2-FINALIZE] complete browser and CI gates (34 files, +1870/-215), on top of 252555f",
-  "updated_at": "2026-08-05"
+﻿{
+    "schema_version":  1,
+    "ticket":  "TNX-P6.2-REVIEW",
+    "title":  "Independent review of the Phase 6.2 browser-testing, CI, frontend-hardening and AI-team onboarding checkpoint",
+    "status":  "handoff_ready",
+    "owner":  "unassigned",
+    "next_writer":  "claude",
+    "reviewer":  "codex",
+    "branch":  "feat/phase-6-frontend-demo-hardening",
+    "worktree":  "A new clean AI-team worktree is required; the original desktop worktree deliberately retains protected foreign changes.",
+    "goal":  "Perform and record an independent read-only review of the Phase 6.2 checkpoint before authorizing Phase 6.3.",
+    "scope":  {
+                  "allowed":  [
+                                  ".github/workflows/ci.yml",
+                                  "STATUS.md",
+                                  "frontend/.gitignore",
+                                  "frontend/README.md",
+                                  "frontend/docs/archive/",
+                                  "frontend/package.json",
+                                  "frontend/package-lock.json",
+                                  "frontend/playwright.config.js",
+                                  "frontend/e2e/",
+                                  "frontend/vite.config.js",
+                                  "frontend/src/pages/Dashboard.jsx",
+                                  "frontend/src/components/dashboard/DashboardSections.jsx",
+                                  "frontend/src/components/ui/States.jsx",
+                                  ".cursor/rules/00-ai-team.mdc",
+                                  "GEMINI.md",
+                                  "docs/ai/"
+                              ],
+                  "excluded":  [
+                                   "backend/tests/integration/phase6ReadRouteAuthorization.test.js",
+                                   "docs/codex/",
+                                   "backend/.env",
+                                   "prisma/migrations/",
+                                   "backend/src/"
+                               ]
+              },
+    "acceptance_criteria":  [
+                                "Every owned diff audited and attributable to Phase 6.2 or the requested AI-team initialization",
+                                "Playwright suite drives the real frontend and real backend against an isolated migrated database, with providers and AI off",
+                                "No test-only credential, synthetic seed value or provider key reaches a committed artifact, bundle or report",
+                                "All legitimate exit gates pass without weakening authentication, authorization, validation, auditability or truthful-data semantics",
+                                "Protected foreign paths remain unedited and unstaged",
+                                "Branch fast-forward pushed and required GitHub Actions jobs green"
+                            ],
+    "completed":  [
+                      "Audited the full owned diff, including the untracked AI-team and Playwright surfaces",
+                      "Confirmed LoadingState uses a real 1px screen-reader element instead of MUI numeric width/height",
+                      "Confirmed the dashboard entrance skips absent selectors, so an empty reviewer queue raises no GSAP target warning",
+                      "Confirmed gsap.fromTo + timeline.revert() + revertOnUpdate leaves nothing stranded at opacity zero under StrictMode",
+                      "Confirmed reduced motion (OS and in-app) constructs no timeline and renders the complete final state",
+                      "Confirmed data-count-to is absent from the em dash that stands in for a restricted or unavailable figure",
+                      "Added frontend/e2e/session.spec.js: real-backend 401 ends the session, 403 does not",
+                      "Ran the browser suite against a disposable migrated PostgreSQL database seeded through the real REST routes",
+                      "Re-ran backend, frontend and evaluator gates from fresh processes",
+                      "Recorded exact validation evidence in STATUS.md",
+                      "Recorded the one-time dirty-worktree onboarding exception in docs/ai/DECISIONS.md"
+                  ],
+    "current_work":  "None. Independent review completed; Phase 6.3 is authorized in a new clean AI-team worktree.",
+    "files_changed":  [
+                          ".github/workflows/ci.yml",
+                          "STATUS.md",
+                          "frontend/.gitignore",
+                          "frontend/README.md",
+                          "frontend/docs/archive/ (6 files moved + archive notice)",
+                          "frontend/package.json",
+                          "frontend/package-lock.json",
+                          "frontend/playwright.config.js",
+                          "frontend/e2e/ (support.js + 6 spec files)",
+                          "frontend/vite.config.js",
+                          "frontend/src/pages/Dashboard.jsx",
+                          "frontend/src/components/dashboard/DashboardSections.jsx",
+                          "frontend/src/components/ui/States.jsx",
+                          ".cursor/rules/00-ai-team.mdc",
+                          "GEMINI.md",
+                          "docs/ai/"
+                      ],
+    "validation":  {
+                       "baseline":  [
+                                        "cd backend \u0026\u0026 env -u JWT_SECRET TEST_DATABASE_URL=\u003cdisposable\u003e npx vitest run",
+                                        "cd frontend \u0026\u0026 npm run lint \u0026\u0026 npm test \u0026\u0026 npm run build",
+                                        "cd frontend \u0026\u0026 E2E_SKIP_WEBSERVER=1 E2E_BASE_URL=\u003cpreview\u003e E2E_PASSWORD=\u003clocal\u003e npx playwright test",
+                                        "cd backend \u0026\u0026 EVAL_DATABASE_URL=\u003cdisposable\u003e npm run eval:phase1|risk|phase3|phase4|phase5",
+                                        "cd backend \u0026\u0026 DATABASE_URL=\u003cfresh\u003e npx prisma validate \u0026\u0026 npx prisma migrate deploy \u0026\u0026 npx prisma migrate status"
+                                    ],
+                       "passing":  [
+                                       "backend 118 files / 2922 tests passed, 1 file + 2 tests skipped (real PostgreSQL)",
+                                       "frontend lint exit 0 (6 pre-existing non-blocking warnings)",
+                                       "frontend 11 files / 139 tests passed",
+                                       "frontend production build, ~292 kB gzip, bundle secret scan clean",
+                                       "Playwright Chromium 36 discovered / 36 passed",
+                                       "eval:phase1, eval:risk, eval:phase3, eval:phase4, eval:phase5 all PASS",
+                                       "prisma validate, 17 migrations in canonical order, migrate-from-zero, no drift",
+                                       "docker compose config valid and fails fast without JWT_SECRET",
+                                       "CI workflow YAML parses, 7 jobs",
+                                       "no committed .env, credential literal or generated artifact"
+                                   ],
+                       "failing":  [
+
+                                   ]
+                   },
+    "known_issues":  [
+                         "Finding closure still has no production write path; recurrence and recurrence-driven case reopening are proven only by the evaluators, not reachable through the running application. This is locked lifecycle semantics and was deliberately not changed.",
+                         "The demonstration dataset contains no recurrence-reopened case, for the reason above.",
+                         "seed:demo cannot link two Cedarline Telecom findings because ownership is ISP-attributed; the run reports the 409 honestly rather than forcing the link.",
+                         "Stale backend/preview/dev servers from earlier sessions remain bound to ports 5000, 4173 and 5173. They were left untouched. A future browser run must either stop them deliberately or use dedicated ports, because Playwright\u0027s reuseExistingServer will otherwise attach to a stale build.",
+                         "The browser suite is Chromium-only by design; no Firefox or WebKit claim is made.",
+                         "MEDIUM follow-up: a 403 refresh preserves the session correctly, but Dashboard.jsx currently renders the generic refresh-failure banner rather than an explicit access-refused state. See docs/ai/reviews/TNX-P6.2-REVIEW.md.",
+                         "LOW follow-up: CI comments say the disposable E2E password is never committed even though its non-secret CI-only value is intentionally defined in ci.yml. Clarify the wording."
+                     ],
+    "decisions":  [
+                      "D-AI-001 — one-time dirty-worktree onboarding exception for this checkpoint only (see docs/ai/DECISIONS.md)"
+                  ],
+    "next_action":  "Start Phase 6.3 only in a new clean AI-team worktree. Acquire the normal writer lock, read the Phase 6.2 review, and keep the two review follow-ups out of scope unless separately approved.",
+    "next_command":  "Create a clean Phase 6.3 worktree from origin/feat/phase-6-frontend-demo-hardening, then use start-task.ps1 with the Phase 6.3 ATT&CK evidence-navigator ticket.",
+    "checkpoint_ref":  "5c2580b56bf14daffaca819b68ab744db16fb8c1 — Phase 6.2 code checkpoint reviewed; c655808e399b41baa5debb0df2126ac9dec412d5 — Phase 6.2 handoff reviewed",
+    "updated_at":  "2026-08-05T03:27:56.2592374Z"
 }
