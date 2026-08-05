@@ -25,6 +25,20 @@ RUN npx prisma generate
 COPY src ./src
 COPY server.js ./
 
+# The upload staging directory, created here rather than at startup.
+#
+# src/upload/multer.js does `fs.mkdirSync(UPLOAD_TEMP_DIR)` when it is required,
+# which is correct on a developer's machine. In this image it crash-looped: every
+# COPY above runs as root, so /app is root-owned, and the unprivileged runtime
+# user below cannot create a directory inside it. `docker compose up --build`
+# from a clean checkout therefore brought up a backend that exited with
+# EACCES on /app/uploads before it ever listened — found by the Phase 7
+# clean-stack proof.
+#
+# Only this directory changes hands. The source stays root-owned and therefore
+# read-only to the runtime user, which is the property worth keeping.
+RUN mkdir -p /app/uploads && chown node:node /app/uploads
+
 # Runs as the image's built-in unprivileged user rather than root.
 USER node
 

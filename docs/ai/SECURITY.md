@@ -30,7 +30,20 @@ covered by `frontend/e2e/session.spec.js`.
 
 ## Authorization and ownership
 
-`requireCapability` / `requireRole` middleware on every route. Cases are organization-bound. **Two
+`requireCapability` / `requireRole` middleware on every route. Since Phase 7 this is a **structural
+invariant rather than a convention**: `backend/tests/integration/phase7RouteCensus.test.js` walks
+the live Express router tree and fails if any mounted route lacks authentication or a capability
+guard. Exactly two exception lists exist, each entry carrying its reason:
+
+- **Unauthenticated by necessity** — `POST /api/auth/login`, `POST /api/auth/register`, `GET /`.
+  The first two cannot require a credential the caller does not yet have; the third is a fixed
+  liveness banner that reads nothing.
+- **Authenticated but capability-free** — `GET /api/profile` only. It echoes the caller's own
+  token-derived identity and the capability list implied by their role. A capability answers "may
+  this role reach other people's data?", which is not a meaningful question for an endpoint that
+  can return no other subject's data.
+
+A new route added tomorrow is covered the moment it is mounted. Cases are organization-bound. **Two
 self-approval prohibitions hold and are proven by the demo seed and the evaluators**: the analyst
 who requests a case closure cannot approve it, and the analyst who drafts a notification cannot
 approve it. Notification approval binds to an exact immutable revision — editing invalidates it.
@@ -63,9 +76,36 @@ an error.
 
 ## Abuse controls
 
-Rate limits and upload size limits on the ingestion path. Providers are behind an abstraction with a
-`MockProvider` used by every automated test, so no test consumes live quota. Enrichment failure never
-blocks ingestion.
+**Correction (Phase 7).** This section previously claimed "rate limits and upload size limits on the
+ingestion path". The upload size limit was real (`UPLOAD_MAX_BYTES`, plus `REPORT_MAX_ROWS`); the
+rate limit was not. Before Phase 7 the application had no request rate limiting of any kind —
+`app.js` mounted `cors`, `express.json` and the routers, and nothing counted requests. The claim is
+now true, and it is stated precisely here so the gap is on the record rather than quietly closed.
+
+Three independent fixed-window buckets (`src/middleware/rateLimit.js`, wired in
+`src/config/rateLimiters.js`):
+
+| Bucket | Covers | Default |
+|---|---|---|
+| `auth` | `POST /api/auth/login` and `/register`, counted together | 30 / 15 min |
+| `upload` | `POST /api/reports/accessible-rdp` | 20 / 15 min |
+| `provider` | IOC enrichment, CVE enrichment, both batch workers, and an AI suggestion generation run — one shared budget | 60 / 15 min |
+
+- Authenticated callers are counted per user id, so one busy analyst cannot deny service to the
+  team; unauthenticated callers per client address.
+- `X-Forwarded-For` is **not** honoured. Express only populates `req.ip` from it when `trust proxy`
+  is set, and the app never sets it — `phase7RouteCensus.test.js` asserts that. Enabling it without
+  a trusted proxy in front would let any caller rotate their own limiter key by editing a header,
+  which is worse than no limiter because it would still look like one.
+- The limiter is **in-process**. Correct for a single-process prototype; a horizontally scaled
+  deployment would need a shared store.
+- Enabled by default everywhere except `NODE_ENV=test`. `phase7RateLimiting.test.js` turns each
+  bucket on explicitly, drives it past its limit, and asserts that default resolution, so "off in
+  tests" cannot be read as "off in production".
+
+Providers are behind an abstraction with a `MockProvider` used by every automated test, so no test
+consumes live quota. Enrichment failure never blocks ingestion — proven end to end by
+`eval:phase7`.
 
 ## Security tests
 

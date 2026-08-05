@@ -489,6 +489,47 @@ jobs:
           AI_ENABLED: 'false'
         run: npm run eval:phase6.3
 
+      # Phase 7 promoted these two out of the manual deep-gates job. They are
+      # CORE evaluators — ownership resolution and CVE/KEV/EPSS evidence — not
+      # mutation or concurrency gates, and a release cannot claim "all core
+      # evaluators run in CI" while they only run on demand. The genuinely
+      # expensive :mutation gates stay manual, which is what the Phase 7 brief
+      # asks for.
+      - name: eval:phase2 (ownership resolution, enrichment, consistency)
+        working-directory: backend
+        env:
+          JWT_SECRET: ${{ env.TEST_JWT_SECRET }}
+          CORS_ORIGIN: ${{ env.TEST_CORS_ORIGIN }}
+          IOC_ENRICHMENT_PROVIDER: mock
+          ABUSEIPDB_API_KEY: ''
+          AI_ENABLED: 'false'
+        run: npm run eval:phase2
+
+      - name: eval:vulnerability (CVE association, NVD/KEV/EPSS evidence)
+        working-directory: backend
+        env:
+          JWT_SECRET: ${{ env.TEST_JWT_SECRET }}
+          CORS_ORIGIN: ${{ env.TEST_CORS_ORIGIN }}
+          IOC_ENRICHMENT_PROVIDER: mock
+          ABUSEIPDB_API_KEY: ''
+          NVD_API_KEY: ''
+          AI_ENABLED: 'false'
+        run: npm run eval:vulnerability
+
+      # Phase 7 — release readiness with no provider key and no network. This
+      # gate replaces global.fetch with a throwing counter and asserts the count
+      # is zero, so it also proves the pipeline consumes no live quota.
+      - name: eval:phase7 (no-key startup, offline operation, AI off)
+        working-directory: backend
+        env:
+          JWT_SECRET: ${{ env.TEST_JWT_SECRET }}
+          CORS_ORIGIN: ${{ env.TEST_CORS_ORIGIN }}
+          IOC_ENRICHMENT_PROVIDER: mock
+          ABUSEIPDB_API_KEY: ''
+          NVD_API_KEY: ''
+          AI_ENABLED: 'false'
+        run: npm run eval:phase7
+
   # --------------------------------------------------------------------------
   # Deliberately NOT in the default pipeline.
   #
@@ -531,11 +572,10 @@ jobs:
           DATABASE_URL: ${{ env.EVAL_DATABASE_URL }}
         working-directory: backend
         run: npx prisma migrate deploy
-      - run: npm run eval:phase2
-        working-directory: backend
+      # eval:phase2 and eval:vulnerability moved to the default evaluators job
+      # in Phase 7. Only the mutation gates — which take minutes and exist to
+      # prove the invariants survive deliberate contention — remain on demand.
       - run: npm run eval:phase2:mutation
-        working-directory: backend
-      - run: npm run eval:vulnerability
         working-directory: backend
       - run: npm run eval:vulnerability:mutation
         working-directory: backend

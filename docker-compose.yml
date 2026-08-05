@@ -30,11 +30,20 @@
 # PORT CONFLICT
 #   If an older container is holding 5432, stop it first:
 #        docker stop threatnexus-phase0-postgres
+#
+# CONTAINER NAMES
+#   Deliberately NOT pinned with `container_name`. Phase 7's clean-stack proof
+#   failed on exactly that: a leftover exited container from a previous session
+#   still owned the name "threatnexus-postgres", so `docker compose up --build`
+#   from a fresh checkout aborted with a name conflict even though the images
+#   built correctly and no port was in use. A hardcoded container_name is also
+#   what stops two checkouts (or a `-p` project name) from coexisting. Compose
+#   now derives names as <project>-<service>-1. Address services by SERVICE
+#   name — `docker compose exec postgres ...` — which is stable either way.
 
 services:
   postgres:
     image: postgres:16
-    container_name: threatnexus-postgres
     restart: unless-stopped
     environment:
       POSTGRES_DB: threatnexus
@@ -56,7 +65,6 @@ services:
   backend:
     build:
       context: ./backend
-    container_name: threatnexus-backend
     restart: unless-stopped
     depends_on:
       postgres:
@@ -86,8 +94,26 @@ services:
       # AI is off by default and there is no live provider in this repository.
       AI_ENABLED: ${AI_ENABLED:-false}
       AI_PROVIDER: ${AI_PROVIDER:-null}
+      # Where the fixture CSVs are mounted (see the volumes block below). Set
+      # explicitly because the seed script's relative walk assumes the
+      # repository layout, and the image has no backend/ level in its paths.
+      TNX_DATA_DIR: /app/data
     ports:
       - "5000:5000"
+    volumes:
+      # The synthetic and demonstration CSV fixtures, read-only.
+      #
+      # They are NOT baked into the image on purpose — data is not code, and the
+      # image should stay reproducible from source alone. But the demo seed
+      # reads them from the repository at run time, so without this mount
+      # `npm run seed:demo` inside the container found nothing, ingested
+      # nothing, and reported "findings total=0" while exiting 0. The Phase 7
+      # clean-stack proof hit exactly that: a completely empty demonstration in
+      # which every command had reported success.
+      #
+      # Read-only because the container has no business writing to the
+      # repository's fixtures.
+      - ./data:/app/data:ro
     # Migrations are applied from zero on every start. `migrate deploy` is the
     # non-interactive, non-destructive command: it never resets and never
     # generates a new migration.
@@ -106,7 +132,6 @@ services:
         # Baked into the bundle at build time. Non-secret by construction — CI
         # fails the build if anything secret-shaped reaches the bundle.
         VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:5000/api}
-    container_name: threatnexus-frontend
     restart: unless-stopped
     depends_on:
       backend:

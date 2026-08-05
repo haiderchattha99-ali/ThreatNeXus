@@ -48,12 +48,29 @@ const fs = require("fs");
 const path = require("path");
 
 const REPO_ROOT = path.join(__dirname, "..", "..", "..");
+
+// Where the fixture directory lives.
+//
+// The relative walk above is correct on a developer's machine, where this file
+// sits at <repo>/backend/src/scripts/ and three levels up is the repository
+// root. It is WRONG inside the Docker image, where the Dockerfile copies src to
+// /app/src — there is no backend/ level, so three levels up from
+// /app/src/scripts is "/" and the fixtures resolve to /data instead of
+// /app/data. The Phase 7 clean-stack proof hit this: the demo seed found no
+// fixtures and produced an entirely empty demonstration.
+//
+// TNX_DATA_DIR makes the location explicit rather than inferred from directory
+// depth, and docker-compose.yml sets it to the mount point. Nothing guesses.
+const DATA_ROOT = process.env.TNX_DATA_DIR
+  ? path.resolve(process.env.TNX_DATA_DIR)
+  : path.join(REPO_ROOT, "data");
+
 // Demo-specific fixtures. Kept separate from data/synthetic/accessible-rdp/,
 // which belongs to the Phase 1 evaluator and whose ground truth must not be
 // perturbed by demonstration edits. These cover the ownership outcomes the
 // evaluator fixtures do not: a second organization, an unresolved indicator,
 // and an ASN-attributed (ISP, low-confidence) indicator.
-const CSV_DIR = path.join(REPO_ROOT, "data", "demo", "accessible-rdp");
+const CSV_DIR = path.join(DATA_ROOT, "demo", "accessible-rdp");
 
 // ---------------------------------------------------------------------------
 // Guards
@@ -299,11 +316,30 @@ async function ensureOrganizations(client) {
 }
 
 async function ingestReports(client) {
+  // A demonstration seed that finds none of its fixtures used to log three
+  // skips, report "findings total=0", and exit 0 — which is how the Phase 7
+  // clean-stack proof ended up with a completely empty demo while every command
+  // reported success. Missing fixtures are a hard failure now: the entire point
+  // of this script is to produce a deterministic dataset, and producing nothing
+  // is not a quieter version of that, it is the opposite of it.
+  const missing = REPORTS.filter((filename) => !fs.existsSync(path.join(CSV_DIR, filename)));
+  if (missing.length === REPORTS.length) {
+    throw new Error(
+      `No demonstration fixtures found in ${CSV_DIR}. Expected: ${REPORTS.join(", ")}. ` +
+        "If you are running inside the Docker stack, the repository's data/ directory is " +
+        "mounted read-only at /app/data by docker-compose.yml — check that the compose file " +
+        "you started from declares that mount."
+    );
+  }
+
   const summaries = [];
   for (const filename of REPORTS) {
     const filePath = path.join(CSV_DIR, filename);
     if (!fs.existsSync(filePath)) {
-      log(`skipping ${filename} — not present in data/synthetic/accessible-rdp/`);
+      // The path named here is CSV_DIR itself. It previously said
+      // "data/synthetic/accessible-rdp/" while CSV_DIR is data/demo/, which
+      // sent anyone debugging this straight to the wrong directory.
+      log(`skipping ${filename} — not present in ${CSV_DIR}`);
       continue;
     }
 
