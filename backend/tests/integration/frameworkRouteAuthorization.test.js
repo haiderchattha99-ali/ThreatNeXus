@@ -148,6 +148,22 @@ async function seed() {
       currentLinkKey: `${CASE_ID}:${finding.id}`,
     },
   });
+
+  // Phase 6.3. The record the CASE-scoped evidence quotes are verified against.
+  // Seeded rather than the verbatim check being relaxed for tests: a suite that
+  // could create a mapping whose quote matched nothing would assert the
+  // opposite of what this phase guarantees.
+  await client.caseOrganizationResponse.create({
+    data: {
+      caseId: CASE_ID,
+      responseType: "ACKNOWLEDGED",
+      summary:
+        "The constituent confirmed an interactive administrative session was established " +
+        "outside their change window and has since disabled the account.",
+      occurredAt: new Date("2026-08-02T00:00:00.000Z"),
+      recordedByUserId: null,
+    },
+  });
 }
 
 const as = (role) => ({ Authorization: `Bearer ${tokens[role]}` });
@@ -162,6 +178,12 @@ const NIST_BODY = {
   rationale:
     "Administrative remote access is reachable from any network, indicating access permissions " +
     "are not constrained to authorised sources.",
+  // Phase 6.3. CASE_RESPONSE-sourced because this body is CASE-scoped and
+  // cites no Finding; seed() records the matching organization response.
+  evidenceQuote: "interactive administrative session was established",
+  evidenceQuoteSource: "CASE_RESPONSE",
+  evidenceConfidence: "HIGH",
+  mappingConfidence: "MEDIUM",
 };
 
 beforeEach(async () => {
@@ -398,12 +420,16 @@ describe("input handling", () => {
       .set(as("ANALYST"))
       .send({
         framework: "MITRE_ATTACK",
-        frameworkVersion: "v17.1",
+        frameworkVersion: "19.1",
         referenceId: "T1021.001",
         referenceTitle: "Remote Services: Remote Desktop Protocol",
         mappingScope: "CASE",
         evidenceBasis: "CONTROL_GAP",
         rationale: "Port 3389 is exposed and CVE-2019-0708 applies with a high reputation score.",
+        evidenceQuote: "interactive administrative session was established",
+        evidenceQuoteSource: "CASE_RESPONSE",
+        evidenceConfidence: "MEDIUM",
+        mappingConfidence: "MEDIUM",
       });
 
     expect(res.status).toBe(400);
@@ -497,7 +523,12 @@ describe("response safety", () => {
       .get(`/api/cases/${CASE_ID}/framework-mappings`)
       .set(as("VIEWER"));
     expect(res.body.data.disclaimer).toMatch(/analyst-associated context only/i);
-    expect(res.body.data.catalogueNote).toMatch(/pins no local framework catalogue/i);
+    // Phase 6.3 changed what this note can honestly say. ATT&CK references ARE
+    // now catalogue-validated; CSF and CIS still are not, and the note must
+    // keep saying so rather than collapsing into a blanket claim in either
+    // direction.
+    expect(res.body.data.catalogueNote).toMatch(/MITRE ATT&CK references are validated/i);
+    expect(res.body.data.catalogueNote).toMatch(/no catalogue is pinned for those families/i);
   });
 
   it("never claims an organization is compliant", async () => {

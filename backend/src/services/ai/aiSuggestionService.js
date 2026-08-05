@@ -53,6 +53,7 @@ const { buildAiRuntime } = require("./aiRuntime");
 const { runAtomic } = require("../workflow/workflowTransaction");
 const { loadCaseOrThrow, assertOrganizationBound } = require("../workflow/caseLifecycleService");
 const { assertPositiveInteger, assertValidDate } = require("../framework/frameworkMappingRules");
+const { resolveAttackCatalogue } = require("../framework/frameworkMappingService");
 const { AUDIT_OUTCOMES, safeLogAuditEvent } = require("../auditService");
 
 const RUN_ENTITY_TYPE = "AiSuggestionRun";
@@ -144,6 +145,18 @@ async function persistRun(client, input) {
           evidenceBasis: candidate.content.evidenceBasis,
           rationale: candidate.content.rationale,
           evidenceFindingId: candidate.content.evidenceFindingId,
+          // Phase 6.3. Stored on the suggestion itself rather than deferred to
+          // promotion: a reviewer needs the quote in front of them WHILE
+          // deciding, not at the moment of approval. A candidate carrying no
+          // quote or no confidences never reached this loop —
+          // normalizeMappingContent discarded it at partition time, and the run
+          // counted the rejection.
+          evidenceQuote: candidate.content.evidenceQuote,
+          evidenceQuoteSource: candidate.content.evidenceQuoteSource,
+          evidenceConfidence: candidate.content.evidenceConfidence,
+          mappingConfidence: candidate.content.mappingConfidence,
+          catalogueVerified: candidate.content.catalogueVerified === true,
+          catalogueVersion: candidate.content.catalogueVersion,
           providerConfidence: candidate.providerConfidence,
           // Copied from the run so staleness stays decidable per suggestion,
           // independently of the run row.
@@ -322,7 +335,12 @@ async function requestMappingSuggestions(caseId, options = {}) {
   // mapping clears; failures are discarded and counted, never repaired.
   let partition;
   try {
-    partition = partitionProviderCandidates(providerResult.suggestions, linkedFindingIds);
+    partition = partitionProviderCandidates(providerResult.suggestions, linkedFindingIds, {
+      // Phase 6.3: the SAME pinned catalogue the manual writer resolves. Not a
+      // parameter a caller can supply, and not a separate lookup that could
+      // drift from the one promotion will use.
+      attackCatalogue: resolveAttackCatalogue(),
+    });
   } catch (error) {
     // Only reachable when the whole result is structurally unusable (e.g.
     // `suggestions` is not an array). A single bad candidate never gets here.

@@ -1,0 +1,29 @@
+{
+  "formatVersion": 1,
+  "generatedBy": "backend/scripts/buildAttackCatalogue.js",
+  "source": {
+    "project": "MITRE ATT&CK",
+    "domain": "enterprise-attack",
+    "attackVersion": "19.1",
+    "repository": "https://github.com/mitre-attack/attack-stix-data",
+    "url": "https://raw.githubusercontent.com/mitre-attack/attack-stix-data/6c3719993d0401de199203ecc3f369544d9e091c/enterprise-attack/enterprise-attack-19.1.json",
+    "upstreamCommit": "6c3719993d0401de199203ecc3f369544d9e091c",
+    "upstreamSha256": "bdf1ce86a4e604214c5076d37ae4dcb322678afc528df8492e6fdc1b554f5da3",
+    "upstreamBytes": 53277393,
+    "retrievedAt": "2026-08-05"
+  },
+  "derived": {
+    "file": "enterprise-attack-catalogue.json",
+    "sha256": "d59e40e9d114a92af2f170a0af729bcbd578f960c7b12f51b0f104305e816398",
+    "bytes": 332911,
+    "tacticCount": 15,
+    "techniqueCount": 858,
+    "parentTechniqueCount": 365,
+    "subTechniqueCount": 493,
+    "deprecatedCount": 12,
+    "revokedCount": 149,
+    "mappableTechniqueCount": 697
+  },
+  "attribution": "© 2015-2026 The MITRE Corporation. This work is reproduced and distributed with the permission of The MITRE Corporation. MITRE ATT&CK® is a registered trademark of The MITRE Corporation. See https://attack.mitre.org/resources/legal-and-branding/terms-of-use/",
+  "note": "Derived identifiers, names, tactic membership, lifecycle flags and official URLs only. Technique descriptions are NOT reproduced; each entry carries its official ATT&CK URL. Nothing in backend/src fetches this data at runtime."
+}

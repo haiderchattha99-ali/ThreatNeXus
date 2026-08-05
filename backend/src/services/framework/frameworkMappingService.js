@@ -63,11 +63,44 @@ const {
   isMappingChangeMeaningful,
 } = require("./frameworkMappingRules");
 
+const { verifyEvidenceQuote } = require("./frameworkEvidenceService");
+const {
+  getAttackCatalogue,
+  AttackCatalogueUnavailableError,
+} = require("./attackCatalogue");
+
 const { runSerializable } = require("../workflow/workflowTransaction");
 const { loadCaseOrThrow, assertOrganizationBound } = require("../workflow/caseLifecycleService");
 const { AUDIT_OUTCOMES, safeLogAuditEvent } = require("../auditService");
 
 const MAPPING_ENTITY_TYPE = "CaseFrameworkMapping";
+
+// The pinned catalogue, in the shape frameworkCatalogueRules expects.
+//
+// Resolved HERE rather than passed in by a controller, so no caller can supply
+// a substitute catalogue and no caller can omit one. If the catalogue cannot be
+// loaded this returns undefined, and the rules module refuses every MITRE_ATTACK
+// mapping with ATTACK_CATALOGUE_REQUIRED — a refusal, never a downgrade to the
+// old format-only check. NIST CSF and CIS mappings are unaffected, because they
+// were never catalogue-validated and this phase does not pretend otherwise.
+function resolveAttackCatalogue() {
+  try {
+    const catalogue = getAttackCatalogue();
+    return {
+      attackVersion: catalogue.attackVersion,
+      checksum: catalogue.checksum,
+      findTechnique: (referenceId) => catalogue.byId.get(referenceId) || null,
+    };
+  } catch (error) {
+    if (error instanceof AttackCatalogueUnavailableError) {
+      console.error("ATT&CK catalogue unavailable; ATT&CK mappings will be refused", {
+        code: error.code,
+      });
+      return undefined;
+    }
+    throw error;
+  }
+}
 
 // Closed outcome vocabulary returned to callers and written into audit
 // payloads. Never free text.
@@ -119,7 +152,46 @@ function mappingSummary(row) {
     source: row.source,
     evidenceFindingId: row.evidenceFindingId === undefined ? null : row.evidenceFindingId,
     rationaleLength: typeof row.rationale === "string" ? row.rationale.length : 0,
+    // Phase 6.3. The evidence quote TEXT is deliberately absent for the same
+    // reason the rationale text is: a quote is drawn from ingested report data
+    // or from constituent correspondence, and could carry an indicator or a
+    // contact detail into a table that is read far more widely than the case.
+    // Its LENGTH and its LOCATOR are recorded instead — the locator names a
+    // record id and a field name, which is what an investigator needs to go and
+    // read the original, and carries none of its content.
+    evidenceQuoteLength: typeof row.evidenceQuote === "string" ? row.evidenceQuote.length : 0,
+    evidenceQuoteSource: row.evidenceQuoteSource === undefined ? null : row.evidenceQuoteSource,
+    evidenceQuoteLocator: row.evidenceQuoteLocator === undefined ? null : row.evidenceQuoteLocator,
+    evidenceConfidence: row.evidenceConfidence === undefined ? null : row.evidenceConfidence,
+    mappingConfidence: row.mappingConfidence === undefined ? null : row.mappingConfidence,
+    catalogueVerified: row.catalogueVerified === true,
+    catalogueVersion: row.catalogueVersion === undefined ? null : row.catalogueVersion,
   };
+}
+
+/**
+ * Refuses a mapping while a standing "nothing in this framework applies"
+ * assertion is current for the same case and family.
+ *
+ * The two states are contradictory, and letting both stand would make the
+ * navigator show a case that simultaneously has an ATT&CK technique and a
+ * recorded determination that no ATT&CK technique applies. The analyst is told
+ * to withdraw the assertion first, which forces the reversal to be an explicit,
+ * attributed act rather than a silent side effect of adding a mapping.
+ *
+ * The symmetric check lives in frameworkNoMappingService.
+ */
+async function assertNoStandingNoMappingAssertion(tx, caseId, framework) {
+  const standing = await tx.caseFrameworkNoMappingAssertion.findFirst({
+    where: { caseId, framework, state: "ASSERTED", supersededAt: null },
+    select: { id: true },
+  });
+  if (standing) {
+    throw new FrameworkMappingStateError(
+      "This case carries a standing determination that no reference in this framework applies; withdraw it before adding a mapping",
+      MAPPING_REJECTION_CODES.MAPPING_CONFLICTS_WITH_NO_APPLICABLE_ASSERTION
+    );
+  }
 }
 
 async function loadCurrentMapping(tx, caseId, content) {
@@ -198,6 +270,19 @@ async function appendMappingRow(tx, input) {
       evidenceBasis: input.content.evidenceBasis,
       rationale: input.content.rationale,
       evidenceFindingId: input.content.evidenceFindingId,
+      // Phase 6.3. `?? null` rather than a default, because a REMOVED row built
+      // from a legacy ACTIVE row genuinely has no quote to carry forward and
+      // must not invent one — see removeMapping.
+      evidenceQuote: input.content.evidenceQuote ?? null,
+      evidenceQuoteSource: input.content.evidenceQuoteSource ?? null,
+      // Server-derived, from the record the quote was actually located in.
+      // Never read from caller-supplied content.
+      evidenceQuoteLocator: input.evidenceQuoteLocator ?? null,
+      evidenceConfidence: input.content.evidenceConfidence ?? null,
+      mappingConfidence: input.content.mappingConfidence ?? null,
+      catalogueVerified: input.content.catalogueVerified === true,
+      catalogueVersion: input.content.catalogueVersion ?? null,
+      catalogueChecksum: input.content.catalogueChecksum ?? null,
       state: input.state,
       source: input.source,
       actorUserId: input.actorUserId,
@@ -239,20 +324,33 @@ async function appendMappingWithinTransaction(tx, params) {
 
   // Re-normalized here even when the caller already did it: normalization is
   // idempotent, and re-running it means no caller can hand this function
-  // content that skipped the ATT&CK gate.
-  const content = normalizeMappingContent(params.content);
+  // content that skipped the ATT&CK gate, the catalogue gate, or the
+  // evidence-integrity gate. The catalogue is resolved here rather than
+  // accepted as a parameter, so no caller can substitute or omit one.
+  const content = normalizeMappingContent(params.content, {
+    attackCatalogue: resolveAttackCatalogue(),
+  });
 
   await assertEvidenceObligations(tx, caseRecord.id, content);
+  await assertNoStandingNoMappingAssertion(tx, caseRecord.id, content.framework);
 
   const current = await loadCurrentMapping(tx, caseRecord.id, content);
   if (!isMappingChangeMeaningful(current, MAPPING_STATES.ACTIVE)) {
     return { mapping: current, outcome: MAPPING_OUTCOMES.UNCHANGED, changed: false };
   }
 
+  // The verbatim check runs INSIDE this transaction, against the same snapshot
+  // the row commits under, and runs again on the AI promotion path rather than
+  // trusting what the suggestion recorded when it was generated. Deliberately
+  // placed after the UNCHANGED short-circuit: a no-op repeat should not re-scan
+  // report rows.
+  const evidenceQuoteLocator = await verifyEvidenceQuote(tx, caseRecord.id, content);
+
   const mapping = await appendMappingRow(tx, {
     caseId: caseRecord.id,
     organizationId: caseRecord.organizationId,
     content,
+    evidenceQuoteLocator,
     state: MAPPING_STATES.ACTIVE,
     source,
     actorUserId,
@@ -294,8 +392,12 @@ async function createManualMapping(caseId, content, options = {}) {
   const source = options.source || MAPPING_SOURCES.MANUAL;
 
   // Normalized BEFORE the transaction so a malformed request is a 400 at the
-  // boundary and never opens one.
-  const normalized = normalizeMappingContent(content);
+  // boundary and never opens one. appendMappingWithinTransaction normalizes
+  // again against the same catalogue — this pass is for the early rejection,
+  // not for trust.
+  const normalized = normalizeMappingContent(content, {
+    attackCatalogue: resolveAttackCatalogue(),
+  });
 
   await audit(client, auditContext, {
     action: "framework.mapping.requested",
@@ -414,6 +516,17 @@ async function removeMapping(caseId, mappingId, options = {}) {
         );
       }
 
+      // Copied from the existing row and NOT re-validated. That is deliberate
+      // and load-bearing in Phase 6.3: a technique MITRE has since revoked, or
+      // a legacy row that predates the evidence obligations, must still be
+      // withdrawable. Running the new gates here would trap exactly the
+      // mappings most in need of withdrawal — an analyst told "you cannot
+      // remove this mapping because its technique is now revoked" would be
+      // stuck with an assertion the catalogue itself no longer supports.
+      //
+      // The evidence fields ride along unchanged (including their nulls on a
+      // legacy row) so the REMOVED row records what was withdrawn rather than a
+      // freshly invented, or freshly emptied, version of it.
       const content = {
         framework: existing.framework,
         frameworkVersion: existing.frameworkVersion,
@@ -423,6 +536,13 @@ async function removeMapping(caseId, mappingId, options = {}) {
         evidenceBasis: existing.evidenceBasis,
         rationale: existing.rationale,
         evidenceFindingId: existing.evidenceFindingId,
+        evidenceQuote: existing.evidenceQuote,
+        evidenceQuoteSource: existing.evidenceQuoteSource,
+        evidenceConfidence: existing.evidenceConfidence,
+        mappingConfidence: existing.mappingConfidence,
+        catalogueVerified: existing.catalogueVerified,
+        catalogueVersion: existing.catalogueVersion,
+        catalogueChecksum: existing.catalogueChecksum,
       };
 
       if (!isMappingChangeMeaningful(existing, MAPPING_STATES.REMOVED)) {
@@ -439,6 +559,9 @@ async function removeMapping(caseId, mappingId, options = {}) {
         caseId: caseRecord.id,
         organizationId: existing.organizationId,
         content: { ...content, rationale: reason },
+        // The original locator, not a re-verification: the withdrawal does not
+        // re-check the quote, and claiming a fresh verification would be false.
+        evidenceQuoteLocator: existing.evidenceQuoteLocator,
         state: MAPPING_STATES.REMOVED,
         source: existing.source,
         actorUserId,
@@ -523,10 +646,12 @@ async function countMappingHistory(client, caseId) {
 module.exports = {
   MAPPING_ENTITY_TYPE,
   MAPPING_OUTCOMES,
+  resolveAttackCatalogue,
   mappingSummary,
   loadCurrentMapping,
   currentlyLinkedFindingIds,
   assertEvidenceObligations,
+  assertNoStandingNoMappingAssertion,
   appendMappingRow,
   appendMappingWithinTransaction,
   createManualMapping,

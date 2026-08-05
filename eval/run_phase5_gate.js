@@ -112,6 +112,24 @@ const EXPOSURE_ONLY_RATIONALE =
   "Port 3389 is exposed to the internet, CVE-2019-0708 applies, the KEV catalogue lists it, the " +
   "EPSS score is elevated and the AbuseIPDB reputation score is high for this sector.";
 
+// Phase 6.3 evidence literals. Hand-authored, like every other expectation
+// here: importing them from the fixtures module would make this gate assert
+// whatever that module currently says rather than what the phase promised.
+const EVAL_RESPONSE_SUMMARY =
+  "The constituent confirmed an interactive administrative session was established " +
+  "outside their change window and has since disabled the account.";
+
+const EVAL_EVIDENCE = Object.freeze({
+  evidenceQuote: "interactive administrative session was established",
+  evidenceQuoteSource: "CASE_RESPONSE",
+  evidenceConfidence: "HIGH",
+  mappingConfidence: "MEDIUM",
+});
+
+// The pinned MITRE ATT&CK Enterprise release this repository validates
+// against. A mapping naming any other version is refused.
+const PINNED_ATTACK_VERSION = "19.1";
+
 class GateSafetyError extends Error {
   constructor(message) {
     super(message);
@@ -243,6 +261,10 @@ async function cleanupEvalState(prisma) {
   await prisma.findingTriage.deleteMany({
     where: { OR: [{ caseId: { in: caseIds } }, { findingId: { in: findingIds } }] },
   });
+  // Phase 6.3. seedCase() records the organization response every evidence
+  // quote is verified against, and Case holds it under Restrict.
+  await prisma.caseOrganizationResponse.deleteMany({ where: { caseId: { in: caseIds } } });
+  await prisma.caseFrameworkNoMappingAssertion.deleteMany({ where: { caseId: { in: caseIds } } });
   await prisma.case.deleteMany({ where: { id: { in: caseIds } } });
 
   await prisma.riskFactorContribution.deleteMany({
@@ -320,6 +342,18 @@ async function makeCaseWithEvidence(prisma, organizationId, label, octet) {
       effectiveAt: T_CREATE,
       supersededAt: null,
       currentLinkKey: `${caseRecord.id}:${finding.id}`,
+    },
+  });
+
+  // Phase 6.3. Every mapping now carries a verbatim evidence quote, verified
+  // against a real record inside the write transaction. This response is that
+  // record. Hand-authored here, like every other expectation in this gate.
+  await prisma.caseOrganizationResponse.create({
+    data: {
+      caseId: caseRecord.id,
+      responseType: "ACKNOWLEDGED",
+      summary: EVAL_RESPONSE_SUMMARY,
+      occurredAt: T_CREATE,
     },
   });
 
@@ -401,6 +435,7 @@ async function main() {
         rationale:
           "Administrative remote access is reachable from any network, indicating access " +
           "permissions are not constrained to authorised sources.",
+        ...EVAL_EVIDENCE,
       },
       { ...actor, effectiveAt: T_NIST }
     );
@@ -428,6 +463,7 @@ async function main() {
         rationale:
           "Administrative remote access is reachable from any network, indicating access " +
           "permissions are not constrained to authorised sources.",
+        ...EVAL_EVIDENCE,
       },
       { ...actor, effectiveAt: T_CIS }
     );
@@ -453,6 +489,7 @@ async function main() {
         rationale:
           "The recommended remediation places remote management behind a VPN or jump host, " +
           "which aligns with securely managing enterprise assets and software.",
+        ...EVAL_EVIDENCE,
       },
       { ...actor, effectiveAt: T_CIS }
     );
@@ -476,12 +513,13 @@ async function main() {
         caseRecord.id,
         {
           framework: "MITRE_ATTACK",
-          frameworkVersion: "v17.1",
+          frameworkVersion: PINNED_ATTACK_VERSION,
           referenceId: "T1021.001",
           referenceTitle: "Remote Services: Remote Desktop Protocol",
           mappingScope: "CASE",
           evidenceBasis: "OBSERVED_BEHAVIOR",
           rationale: EXPOSURE_ONLY_RATIONALE,
+          ...EVAL_EVIDENCE,
         },
         { ...actor, effectiveAt: T_ATTACK_REFUSED }
       ),
@@ -495,12 +533,13 @@ async function main() {
         caseRecord.id,
         {
           framework: "MITRE_ATTACK",
-          frameworkVersion: "v17.1",
+          frameworkVersion: PINNED_ATTACK_VERSION,
           referenceId: "T1133",
           referenceTitle: "External Remote Services",
           mappingScope: "CASE",
           evidenceBasis: "CONTROL_GAP",
           rationale: OBSERVED_BEHAVIOUR_RATIONALE,
+          ...EVAL_EVIDENCE,
         },
         { ...actor, effectiveAt: T_ATTACK_REFUSED }
       ),
@@ -523,12 +562,13 @@ async function main() {
       caseRecord.id,
       {
         framework: "MITRE_ATTACK",
-        frameworkVersion: "v17.1",
+        frameworkVersion: PINNED_ATTACK_VERSION,
         referenceId: "T1110.001",
         referenceTitle: "Brute Force: Password Guessing",
         mappingScope: "FINDING",
         evidenceBasis: "OBSERVED_BEHAVIOR",
         rationale: OBSERVED_BEHAVIOUR_RATIONALE,
+        ...EVAL_EVIDENCE,
         evidenceFindingId: finding.id,
       },
       { ...actor, effectiveAt: T_ATTACK_OK }
@@ -554,6 +594,7 @@ async function main() {
           mappingScope: "FINDING",
           evidenceBasis: "CONTROL_GAP",
           rationale: "Security event alerting is not centralised across the affected estate.",
+          ...EVAL_EVIDENCE,
           evidenceFindingId: 2147483600,
         },
         { ...actor, effectiveAt: T_ATTACK_OK }
@@ -599,6 +640,7 @@ async function main() {
         mappingScope: "CASE",
         evidenceBasis: "REMEDIATION_ALIGNMENT",
         rationale: "Reinstated: the VPN remediation is the agreed plan after all.",
+        ...EVAL_EVIDENCE,
       },
       { ...actor, effectiveAt: T_REACTIVATE }
     );
@@ -820,6 +862,7 @@ async function main() {
         rationale:
           "Multifactor authentication is not required in front of externally reachable " +
           "administrative access on this estate.",
+        ...EVAL_EVIDENCE,
       },
       { ...actor, effectiveAt: T_EVIDENCE_CHANGE }
     );
@@ -1033,16 +1076,35 @@ async function main() {
     // The disclaimers themselves are present and say what they must.
     s14.eq("disclaimerPresent", /analyst-associated context only/i.test(activeView.disclaimer), true);
     s14.eq("disclaimerDeniesImplementation", /does not state/i.test(activeView.disclaimer), true);
+    // Phase 6.3 changed what the catalogue note can honestly say, and this gate
+    // now asserts BOTH halves of it. A blanket "everything is validated" would
+    // be exactly as false as a blanket "nothing is validated" now is.
     s14.eq(
-      "catalogueNotePresent",
-      /pins no local framework catalogue/i.test(activeView.catalogueNote),
+      "catalogueNoteClaimsAttackValidation",
+      /MITRE ATT&CK references are validated/i.test(activeView.catalogueNote),
       true
     );
-    // Every reference is honestly reported as unverified.
     s14.eq(
-      "referencesNotValidated",
+      "catalogueNoteDeniesCsfCisValidation",
+      /no catalogue is pinned for those families/i.test(activeView.catalogueNote),
+      true
+    );
+    // ATT&CK references ARE catalogue-verified from Phase 6.3 onward...
+    s14.eq(
+      "attackReferencesValidated",
       activeView.groups
         .flatMap((group) => group.mappings)
+        .filter((mapping) => mapping.framework === "MITRE_ATTACK")
+        .every((mapping) => mapping.referenceValidated === true),
+      true
+    );
+    // ...and CSF/CIS references are still honestly reported as unverified,
+    // because nothing in this repository checks them.
+    s14.eq(
+      "csfAndCisReferencesNotValidated",
+      activeView.groups
+        .flatMap((group) => group.mappings)
+        .filter((mapping) => mapping.framework !== "MITRE_ATTACK")
         .every((mapping) => mapping.referenceValidated === false),
       true
     );

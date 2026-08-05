@@ -1,0 +1,10 @@
+# The pinned MITRE ATT&CK catalogue and its manifest are integrity-checked by
+# SHA-256 (backend/scripts/verifyAttackCatalogue.js, and the CI job that runs
+# it). A checkout that rewrote their line endings would change those hashes and
+# fail the gate for a reason that has nothing to do with the catalogue, so their
+# stored and checked-out form is pinned to LF on every platform.
+backend/src/data/attack/*.json -text eol=lf
+
+# An older test fixture briefly contained a literal NUL byte. Keep the repaired
+# JavaScript visible as text in reviews and normalize it consistently.
+backend/tests/unit/frameworkMappingRules.test.js text eol=lf diff

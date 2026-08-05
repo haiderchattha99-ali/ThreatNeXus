@@ -75,6 +75,19 @@ const ALLOWED_CANDIDATE_KEYS = Object.freeze([
   "rationale",
   "evidenceFindingId",
   "confidence",
+  // Phase 6.3. A provider must now produce the evidence quote, the quote's
+  // source, and the two analyst-facing confidences — the same obligations a
+  // hand-written mapping carries. A candidate omitting any of them is DISCARDED
+  // and counted, exactly like any other invalid candidate.
+  //
+  // That is the intended outcome rather than a regression: a model that cannot
+  // point at a record which actually says what it claims has produced a guess,
+  // and the quote is then re-verified against the real record at promotion time
+  // anyway — so a fabricated one buys nothing.
+  "evidenceQuote",
+  "evidenceQuoteSource",
+  "evidenceConfidence",
+  "mappingConfidence",
 ]);
 
 // Provider result statuses. A closed set — a provider returning anything else
@@ -227,7 +240,7 @@ function normalizeProviderConfidence(value) {
  * @param {number[]} allowedFindingIds      Findings CURRENTLY linked to the case
  * @returns {{content:object, providerConfidence:number|null}}
  */
-function normalizeSuggestionCandidate(raw, allowedFindingIds) {
+function normalizeSuggestionCandidate(raw, allowedFindingIds, options = {}) {
   if (!isPlainObject(raw)) {
     throw new AiSuggestionValidationError("suggestion must be an object", []);
   }
@@ -241,16 +254,28 @@ function normalizeSuggestionCandidate(raw, allowedFindingIds) {
 
   let content;
   try {
-    content = normalizeMappingContent({
-      framework: raw.framework,
-      frameworkVersion: raw.frameworkVersion,
-      referenceId: raw.referenceId,
-      referenceTitle: raw.referenceTitle,
-      mappingScope: raw.mappingScope,
-      evidenceBasis: raw.evidenceBasis,
-      rationale: raw.rationale,
-      evidenceFindingId: raw.evidenceFindingId,
-    });
+    content = normalizeMappingContent(
+      {
+        framework: raw.framework,
+        frameworkVersion: raw.frameworkVersion,
+        referenceId: raw.referenceId,
+        referenceTitle: raw.referenceTitle,
+        mappingScope: raw.mappingScope,
+        evidenceBasis: raw.evidenceBasis,
+        rationale: raw.rationale,
+        evidenceFindingId: raw.evidenceFindingId,
+        evidenceQuote: raw.evidenceQuote,
+        evidenceQuoteSource: raw.evidenceQuoteSource,
+        evidenceConfidence: raw.evidenceConfidence,
+        mappingConfidence: raw.mappingConfidence,
+      },
+      // The catalogue is threaded in from the service. If it is absent, the
+      // rules module refuses every MITRE_ATTACK candidate with
+      // ATTACK_CATALOGUE_REQUIRED — a suggestion is never held to a weaker
+      // standard than a manual mapping, including when the standard is
+      // "the catalogue must be loadable".
+      { attackCatalogue: options.attackCatalogue }
+    );
   } catch (error) {
     if (error instanceof FrameworkMappingValidationError) {
       // Re-typed, not re-worded: the framework rule's own message and closed
@@ -288,7 +313,7 @@ function normalizeSuggestionCandidate(raw, allowedFindingIds) {
  *
  * @returns {{accepted:Array, rejectedCount:number, truncatedCount:number}}
  */
-function partitionProviderCandidates(candidates, allowedFindingIds) {
+function partitionProviderCandidates(candidates, allowedFindingIds, options = {}) {
   if (!Array.isArray(candidates)) {
     throw new AiSuggestionValidationError("provider result suggestions must be an array", []);
   }
@@ -299,7 +324,7 @@ function partitionProviderCandidates(candidates, allowedFindingIds) {
   candidates.forEach((candidate) => {
     if (accepted.length >= MAX_SUGGESTIONS_PER_RUN) return;
     try {
-      accepted.push(normalizeSuggestionCandidate(candidate, allowedFindingIds));
+      accepted.push(normalizeSuggestionCandidate(candidate, allowedFindingIds, options));
     } catch (error) {
       if (error instanceof AiSuggestionValidationError) {
         rejectedCount += 1;

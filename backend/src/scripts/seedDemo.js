@@ -551,6 +551,10 @@ async function driveWorkflow(client, cases) {
       rationale:
         "A management service is reachable from the public Internet on the affected host, " +
         "which indicates access to it is not being restricted as intended.",
+      evidenceQuote: "Constituent acknowledged the report and is investigating.",
+      evidenceQuoteSource: "CASE_RESPONSE",
+      evidenceConfidence: "HIGH",
+      mappingConfidence: "MEDIUM",
     },
     "case 1 NIST CSF PR.AA-05 mapping");
 
@@ -560,18 +564,40 @@ async function driveWorkflow(client, cases) {
     role: "ANALYST",
     body: {
       framework: "MITRE_ATTACK",
-      frameworkVersion: "14.1",
+      frameworkVersion: "v19.1",
       referenceId: "T1133",
       referenceTitle: "External Remote Services",
       mappingScope: "CASE",
       evidenceBasis: "OBSERVED_BEHAVIOR",
       rationale: "The host exposes RDP to the Internet and has a high risk score.",
+      evidenceQuote: "Constituent acknowledged the report and is investigating.",
+      evidenceQuoteSource: "CASE_RESPONSE",
+      evidenceConfidence: "HIGH",
+      mappingConfidence: "LOW",
     },
   });
   log(
     attack.status >= 400
       ? `case 1: exposure-only ATT&CK mapping correctly refused (HTTP ${attack.status})`
       : `WARNING: exposure-only ATT&CK mapping was accepted (HTTP ${attack.status})`
+  );
+
+  // Record the honest completed assessment. An empty ATT&CK column could mean
+  // nobody looked; this says an analyst did look and found exposure evidence,
+  // not adversary behaviour. The navigator renders this separately from both
+  // mappings and unfinished work.
+  await step(
+    client,
+    "POST",
+    `/api/cases/${first.caseId}/framework-mappings/no-applicable`,
+    "ANALYST",
+    {
+      framework: "MITRE_ATTACK",
+      rationale:
+        "The loaded evidence establishes public RDP exposure and a constituent acknowledgement, " +
+        "but records no observed adversary behaviour. Assigning an ATT&CK technique would overstate it.",
+    },
+    "case 1 explicit no-applicable ATT&CK determination"
   );
 
   // --- Notification workflow on case 1 -------------------------------------

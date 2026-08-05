@@ -93,10 +93,11 @@ model User {
   // attribution instead of destroying the record of who associated a control
   // with a case — or, more importantly, of WHICH HUMAN promoted a machine
   // suggestion into an active mapping.
-  frameworkMappings     CaseFrameworkMapping[]         @relation("FrameworkMappingActor")
-  aiSuggestionRuns      AiSuggestionRun[]              @relation("AiSuggestionRunActor")
-  aiSuggestionsDecided  AiFrameworkMappingSuggestion[] @relation("AiSuggestionDecidedBy")
-  aiSuggestionDecisions AiSuggestionDecision[]         @relation("AiSuggestionDecisionActor")
+  frameworkMappings            CaseFrameworkMapping[]            @relation("FrameworkMappingActor")
+  frameworkNoMappingAssertions CaseFrameworkNoMappingAssertion[] @relation("FrameworkNoMappingActor")
+  aiSuggestionRuns             AiSuggestionRun[]                 @relation("AiSuggestionRunActor")
+  aiSuggestionsDecided         AiFrameworkMappingSuggestion[]    @relation("AiSuggestionDecidedBy")
+  aiSuggestionDecisions        AiSuggestionDecision[]            @relation("AiSuggestionDecisionActor")
 }
 
 model Threat {
@@ -215,9 +216,10 @@ model Case {
   // Phase 5 — a case is the ONLY thing a framework mapping or an AI mapping
   // suggestion may be attached to, for the same reason: it is what binds both
   // to exactly one organization and to real persisted evidence.
-  frameworkMappings    CaseFrameworkMapping[]         @relation("FrameworkMappingCase")
-  aiSuggestionRuns     AiSuggestionRun[]              @relation("AiSuggestionRunCase")
-  aiMappingSuggestions AiFrameworkMappingSuggestion[] @relation("AiSuggestionCase")
+  frameworkMappings            CaseFrameworkMapping[]            @relation("FrameworkMappingCase")
+  frameworkNoMappingAssertions CaseFrameworkNoMappingAssertion[] @relation("FrameworkNoMappingCase")
+  aiSuggestionRuns             AiSuggestionRun[]                 @relation("AiSuggestionRunCase")
+  aiMappingSuggestions         AiFrameworkMappingSuggestion[]    @relation("AiSuggestionCase")
 
   @@index([lifecycleState])
   @@index([organizationId, lifecycleState])
@@ -339,8 +341,9 @@ model Organization {
   // suggestion run both record the organization they were made against, so a
   // historical mapping stays explicable on its own rather than only through a
   // join that a later change could quietly alter.
-  frameworkMappings CaseFrameworkMapping[] @relation("FrameworkMappingOrganization")
-  aiSuggestionRuns  AiSuggestionRun[]      @relation("AiSuggestionRunOrganization")
+  frameworkMappings            CaseFrameworkMapping[]            @relation("FrameworkMappingOrganization")
+  frameworkNoMappingAssertions CaseFrameworkNoMappingAssertion[] @relation("FrameworkNoMappingOrganization")
+  aiSuggestionRuns             AiSuggestionRun[]                 @relation("AiSuggestionRunOrganization")
 }
 
 // ===========================================================================
@@ -2135,6 +2138,48 @@ enum FrameworkMappingSource {
   AI_SUGGESTION_PROMOTED
 }
 
+// --------------------------------------------------------------------------
+// Phase 6.3 - evidence integrity.
+// --------------------------------------------------------------------------
+
+// Two SEPARATE confidences are recorded on every mapping written from Phase
+// 6.3 onward, and they are never combined. evidenceConfidence is "how sure am
+// I this record says what I think it says"; mappingConfidence is "how sure am
+// I this framework reference is the right one for it". They fail
+// independently, and collapsing them into one number would destroy exactly the
+// distinction that makes either worth recording - and would invite a
+// downstream threshold, which would create pressure to inflate whichever input
+// moved the composite.
+//
+// Nothing in this system compares these to a threshold. A declared LOW is a
+// better record than a coerced HIGH, so LOW is never a reason to refuse.
+enum FrameworkConfidence {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+// Which record a mapping's verbatim evidence quote must be found in. A closed
+// set: each value names a resolution strategy frameworkEvidenceService
+// implements, so a fourth value cannot appear without someone writing the code
+// that resolves it.
+enum FrameworkEvidenceQuoteSource {
+  // The Finding's own normalized fields.
+  FINDING_RECORD
+  // The raw ingested report row(s) behind that Finding's occurrences.
+  RAW_REPORT_ROW
+  // An analyst-recorded organization response on this case.
+  CASE_RESPONSE
+}
+
+// State of an explicit "no reference in this framework applies to this case"
+// determination. WITHDRAWN is a state, never a deletion - the same append-only
+// discipline as FrameworkMappingState.
+enum FrameworkNoMappingState {
+  ASSERTED
+  WITHDRAWN
+}
+
 // Outcome of one AI suggestion-generation run. DISABLED is a first-class,
 // recorded outcome rather than an error: asking for suggestions while AI is
 // off is a legitimate request with a legitimate answer, and recording it is
@@ -2193,7 +2238,11 @@ model CaseFrameworkMapping {
   // mapping - see this section's header on why no catalogue is claimed.
   frameworkVersion String
 
-  // Analyst-entered, bounded, format-checked, NOT catalogue-validated.
+  // Bounded and format-checked for every family. For MITRE_ATTACK, ALSO
+  // validated against the pinned local catalogue from Phase 6.3 onward - see
+  // catalogueVerified below, and services/framework/frameworkCatalogueRules.js.
+  // For NIST_CSF and CIS_CONTROLS this is still format-checked only, because
+  // no catalogue is pinned for those families.
   referenceId    String
   referenceTitle String
 
@@ -2211,6 +2260,51 @@ model CaseFrameworkMapping {
   // that belongs to a different case would be unreviewable.
   evidenceFindingId Int?
   evidenceFinding   Finding? @relation("FrameworkMappingEvidenceFinding", fields: [evidenceFindingId], references: [id], onDelete: Restrict)
+
+  // ------------------------------------------------------------------------
+  // Phase 6.3 - evidence integrity and catalogue provenance.
+  //
+  // EVERY column below is NULLABLE, and catalogueVerified defaults to false,
+  // for one reason: rows written before Phase 6.3 must stay exactly as they
+  // were. They are not backfilled, not re-validated against a catalogue that
+  // did not exist when they were written, and not guessed at. A NULL here means
+  // "this was recorded before these obligations existed", every read path
+  // labels such a row legacy/unverified, and no code treats NULL as a pass.
+  //
+  // New rows are a different matter: the service REQUIRES all of them, so the
+  // nullability is a statement about history, not a loophole in the present.
+  // ------------------------------------------------------------------------
+
+  // The verbatim quote from the cited source record. Bounded at the service
+  // boundary and verified, character for character, against the real record
+  // inside the write transaction.
+  evidenceQuote String?
+
+  // Which record the quote was found in.
+  evidenceQuoteSource FrameworkEvidenceQuoteSource?
+
+  // "<source>:<recordId>:<field>", e.g. "RAW_REPORT_ROW:88:asn" - exactly where
+  // the quote was located. SERVER-DERIVED from the record that actually
+  // matched; never accepted from a caller, because a client-supplied locator
+  // would be an unverified claim wearing the costume of a verified one.
+  evidenceQuoteLocator String?
+
+  // The two confidences. Separate columns, never combined - see
+  // FrameworkConfidence.
+  evidenceConfidence FrameworkConfidence?
+  mappingConfidence  FrameworkConfidence?
+
+  // True only when this reference was checked against the pinned local
+  // catalogue AT WRITE TIME. Never set retroactively and never inferred from
+  // the reference looking valid now.
+  catalogueVerified Boolean @default(false)
+
+  // The catalogue release and file checksum the check ran against. Stored so a
+  // later catalogue upgrade cannot silently restate which data validated this
+  // row - "verified against v19.1, checksum d59e40e9..." stays answerable even
+  // after the pinned catalogue moves to v20.
+  catalogueVersion  String?
+  catalogueChecksum String?
 
   state  FrameworkMappingState
   source FrameworkMappingSource @default(MANUAL)
@@ -2241,6 +2335,72 @@ model CaseFrameworkMapping {
   @@index([caseId, state])
   @@index([caseId, framework, state])
   @@index([evidenceFindingId])
+  @@index([organizationId])
+  @@index([caseId, effectiveAt])
+  @@index([catalogueVerified])
+}
+
+// ---------------------------------------------------------------------------
+// Phase 6.3 - "no reference in this framework applies to this case", recorded
+// explicitly.
+//
+// ---------------------------------------------------------------------------
+// Why this table exists at all
+// ---------------------------------------------------------------------------
+// Without it, a case with no ATT&CK mapping is ambiguous in the worst possible
+// way. It could mean an analyst examined the evidence and correctly concluded
+// that nothing in ATT&CK applies - an exposure is not adversary behaviour, and
+// most Accessible-RDP findings are exactly that. Or it could mean nobody has
+// looked yet. Those are opposite states, and a matrix that renders both as an
+// empty cell is telling the analyst nothing while looking like it is telling
+// them something.
+//
+// The dangerous failure mode is the one this prevents: an analyst who feels the
+// absence of a mapping looks like unfinished work, and reaches for the nearest
+// plausible technique to fill the cell. The build guard forbids a "percentage
+// mapped" metric for precisely that reason. This table gives the honest answer
+// a first-class, recordable form, so "we looked, and nothing applies" is a
+// completed action rather than a blank.
+//
+// Append-only, same supersede-then-insert shape as CaseFrameworkMapping.
+// Withdrawing an assertion appends a WITHDRAWN row; nothing is ever deleted.
+// ---------------------------------------------------------------------------
+model CaseFrameworkNoMappingAssertion {
+  id     Int  @id @default(autoincrement())
+  caseId Int
+  case   Case @relation("FrameworkNoMappingCase", fields: [caseId], references: [id], onDelete: Restrict)
+
+  // Always equal to the case organizationId at write time, for the same reason
+  // CaseFrameworkMapping stores it: a historical determination must stay
+  // explicable on its own.
+  organizationId Int
+  organization   Organization @relation("FrameworkNoMappingOrganization", fields: [organizationId], references: [id], onDelete: Restrict)
+
+  // The determination is per framework FAMILY. "Nothing in ATT&CK applies" says
+  // nothing about whether a CIS safeguard does.
+  framework FrameworkFamily
+
+  // Required. An unexplained "nothing applies" is as unreviewable as an
+  // unexplained mapping, and this one is harder to challenge later precisely
+  // because it points at no reference.
+  rationale String
+
+  state FrameworkNoMappingState
+
+  actorUserId Int?
+  actor       User? @relation("FrameworkNoMappingActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  effectiveAt  DateTime
+  supersededAt DateTime?
+
+  // "<caseId>:<framework>" while current, null once superseded - at most one
+  // current assertion per (case, framework), by the same distinct-NULLs
+  // mechanism as CaseFrameworkMapping.currentMappingKey.
+  currentAssertionKey String? @unique
+
+  createdAt DateTime @default(now())
+
+  @@index([caseId, state])
   @@index([organizationId])
   @@index([caseId, effectiveAt])
 }
@@ -2358,6 +2518,24 @@ model AiFrameworkMappingSuggestion {
 
   evidenceFindingId Int?
   evidenceFinding   Finding? @relation("AiSuggestionEvidenceFinding", fields: [evidenceFindingId], references: [id], onDelete: Restrict)
+
+  // --- Phase 6.3 evidence integrity, on the suggestion itself --------------
+  // A suggestion must carry the SAME evidence obligations a manual mapping
+  // carries, and must carry them from the moment it is stored - not from the
+  // moment it is approved. Storing a PENDING suggestion with no quote would
+  // mean the analyst reviewing it has nothing to check the claim against, and
+  // that promotion would have to invent the quote or refuse. Both are worse
+  // than requiring the provider to produce one and discarding the candidate
+  // when it does not.
+  //
+  // These are nullable ONLY so suggestion rows written before Phase 6.3 remain
+  // readable and honest. The service requires them on every new row.
+  evidenceQuote       String?
+  evidenceQuoteSource FrameworkEvidenceQuoteSource?
+  evidenceConfidence  FrameworkConfidence?
+  mappingConfidence   FrameworkConfidence?
+  catalogueVerified   Boolean                       @default(false)
+  catalogueVersion    String?
 
   // Provider-declared confidence, 0-100, DISPLAY CONTEXT ONLY. Nothing in this
   // repository reads this column to make a decision: it does not order

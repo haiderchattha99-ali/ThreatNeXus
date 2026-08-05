@@ -157,6 +157,9 @@ function createWorkflowPrismaFake() {
     // tables the bounded AI snapshot reads (risk scores, their contributions,
     // and analyst-asserted CVE associations).
     caseFrameworkMappings: [],
+    // Phase 6.3.
+    caseFrameworkNoMappingAssertions: [],
+    rawReportRows: [],
     aiSuggestionRuns: [],
     aiFrameworkMappingSuggestions: [],
     aiSuggestionDecisions: [],
@@ -439,11 +442,44 @@ function createWorkflowPrismaFake() {
         supersededAt: null,
         currentMappingKey: null,
         source: "MANUAL",
+        // Phase 6.3. Defaulted to the LEGACY shape — null evidence,
+        // catalogueVerified false — so a row inserted directly by a test
+        // fixture looks exactly like a pre-6.3 row, and any test asserting
+        // "new mappings are verified" has to go through the real writer to
+        // get one.
+        evidenceQuote: null,
+        evidenceQuoteSource: null,
+        evidenceQuoteLocator: null,
+        evidenceConfidence: null,
+        mappingConfidence: null,
+        catalogueVerified: false,
+        catalogueVersion: null,
+        catalogueChecksum: null,
       }),
       relations: {
         actor: { table: "users", foreignKey: "actorUserId" },
         evidenceFinding: { table: "findings", foreignKey: "evidenceFindingId" },
       },
+    }),
+    // Phase 6.3. currentAssertionKey is the same distinct-NULLs current-row
+    // unique, enforcing "at most one current determination per (case,
+    // framework)".
+    caseFrameworkNoMappingAssertion: table("caseFrameworkNoMappingAssertions", {
+      uniques: [{ fields: ["currentAssertionKey"], ignoreNull: true }],
+      defaults: () => ({
+        actorUserId: null,
+        supersededAt: null,
+        currentAssertionKey: null,
+      }),
+      relations: { actor: { table: "users", foreignKey: "actorUserId" } },
+    }),
+    rawReportRow: table("rawReportRows", {
+      defaults: () => ({
+        normalizedPayload: null,
+        findingOccurrenceId: null,
+        validationErrors: null,
+        duplicateInReport: false,
+      }),
     }),
     aiSuggestionRun: table("aiSuggestionRuns", {
       defaults: () => ({

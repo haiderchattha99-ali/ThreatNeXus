@@ -126,6 +126,20 @@ function contentOf(suggestion) {
     evidenceBasis: suggestion.evidenceBasis,
     rationale: suggestion.rationale,
     evidenceFindingId: suggestion.evidenceFindingId,
+    // Phase 6.3. Carried through so promotion re-validates the SAME evidence
+    // the reviewer approved, against the live record, inside the promotion
+    // transaction.
+    //
+    // Deliberately NOT re-derived and NOT defaulted. A suggestion row written
+    // before Phase 6.3 has nulls here, and appendMappingWithinTransaction will
+    // refuse to promote it rather than inventing a quote nobody ever wrote —
+    // the reviewer is told to request a fresh suggestion instead. Supplying a
+    // placeholder to make old suggestions promotable would fabricate exactly
+    // the evidence this phase exists to require.
+    evidenceQuote: suggestion.evidenceQuote,
+    evidenceQuoteSource: suggestion.evidenceQuoteSource,
+    evidenceConfidence: suggestion.evidenceConfidence,
+    mappingConfidence: suggestion.mappingConfidence,
   };
 }
 

@@ -25,6 +25,7 @@ const vulnerabilityEnrichmentBatchRoutes = require("./routes/vulnerabilityEnrich
 const findingTriageRoutes = require("./routes/findingTriageRoutes");
 const findingReadRoutes = require("./routes/findingReadRoutes");
 const frameworkMappingRoutes = require("./routes/frameworkMappingRoutes");
+const attackRoutes = require("./routes/attackRoutes");
 const aiAssistanceRoutes = require("./routes/aiAssistanceRoutes");
 const app = express();
 
@@ -74,6 +75,10 @@ app.use("/api/vulnerability-enrichment", vulnerabilityEnrichmentBatchRoutes);
 // a defined order — caseRoutes owns "/:id" and "/:id/workflow", neither of which
 // matches any framework-mapping or AI path, so nothing is shadowed either way.
 app.use("/api/cases", frameworkMappingRoutes);
+// Phase 6.3. Not under /api/cases: neither endpoint is scoped to a case — one
+// serves the pinned MITRE catalogue, the other aggregates across every case in
+// scope.
+app.use("/api/attack", attackRoutes);
 app.use("/api/ai", aiAssistanceRoutes);
 // Home Route
 app.get("/", (req, res) => {
