@@ -3,8 +3,8 @@
 - From: codex
 - Suggested next writer: claude
 - Branch: review/tnx-p6-2
-- Verified code checkpoint: c2000b8e9a5d8245bf92563be8e3db4e5cd10568
-- Updated: 2026-08-05T10:33:15.0495466Z
+- Verified code checkpoint: c501de9864d3fe8568c7720cf205a26eed21e097
+- Updated: 2026-08-05T10:50:43.0594255Z
 
 ## Goal
 
@@ -16,7 +16,7 @@ Read Git history and the committed diff through $checkpoint. Validation recorded
 
 ## Exact next action
 
-Verify the Phase 6.3 checkpoint and CI run 30997649820, merge the accepted Phase 6 branch into main, then create feat/phase-7-release-candidate from updated main and run the provided Phase 7 goal and execution prompts.
+Verify the final Phase 6.3 checkpoint and green CI, merge the accepted Phase 6 branch into main, then create feat/phase-7-release-candidate from updated main and run the provided Phase 7 goal and execution prompts.
 
 ## Takeover instruction
 
