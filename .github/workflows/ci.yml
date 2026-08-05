@@ -305,9 +305,10 @@ jobs:
           DATABASE_URL: ${{ env.E2E_DATABASE_URL }}
         run: npx prisma migrate deploy
 
-      # The four role accounts the suite signs in as. The password is supplied
-      # here and never committed, never defaulted and never printed by the
-      # script itself.
+      # The four role accounts the suite signs in as. The password used here
+      # (E2E_SEED_PASSWORD, above) is a disposable CI-only literal with no
+      # account outside this job's throwaway database — it is intentionally
+      # committed, not a secret, and is never printed by the script itself.
       - name: Seed the four role accounts
         working-directory: backend
         env:

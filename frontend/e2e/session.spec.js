@@ -55,8 +55,10 @@ test('a 403 refusal is surfaced in place and signs nobody out', async ({ page })
 
   await page.getByRole('button', { name: 'Refresh' }).click()
 
-  // The refusal is reported, and the last good snapshot stays on screen.
-  await expect(page.getByText(/Refresh failed\./)).toBeVisible()
+  // The refusal is reported as an explicit access refusal, not the generic
+  // transport-failure wording, and the last good snapshot stays on screen.
+  await expect(page.getByText(/^Access refused\./)).toBeVisible()
+  await expect(page.getByText(/Refresh failed\./)).toHaveCount(0)
   await expect(page.locator('[data-kpi]')).toHaveCount(4)
 
   // THE ASSERTION: still signed in, still on the dashboard, same token.

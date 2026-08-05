@@ -41,15 +41,20 @@ export const Dashboard = () => {
   const [overview, setOverview] = React.useState(null)
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState(false)
+  const [errorStatus, setErrorStatus] = React.useState(null)
   const { user } = useAuth()
   const reducedMotion = useReducedMotion()
 
   const load = React.useCallback(() => {
     setLoading(true)
     setError(false)
+    setErrorStatus(null)
     dashboardService.getOverview()
       .then((res) => setOverview(res.data?.data || null))
-      .catch(() => setError(true))
+      .catch((err) => {
+        setError(true)
+        setErrorStatus(err?.response?.status ?? null)
+      })
       .finally(() => setLoading(false))
   }, [])
 
@@ -220,7 +225,9 @@ export const Dashboard = () => {
 
       {error && overview && (
         <Box role="status" sx={{ mb: 2, px: 1.5, py: 1, border: `1px solid ${color.warning}`, borderRadius: `${radius.sm}px`, ...type.small, color: color.warning }}>
-          Refresh failed. The last successful timestamped snapshot remains visible.
+          {errorStatus === 403
+            ? 'Access refused. Your role no longer holds the required capability to refresh this data. You remain signed in, and the last successful timestamped snapshot remains visible.'
+            : 'Refresh failed. The last successful timestamped snapshot remains visible.'}
         </Box>
       )}
 

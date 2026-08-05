@@ -1,114 +1,79 @@
 # Handoff
 
-- Ticket: TNX-P6.2-FINALIZE
+- Ticket: TNX-P6.2.1
 - From: claude (lead implementation writer)
 - To: **codex** (independent reviewer, read-only until the review is recorded)
 - Branch: `feat/phase-6-frontend-demo-hardening`
-- Base commit: `252555f` (`feat(phase-6.2): risk factor pressure, deeper analysis, truth cleanup`)
-- Last verified commit: **`5c2580b`** — `[TNX-P6.2-FINALIZE] complete browser and CI gates`
-  (34 files, +1870 / -215)
+- Base commit: `9781cd9` (`[TNX-P6.2-REVIEW] approve Phase 6.2 checkpoint`)
 - Updated: 2026-08-05
 
 ## Goal
 
-Verify, commit with explicit paths, and push the Phase 6.2 browser-testing, CI, frontend-hardening,
-documentation and AI-team onboarding checkpoint that was already in flight. **Phase 6.3 was not
-started and must not be started before this review is recorded.**
+Small cleanup checkpoint closing the two follow-ups from `docs/ai/reviews/TNX-P6.2-REVIEW.md`:
+the dashboard refresh-403 UX (MEDIUM) and the CI comment wording about the disposable E2E password
+(LOW). **Phase 6.3 was not started and must not be started before this is reviewed.**
 
 ## Completed
 
-- Audited the full owned diff and confirmed every hunk is attributable to Phase 6.2 or to the
-  requested AI-team initialization.
-- Confirmed the frontend fixes already present are real and correct:
-  `LoadingState` uses a genuine `1px` screen-reader element (MUI reads a bare `width: 1` as `100%`,
-  which would have made the visually-hidden announcement full width); the dashboard entrance skips
-  selectors with no matches, so an empty reviewer queue raises no GSAP target warning;
-  `gsap.fromTo` + `timeline.revert()` + `revertOnUpdate` leave nothing stranded at opacity zero
-  under React StrictMode; reduced motion (OS or in-app) constructs no timeline at all; and
-  `data-count-to` is absent from the em dash that stands in for a restricted or unavailable figure,
-  so nothing can animate a refusal as if it were a zero climbing to something.
-- Added `frontend/e2e/session.spec.js` — the one genuine gap in the browser gate. A real backend
-  401 ends the session and says so; a 403 is surfaced in place and signs nobody out; a
-  capability-gated route denies in place with the session intact. The suite went 33 → **36 tests**.
-- Ran the browser suite against a **disposable** PostgreSQL database, migrated from zero and seeded
-  through the real REST routes, with providers mocked and keyless and `AI_ENABLED=false`.
-- Re-ran every gate from fresh processes and recorded exact counts in `STATUS.md`.
+- `frontend/src/pages/Dashboard.jsx`: the refresh-failure path now tracks the failed response's HTTP
+  status (`errorStatus`). When it is `403`, the in-place banner reads an explicit access-refused
+  message ("Access refused. Your role no longer holds the required capability to refresh this data.
+  You remain signed in, and the last successful timestamped snapshot remains visible.") instead of
+  the generic "Refresh failed." wording used for every other failure. Nothing about session handling
+  changed — the axios interceptor still only reacts to 401, the token and last-good `overview` state
+  are untouched by a 403, and no backend authorization semantics were touched.
+- `frontend/e2e/session.spec.js`: the existing 403 test now asserts the new "Access refused." text is
+  shown and asserts the old generic "Refresh failed." text is **not** present, in addition to the
+  pre-existing assertions that the token, URL and KPI count are unchanged.
+- `.github/workflows/ci.yml`: corrected the seed-step comment, which claimed the disposable
+  `E2E_SEED_PASSWORD` was "never committed" one line below where it is literally defined. The comment
+  now says honestly that it is an intentional, disposable, CI-only literal with no account outside
+  the job's throwaway database — not a secret. No GitHub secret was introduced; no CI behavior
+  changed.
 
 ## Architecture and security boundaries preserved
 
-Nothing in this checkpoint touches `backend/src/`, `prisma/`, or any migration. **17 migrations,
-unchanged.** No authentication, authorization, validation, rate limit, audit or locked lifecycle rule
-was weakened to make a test pass. No finding-closure write route was created. Providers and AI remain
-off. Both self-approval prohibitions hold. Unknown is still never zero, and every dashboard figure
-still carries value, availability, source and as-of provenance.
+No file outside the four listed above was touched. `backend/src/`, `prisma/`, and all migrations are
+untouched — still 17 migrations. The locked 401-signs-out / 403-does-not rule is unchanged in both
+direction and implementation; only the *wording* shown for an already-survived 403 changed. No
+backend authorization, validation, rate-limit or audit behavior was modified. `backend/.env` (live
+provider keys on this machine) was never read, printed, copied, transmitted or modified — it does not
+even exist in this worktree, only `.env.example` / `.env.test.example` are tracked.
 
 ## Validation
 
-See the `Phase 6.2 exit gate` table in `STATUS.md` for the full matrix. Headline:
+Run against the real stack, on dedicated ports 5057 (backend) / 4182 (frontend preview) to avoid the
+known stale-server trap (ports 5000/4173/5173 have leftover processes from earlier sessions on this
+machine that must not be reused):
 
 | Gate | Result |
 |---|---|
-| Backend suite vs real PostgreSQL | 118 files / 2922 tests passed, 1 file + 2 tests skipped |
-| Frontend lint / unit / build | exit 0 · 139/139 · ~292 kB gzip, bundle scan clean |
-| Playwright Chromium | 36 discovered / 36 passed |
-| Evaluators | phase1, risk, phase3, phase4, phase5 — all PASS |
-| Schema | `prisma validate` pass · 17 migrations, canonical order · migrate-from-zero pass · no drift |
-| Hygiene | no committed `.env`, credential literal, or generated artifact |
-
-## Known issues and failed attempts
-
-- **The first browser run failed on the first six tests, and it was the environment, not the code.**
-  Stale backend and preview servers from an earlier session were still bound to ports 5000 and 4173.
-  Playwright's `reuseExistingServer` attached to the stale preview, which served an older bundle
-  pointed at the stale backend. Re-run on dedicated ports (backend 5055, preview 4180,
-  `E2E_SKIP_WEBSERVER=1`): the same tests pass in 2.8 s instead of timing out at 25 s. **The stale
-  processes were left running and untouched.** A future browser run must either stop them
-  deliberately or use dedicated ports.
-- **The three previously-reported frontend unit failures did not reproduce.** A fresh, otherwise-idle
-  process gives 139/139. No timeout was raised, no assertion weakened and no test skipped.
-- **Finding closure still has no production write path.** Recurrence and recurrence-driven case
-  reopening are proven by the evaluators but are unreachable through the running application, and
-  the demonstration dataset therefore contains no recurrence-reopened case. This is locked lifecycle
-  semantics and was deliberately not changed.
-- **The browser suite is Chromium-only by design.** No Firefox or WebKit claim is made.
-
-## Protected foreign work — untouched and uncommitted
-
-These two paths were not edited, staged, moved, restored, stashed, reset, cleaned or committed, and
-they remain in the working tree exactly as they were found:
-
-- `backend/tests/integration/phase6ReadRouteAuthorization.test.js` (modified, unstaged)
-- `docs/codex/` (untracked, including `docs/codex/assets/pkcert-logo.png`)
-
-No `git add -A`, `git add .`, `git reset --hard`, `git clean`, broad stash, or `git checkout` on a
-foreign path was run at any point.
+| Frontend lint | exit 0 (same 6 pre-existing non-blocking Fast-Refresh warnings) |
+| Frontend unit tests | 11 files / 139 passed |
+| Frontend production build | ~292 kB gzip; `dist/` scanned for credential-shaped strings, clean |
+| Disposable PostgreSQL | migrated from zero, 17 migrations, unchanged; seeded via `seedUsers.js` + `seed:demo` through real REST routes |
+| Focused `e2e/session.spec.js` | 3/3 passed, including the new 403 wording assertion |
+| Full Chromium Playwright suite | 36/36 passed |
+| Secret hygiene | no `backend/.env` in this worktree; diff of the four touched files contains no credential literal |
 
 ## Exact next action
 
-**Codex: perform an independent review of the Phase 6.2 checkpoint on
-`feat/phase-6-frontend-demo-hardening` before Phase 6.3 is authorized.** Start read-only.
+**Codex: review the TNX-P6.2.1 diff on `feat/phase-6-frontend-demo-hardening` before Phase 6.3 is
+authorized.** Start read-only.
 
 ```
 git fetch origin
 git log --oneline origin/feat/phase-6-frontend-demo-hardening -3
-git diff 252555f..5c2580b        # the code checkpoint under review
+git diff 9781cd9..HEAD        # the TNX-P6.2.1 diff under review
 ```
 
-Review priorities, in order:
+Review priorities:
 
-1. **Does the browser suite actually prove what it claims?** It drives the real stack on purpose — a
-   mocked E2E suite would have passed against the fabricated dashboard Phase 6 had to delete. Check
-   that no spec quietly substitutes a fixture for a real response. The two deliberate `page.route`
-   uses (holding a refresh in flight, and fulfilling a 403) are simulating *transport conditions*,
-   not data.
-2. **The new `session.spec.js`.** Is the 401/403 distinction asserted strongly enough, and is the
-   403 test's fulfilled response a fair stand-in given no UI-reachable route returns 403 to a role
-   that can reach it?
-3. **The `e2e` CI job.** Confirm the disposable service container, the keyless providers, and that
-   no value in it is a credential to anything that exists.
-4. **Truth semantics.** Confirm no fabricated figure, coverage percentage, system-health claim or
-   AI result re-entered the UI, and that restricted/unavailable/stale/empty/denied/error remain
-   visually and semantically distinct.
+1. Confirm the 403 wording change is UI-only — no interceptor, auth context, or backend route change
+   hides underneath it.
+2. Confirm `session.spec.js`'s updated assertions still exercise the real 403 transport-condition
+   simulation (`page.route` fulfilling a 403 envelope), not a new fixture substituting real data.
+3. Confirm the CI comment correction is wording-only — no new secret, no CI behavior change.
 
 Record the review in `docs/ai/reviews/`. Do **not** begin Phase 6.3, ATT&CK catalogue expansion,
 provider integration or AI assistance.
@@ -116,24 +81,31 @@ provider integration or AI assistance.
 ## Do not change
 
 - Do not start Phase 6.3 before this review is recorded.
-- Do not stage or modify the two protected foreign paths above.
-- Do not read, print, copy, transmit or modify `backend/.env` — it holds live provider keys on this
-  machine.
+- Do not stage or modify the two protected foreign paths in the original desktop worktree
+  (`backend/tests/integration/phase6ReadRouteAuthorization.test.js`, `docs/codex/`) — this ticket was
+  worked entirely in the clean worktree `F:/AI-Worktrees/ThreatNeXus/review-tnx-p6-2` and never
+  touched the desktop worktree.
+- Do not read, print, copy, transmit or modify `backend/.env`.
 - Do not weaken authentication, authorization, validation, rate limits, auditability or locked
   lifecycle rules to make a gate pass.
-- **The D-AI-001 dirty-worktree exception is spent.** All future work starts in a clean AI-team
-  worktree under the normal writer-lock protocol. See `docs/ai/DECISIONS.md`.
 
-## Independent review outcome — 2026-08-05
+---
 
-**Decision: APPROVE WITH FOLLOW-UPS.** Codex independently reviewed `252555f..5c2580b`, the
-finalization handoff `c655808`, the six-spec Playwright suite, the E2E CI job, and the changed
-frontend code. There are **0 critical, 0 high, 1 medium, and 1 low** findings. The review found no
-secret exposure, provider call, data fabrication, migration change, authorization regression, or
-test substitution that blocks Phase 6.3.
+## Prior handoff: TNX-P6.2-FINALIZE (2026-08-05, superseded)
 
-The detailed review is `docs/ai/reviews/TNX-P6.2-REVIEW.md`.
+- Last verified commit: `5c2580b` — `[TNX-P6.2-FINALIZE] complete browser and CI gates`
+  (34 files, +1870 / -215), handoff `c655808`.
+- Verify, commit with explicit paths, and push the Phase 6.2 browser-testing, CI, frontend-hardening,
+  documentation and AI-team onboarding checkpoint. Added `frontend/e2e/session.spec.js` (33 → 36
+  tests) proving the 401/403 distinction against the real backend. Full gate: backend 118 files /
+  2922 tests passed vs real PostgreSQL; frontend lint 0, unit 139/139, build ~292 kB gzip; Playwright
+  Chromium 36/36; evaluators phase1/risk/phase3/phase4/phase5 all PASS; 17 migrations canonical,
+  migrate-from-zero clean.
+- Protected foreign work never touched: `backend/tests/integration/phase6ReadRouteAuthorization.test.js`
+  (modified, unstaged) and `docs/codex/` (untracked) in the original desktop worktree.
 
-Phase 6.3 is authorized, but only in a new clean AI-team worktree with the normal writer lock. The
-two follow-ups are recorded in the review and deliberately remain outside Phase 6.3 unless their
-scope is explicitly approved.
+### Independent review outcome — 2026-08-05
+
+**Decision: APPROVE WITH FOLLOW-UPS.** Codex reviewed `252555f..5c2580b` plus handoff `c655808`.
+0 critical, 0 high, 1 medium (the 403 UX wording, closed by TNX-P6.2.1 above), 1 low (the CI comment
+wording, closed by TNX-P6.2.1 above). Full detail: `docs/ai/reviews/TNX-P6.2-REVIEW.md`.
