@@ -98,6 +98,18 @@ services:
       # explicitly because the seed script's relative walk assumes the
       # repository layout, and the image has no backend/ level in its paths.
       TNX_DATA_DIR: /app/data
+      # Rate limiting (Phase 7). Defaults are the application's own; they are
+      # surfaced here because one legitimate workload genuinely exceeds them:
+      # the Chromium browser suite performs dozens of real sign-ins in a few
+      # minutes, which is indistinguishable from credential stuffing and is
+      # correctly refused. Raise RATE_LIMIT_AUTH_MAX for that run rather than
+      # lowering the control for everyone —
+      #   RATE_LIMIT_AUTH_MAX=1000 docker compose up -d
+      RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
+      RATE_LIMIT_AUTH_MAX: ${RATE_LIMIT_AUTH_MAX:-30}
+      RATE_LIMIT_AUTH_WINDOW_MS: ${RATE_LIMIT_AUTH_WINDOW_MS:-900000}
+      RATE_LIMIT_UPLOAD_MAX: ${RATE_LIMIT_UPLOAD_MAX:-20}
+      RATE_LIMIT_PROVIDER_MAX: ${RATE_LIMIT_PROVIDER_MAX:-60}
     ports:
       - "5000:5000"
     volumes:

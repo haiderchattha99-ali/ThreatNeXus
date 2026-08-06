@@ -362,6 +362,13 @@ jobs:
           NVD_API_KEY: ''
           AI_ENABLED: 'false'
           AI_PROVIDER: 'null'
+          # Disposable override for this job only, matching docker-compose's
+          # RATE_LIMIT_AUTH_MAX comment: the Chromium suite signs in dozens of
+          # times across four roles and three breakpoints in a few minutes,
+          # which the default auth budget (30 / 15 min) correctly refuses as
+          # credential stuffing. Raise the budget for this throwaway backend
+          # rather than weakening the production default.
+          RATE_LIMIT_AUTH_MAX: '1000'
         run: |
           node server.js > /tmp/backend-e2e.log 2>&1 &
           for i in $(seq 1 30); do
