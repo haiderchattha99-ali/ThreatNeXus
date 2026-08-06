@@ -7,6 +7,7 @@ const router = express.Router();
 const authenticate = require("../middleware/authMiddleware");
 const { requireCapability } = require("../middleware/requireRole");
 const { CAPABILITIES } = require("../lib/roles");
+const { providerRateLimiter } = require("../config/rateLimiters");
 
 const controller = require("../controllers/frameworkMappingController");
 
@@ -113,7 +114,15 @@ router.post(
 
 // --- AI mapping assistance ---------------------------------------------------
 router.get("/:id/ai/mapping-suggestions", canReadSuggestions, controller.listSuggestions);
-router.post("/:id/ai/mapping-suggestions", canRequestSuggestions, controller.requestSuggestions);
+// Phase 7 — a generation run is provider execution, so it draws on the same
+// bounded budget as IOC and CVE enrichment. Reading suggestions above is not
+// limited: it spends nothing.
+router.post(
+  "/:id/ai/mapping-suggestions",
+  providerRateLimiter,
+  canRequestSuggestions,
+  controller.requestSuggestions
+);
 router.post(
   "/:id/ai/mapping-suggestions/:suggestionId/approve",
   canDecideSuggestions,

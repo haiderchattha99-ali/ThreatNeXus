@@ -222,6 +222,48 @@ describe("Phase 6 overview — per-section gating is real", () => {
   });
 });
 
+describe("Phase 6.1 overview — attention queues over the real route chain", () => {
+  it("restricts the notification queue from VIEWER, exactly like the notification section", async () => {
+    const res = await request(app).get("/api/dashboard/overview").set(auth("VIEWER"));
+    const queue = res.body.data.sections.notificationQueue;
+
+    expect(queue.availability).toBe("RESTRICTED");
+    expect(queue.awaitingReview).toBeUndefined();
+    // VIEWER still gets the queues it IS entitled to.
+    expect(res.body.data.sections.findingQueues.availability).toBe("AVAILABLE");
+    expect(res.body.data.sections.caseQueues.availability).toBe("AVAILABLE");
+  });
+
+  it("gives every role the finding and case queues, bounded and with a real total", async () => {
+    for (const role of ROLES) {
+      const res = await request(app).get("/api/dashboard/overview").set(auth(role));
+      const { findingQueues, caseQueues } = res.body.data.sections;
+
+      expect(findingQueues.availability, `role ${role}`).toBe("AVAILABLE");
+      expect(Array.isArray(findingQueues.priority.items)).toBe(true);
+      expect(typeof findingQueues.priority.total).toBe("number");
+      expect(caseQueues.availability, `role ${role}`).toBe("AVAILABLE");
+      expect(Array.isArray(caseQueues.waitingOnOrganization.items)).toBe(true);
+    }
+  });
+
+  it("reports the audience role the overview was actually gated against", async () => {
+    for (const role of ROLES) {
+      const res = await request(app).get("/api/dashboard/overview").set(auth(role));
+      expect(res.body.data.audience.role).toBe(role);
+    }
+  });
+
+  it("returns a real stored 7-day trend with no live provider traffic", async () => {
+    const res = await request(app).get("/api/dashboard/overview").set(auth("ADMIN"));
+    const trend = res.body.data.sections.ingestionTrend;
+
+    expect(trend.availability).toBe("AVAILABLE");
+    expect(trend.days).toHaveLength(7);
+    expect(res.body.data.sections.providers.liveLookupPerformed).toBe(false);
+  });
+});
+
 describe("Phase 6 findings list — input validation", () => {
   it("rejects an unknown filter value by naming the field", async () => {
     const res = await request(app).get("/api/findings?riskBand=SEVERE").set(auth("ANALYST"));

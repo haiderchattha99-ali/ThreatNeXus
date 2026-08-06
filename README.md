@@ -11,11 +11,27 @@ complete audit trail behind every step.
 
 ## What this is, and what it is not
 
-ThreatNeXus is a **defensive security prototype built as a PKCERT / NCERT
-internship project**. It is a working demonstration of a CERT workflow, not a
-national production system. It has not been security-audited, has no
-high-availability or disaster-recovery story, ships with local development
-defaults, and has never processed real constituent data.
+ThreatNeXus is a **defensive cybersecurity research prototype developed during
+an internship with PKCERT/NCERT**. It is **not an official PKCERT/NCERT
+production platform**, and no national deployment is claimed or implied. It has
+not been security-audited, has no high-availability or disaster-recovery story,
+ships with local development defaults, and has never processed real constituent
+data.
+
+Three phrases in this document are load-bearing and are used literally:
+
+- **Export is not delivery.** Exporting an approved notification produces a file
+  on the analyst's machine. Whether it ever reached anyone is a separate,
+  separately recorded human act.
+- **A remediation proxy is not verified remediation.** When an organization
+  replies that it has fixed something, the system records *that they said so*.
+  It never confirms it.
+- **Provider evidence is supporting context, never proof.** A reputation score
+  or an EPSS percentile informs an analyst; it does not decide anything.
+
+Every dashboard figure describes **the loaded dataset only** — never a national,
+Internet-wide, uptime, maturity or coverage claim. Inputs are synthetic or
+explicitly authorized.
 
 Everything in it is designed so a human stays accountable for every decision
 that leaves the system:
@@ -31,7 +47,7 @@ that leaves the system:
 - **AI decides nothing.** It is off by default, and when on it only drafts and
   suggests — see [AI assistance](#ai-assistance-optional-off-by-default).
 
-## Current status: Phase 6 complete
+## Current status: Phase 7 — release candidate
 
 | Phase | Delivered |
 |---|---|
@@ -42,8 +58,8 @@ that leaves the system:
 | **4 — Notifications** | Drafting from case evidence, immutable revisions, reviewer approval bound to an exact revision, approved-only manual `.eml` / `.txt` export, delivery tracking. |
 | **5 — Framework mapping + AI assistance** | Append-only MITRE ATT&CK / NIST CSF 2.0 / CIS Controls v8 mappings on cases, with a server-enforced ATT&CK evidence rule; optional AI mapping suggestions, disabled by default, promoted only by a named human through the manual mapping service. |
 
-Phase 6 (the dedicated analyst frontend and demonstration build) has not
-started.
+| **6 — Analyst frontend, truthful dashboards, Docker, CI** | A single design system and primitive set; a provenance-carrying dashboard snapshot where unknown is never rendered as zero; a Chromium browser suite against the real stack; pinned MITRE Enterprise ATT&CK 19.1 with a SHA-256 integrity manifest, verbatim evidence gates, explicit "no reference applies" determinations, and a navigator that reports raw counts and **no coverage percentage**. |
+| **7 — Release candidate** | Request rate limiting on authentication, upload and provider execution; a structural route census requiring every mounted route to authenticate and enforce a capability; release security assertions; a runnable offline release evaluator; clean-stack and network-unavailable rehearsals. |
 
 ## Phase 6 — analyst frontend, truthful dashboards, Docker and CI
 
@@ -323,9 +339,12 @@ The dev database is created by Compose. The other two are separate on purpose �
 the evaluators refuse to run against the development database.
 
 ```bash
-docker exec threatnexus-postgres psql -U threatnexus -d threatnexus \
+# Addressed by SERVICE name, not container name — Compose derives container
+# names from the project, and a leftover container from an earlier session must
+# not be able to collide with this one.
+docker compose exec postgres psql -U threatnexus -d threatnexus \
   -c "CREATE DATABASE threatnexus_test;"
-docker exec threatnexus-postgres psql -U threatnexus -d threatnexus \
+docker compose exec postgres psql -U threatnexus -d threatnexus \
   -c "CREATE DATABASE threatnexus_eval;"
 ```
 
@@ -414,10 +433,63 @@ npm run eval:vulnerability:mutation # proves the vulnerability gate can actually
 npm run eval:phase3                 # analyst workflow to closure and reopening
 npm run eval:phase4                 # notification drafting to delivery
 npm run eval:phase5                 # framework mapping + guarded AI assistance
+npm run eval:phase6.3               # pinned ATT&CK catalogue + evidence integrity
+npm run eval:phase7                 # no-key startup, offline operation, AI off
 ```
 
 The two `:mutation` gates deliberately break a rule and assert that a named
 scenario notices — a gate nobody has proven can fail is not a gate.
+
+`eval:phase7` replaces `global.fetch` with a counter that throws for the whole
+run and asserts the count is zero, so it cannot consume live provider quota even
+if a key is present in the environment. It also reports the gold-standard
+labelling dependency, which is a human deliverable and is never synthesized.
+
+### Verifying a release candidate
+
+The full sequence a release decision rests on, in the order a reviewer would
+want it. Every value below is disposable and belongs to a throwaway database.
+
+```bash
+# 0. Disposable PostgreSQL, and two databases that are NOT each other.
+docker run -d --name tnx-verify -e POSTGRES_USER=tnx -e POSTGRES_PASSWORD=disposable_only \
+  -e POSTGRES_DB=tnx -p 5434:5432 postgres:16-alpine
+docker exec tnx-verify psql -U tnx -d postgres -c "CREATE DATABASE tnx_eval;"
+
+export DATABASE_URL="postgresql://tnx:disposable_only@localhost:5434/tnx?schema=public"
+export TEST_DATABASE_URL="$DATABASE_URL"
+export EVAL_DATABASE_URL="postgresql://tnx:disposable_only@localhost:5434/tnx_eval?schema=public"
+export JWT_SECRET="verification-only-secret-value-at-least-32-chars"
+export CORS_ORIGIN="http://localhost:5173"
+export IOC_ENRICHMENT_PROVIDER=mock ABUSEIPDB_API_KEY='' NVD_API_KEY='' \
+       AI_ENABLED=false AI_PROVIDER=null NODE_ENV=test
+
+# 1. Migrations from zero, schema validity, and drift.
+cd backend
+npx prisma migrate deploy      # expect 18 migrations applied
+npx prisma validate
+npx prisma migrate diff --from-schema-datamodel prisma/schema.prisma \
+  --to-schema-datasource prisma/schema.prisma --exit-code   # expect "No difference"
+
+# 2. Regenerate the client. Skipping this is the single most common cause of a
+#    false failure: a client generated before the last migration reports a new
+#    model as `undefined`, which looks like a code defect and is not one.
+npx prisma generate
+
+# 3. The pinned ATT&CK catalogue still matches its recorded checksum.
+npm run attack:verify
+
+# 4. The backend suite against real PostgreSQL. TEST_DATABASE_URL is what
+#    enables the real-PostgreSQL suites — without it ~177 of them SKIP, and the
+#    run looks green while proving considerably less. Serial file execution is
+#    required: in parallel the concurrency suites claim each other's queued jobs.
+npx vitest run --fileParallelism=false
+
+# 5. Every evaluator (see the list above).
+# 6. Frontend.
+cd ../frontend && npm run lint && npm test && npm run build
+```
+
 
 The synthetic fixtures in `data/synthetic/` are **development and evaluation
 data only**: RFC 5737 documentation IP ranges, deterministic hand-chosen
@@ -433,7 +505,6 @@ Shadowserver schema.
 | **CISA KEV** | Known-exploited status for analyst-asserted CVEs | No | Public catalogue. |
 | **FIRST EPSS** | Exploit-prediction score | No | Public API. |
 | **NVD** | CVE metadata | Optional (`NVD_API_KEY`) | Public rate limit applies without a key. |
-
 | **AI mapping assistance** | Framework mapping suggestions | **No live provider ships** | Disabled by default; offline mock for tests only. |
 
 > **NVD attribution.** This product uses the NVD API but is not endorsed or
@@ -449,32 +520,50 @@ an audit record or a database column.
 - **Single report type.** Only Shadowserver-style *Accessible RDP* is ingested.
 - **Manual ingestion only.** No scheduled or live Shadowserver API pull; a human
   uploads a CSV.
-- **No framework catalogue.** Reference ids are format-checked, not verified to
-  exist. There is no pinned ATT&CK/CSF/CIS data in the repository.
 - **No live AI provider.** The contract, the disabled provider and an offline
   mock exist; nothing calls a model.
+- **Finding closure has no production write path.** The recurrence and reopen
+  behaviour is real and is proven by `eval:phase1`, but it cannot be reached
+  through the running UI, so a demonstration cannot show it end to end. It is
+  listed here rather than staged in the interface, because seeding an
+  unreachable final state to make a demo look complete would be a fabrication.
+- **Chromium is the committed browser gate.** Firefox and WebKit are not run and
+  are not claimed.
+- **Only NIST CSF 2.0 and CIS ids are format-checked.** ATT&CK is fully
+  catalogue-verified against the pinned Enterprise 19.1 extract; the other two
+  frameworks are validated for shape, not existence.
 - **The ATT&CK lexical guard is a backstop, not comprehension.** It reliably
   catches the common "port 3389 is open, therefore T1021.001" mistake. It cannot
   detect a fluent, well-worded fabrication — which is why the structural gates
   exist and why every mapping records a named human actor.
 - **ASN-tier ownership cannot be re-resolved later.** ASN is not persisted on a
   finding, so that tier only fires at ingestion time.
-- **No production deployment story.** No production Docker image, no CI
-  pipeline, no HA/DR, no secret manager, no external security audit.
+- **No production deployment story.** The Docker Compose stack is for a
+  developer's machine or a demonstration, not a deployment: no production image,
+  no HA/DR, no secret manager, no external security audit. There *is* a CI
+  pipeline (`.github/workflows/ci.yml`).
+- **Rate limiting is in-process.** The limiter counts per Node process. It is
+  the right control for a single-process prototype and the wrong one for a
+  horizontally scaled deployment, which would need a shared store.
 - **Synthetic data only.** No real constituent or victim data has ever been
   processed, and none may be committed.
 
 ## Roadmap
 
-- **Phase 6 — Analyst frontend and demonstration readiness.** A premium,
-  purpose-built SOC/CERT interface; an authorized subtle PKCERT watermark;
-  metrics derived only from real backend data with nothing fabricated;
-  accessibility and responsive behaviour; and final security, Docker, CI,
-  end-to-end test, documentation and demo hardening.
-- **Beyond.** A second report type carried to closure; a pinned framework
-  catalogue so references can be validated rather than only format-checked; and
-  a live AI provider behind the existing contract, if and only if it is approved
-  in the decision record first.
+Phases 0–7 are delivered. What remains is deliberately *not* in this release:
+
+- **A production write path for Finding closure**, so recurrence and reopening
+  become reachable through the interface rather than only through the evaluator.
+- **A second report type** carried all the way to closure.
+- **Catalogue verification for NIST CSF and CIS**, matching what ATT&CK already
+  has.
+- **A live AI provider** behind the existing contract — if and only if it is
+  approved in the decision record first.
+- **The gold-standard answer key.** `eval/lib/goldStandardLoader.js` defines the
+  schema and computes accept/edit/reject rates and inter-rater agreement, but the
+  labels themselves are an outstanding *human* deliverable: two named team members
+  labelling 50–100 findings independently. It must not be AI-generated, so the
+  harness reports its absence as a dependency rather than producing a number.
 
 ## Team
 

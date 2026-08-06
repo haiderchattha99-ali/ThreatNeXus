@@ -7,3 +7,5 @@ uploads/
 .env.*
 !**/.env.example
 !**/.env.test.example
+# AI-team coordination state. Local to one worktree; never shared through Git.
+.ai-team/

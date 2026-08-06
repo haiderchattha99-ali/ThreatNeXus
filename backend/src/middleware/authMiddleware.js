@@ -71,4 +71,14 @@ const authenticate = (req, res, next) => {
   return next();
 };
 
+// Phase 7 — companion to the tnxGuard marker in requireRole.js. The route
+// census needs to distinguish "this router authenticates" from "this router
+// happens to mount some middleware", and Express reports both as a layer whose
+// name is whatever the function was called. Metadata only: no request path
+// reads it.
+Object.defineProperty(authenticate, "tnxAuthenticator", {
+  value: true,
+  enumerable: false,
+});
+
 module.exports = authenticate;

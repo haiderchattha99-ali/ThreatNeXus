@@ -157,6 +157,62 @@ function buildConfig() {
     { strict: true }
   );
 
+  // Phase 7 — request rate limiting. Three independent buckets so one surface
+  // cannot exhaust another's budget: authentication, report upload, and
+  // explicit provider execution (the routes that spend third-party quota).
+  //
+  // RATE_LIMIT_ENABLED defaults to ON everywhere except NODE_ENV=test. The test
+  // default is off because ~3,000 tests share one process and one loopback
+  // address, so a live limiter would make unrelated suites fail by position
+  // rather than by behaviour. The control is not thereby unproven: the Phase 7
+  // security suite turns each bucket on explicitly and drives it past its limit,
+  // and a test in that suite asserts this default resolution itself, so nobody
+  // can conclude from "off in tests" that it is off in production.
+  const rateLimitEnabled = (() => {
+    const raw = process.env.RATE_LIMIT_ENABLED;
+    if (raw === undefined || raw === null || raw.trim() === "") {
+      return nodeEnv !== "test";
+    }
+    return raw.trim().toLowerCase() === "true";
+  })();
+
+  const rateLimitAuthWindowMs = parseOptionalInt(
+    "RATE_LIMIT_AUTH_WINDOW_MS",
+    process.env.RATE_LIMIT_AUTH_WINDOW_MS,
+    900000, // 15 minutes
+    { strict: true }
+  );
+  const rateLimitAuthMax = parseOptionalInt(
+    "RATE_LIMIT_AUTH_MAX",
+    process.env.RATE_LIMIT_AUTH_MAX,
+    30,
+    { strict: true }
+  );
+  const rateLimitUploadWindowMs = parseOptionalInt(
+    "RATE_LIMIT_UPLOAD_WINDOW_MS",
+    process.env.RATE_LIMIT_UPLOAD_WINDOW_MS,
+    900000,
+    { strict: true }
+  );
+  const rateLimitUploadMax = parseOptionalInt(
+    "RATE_LIMIT_UPLOAD_MAX",
+    process.env.RATE_LIMIT_UPLOAD_MAX,
+    20,
+    { strict: true }
+  );
+  const rateLimitProviderWindowMs = parseOptionalInt(
+    "RATE_LIMIT_PROVIDER_WINDOW_MS",
+    process.env.RATE_LIMIT_PROVIDER_WINDOW_MS,
+    900000,
+    { strict: true }
+  );
+  const rateLimitProviderMax = parseOptionalInt(
+    "RATE_LIMIT_PROVIDER_MAX",
+    process.env.RATE_LIMIT_PROVIDER_MAX,
+    60,
+    { strict: true }
+  );
+
   // Phase 2 (P2-T2c) — the API key stays optional at startup (a missing key
   // only disables the provider at lookup time, never blocks the app from
   // starting), but base URL/timeout/max-age are now real request parameters
@@ -283,6 +339,15 @@ function buildConfig() {
     LOG_LEVEL: process.env.LOG_LEVEL || "info",
     UPLOAD_MAX_BYTES: uploadMaxBytes,
     REPORT_MAX_ROWS: reportMaxRows,
+
+    // Phase 7 — rate limiting (see the block that computes these).
+    RATE_LIMIT_ENABLED: rateLimitEnabled,
+    RATE_LIMIT_AUTH_WINDOW_MS: rateLimitAuthWindowMs,
+    RATE_LIMIT_AUTH_MAX: rateLimitAuthMax,
+    RATE_LIMIT_UPLOAD_WINDOW_MS: rateLimitUploadWindowMs,
+    RATE_LIMIT_UPLOAD_MAX: rateLimitUploadMax,
+    RATE_LIMIT_PROVIDER_WINDOW_MS: rateLimitProviderWindowMs,
+    RATE_LIMIT_PROVIDER_MAX: rateLimitProviderMax,
 
     // Seeding is not configured here. backend/src/scripts/seedUsers.js reads
     // SEED_USER_PASSWORD straight from process.env so the value stays a

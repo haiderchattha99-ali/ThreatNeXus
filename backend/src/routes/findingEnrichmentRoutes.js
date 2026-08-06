@@ -12,6 +12,7 @@ const router = express.Router();
 
 const authenticate = require("../middleware/authMiddleware");
 const { requireCapability } = require("../middleware/requireRole");
+const { providerRateLimiter } = require("../config/rateLimiters");
 const { CAPABILITIES } = require("../lib/roles");
 
 const {
@@ -34,6 +35,7 @@ router.get(
 // grant than reading results: ADMIN + ANALYST only.
 router.post(
   "/:id/enrichment",
+  providerRateLimiter,
   requireCapability(CAPABILITIES.TRIGGER_FINDING_ENRICHMENT),
   scheduleFindingEnrichment
 );

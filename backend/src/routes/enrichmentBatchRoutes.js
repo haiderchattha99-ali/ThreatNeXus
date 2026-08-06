@@ -10,6 +10,7 @@ const router = express.Router();
 
 const authenticate = require("../middleware/authMiddleware");
 const { requireCapability } = require("../middleware/requireRole");
+const { providerRateLimiter } = require("../config/rateLimiters");
 const { CAPABILITIES } = require("../lib/roles");
 
 const { runEnrichmentBatch } = require("../controllers/enrichmentBatchController");
@@ -18,6 +19,7 @@ router.use(authenticate);
 
 router.post(
   "/batches/run",
+  providerRateLimiter,
   requireCapability(CAPABILITIES.EXECUTE_ENRICHMENT_BATCH),
   runEnrichmentBatch
 );
