@@ -66,6 +66,14 @@ export const CAPABILITIES = {
   READ_AI_MAPPING_SUGGESTIONS: 'read:ai-mapping-suggestions',
   REQUEST_AI_MAPPING_SUGGESTIONS: 'request:ai-mapping-suggestions',
   DECIDE_AI_MAPPING_SUGGESTIONS: 'decide:ai-mapping-suggestions',
+  // Phase 8C — Finding-level AI assistance (summary/explanation drafts).
+  // Deciding one (accept/reject) reuses REVIEW_AI_SUGGESTIONS above rather than
+  // a third grant: accepting a draft writes nothing but its own review state,
+  // so it is a genuine review of someone else's output — held by ADMIN and
+  // REVIEWER, deliberately NOT ANALYST, which is what makes it impossible for
+  // the role that requests a draft to also decide it.
+  READ_AI_FINDING_SUGGESTIONS: 'read:ai-finding-suggestions',
+  REQUEST_AI_FINDING_SUGGESTIONS: 'request:ai-finding-suggestions',
 }
 
 export const CAPABILITY_VALUES = Object.values(CAPABILITIES)
