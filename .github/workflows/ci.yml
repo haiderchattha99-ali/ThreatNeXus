@@ -149,6 +149,7 @@ jobs:
             20260803120000_add_phase4_notification_workflow
             20260803140000_add_phase5_framework_mapping_ai_assistance
             20260805062717_add_phase6_3_attack_catalogue_evidence_integrity
+            20260807000000_add_phase8b_censys_exposure_enrichment
           )
           expected="$(printf '%s\n' "${expected_migrations[@]}")"
           actual="$(find prisma/migrations -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort)"
