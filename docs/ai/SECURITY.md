@@ -107,6 +107,51 @@ Providers are behind an abstraction with a `MockProvider` used by every automate
 consumes live quota. Enrichment failure never blocks ingestion — proven end to end by
 `eval:phase7`.
 
+## Provider foundation (Phase 8 evidence)
+
+A "Phase 8 provider foundation" request was investigated before any code was written and found
+already shipped, spread across Phases 2, 6 and 7, not a Phase 8 build. This section is the honest
+record of what exists and where.
+
+- **Two provider registries**, one per domain, deliberately not unified into one abstraction:
+  `backend/src/services/enrichment/providerRegistry.js` (IOC reputation: `mock`, `abuseipdb`) and
+  `backend/src/services/vulnerability/providers/vulnerabilityProviderRegistry.js` (vulnerability
+  metadata: `NVD`, `CISA_KEV`, `FIRST_EPSS`). Each factory map is frozen and never exported directly;
+  callers get only `resolve`/`list` functions.
+- **NVD is a live provider today**, not mocked-only — `nvdCveProvider.js`, wired into vulnerability
+  enrichment since Phase 2 (§2B). `NVD_API_KEY` is optional and never required to start the app; its
+  absence only drops the caller to NVD's public rate limit (`KEYLESS_PUBLIC_RATE_LIMIT`, not
+  `NOT_CONFIGURED` — a key-optional provider is a different, still-valid mode from a key-required
+  one). 404/malformed/timeout/429/5xx are all closed, typed outcomes — see the error contract below.
+- **Safe provider status is already exposed** at `GET /api/dashboard/overview` → `sections.providers`,
+  gated on the existing `read:dashboard` capability (`operationalOverviewService.js`). It reports
+  configuration presence only (`CONFIGURED` / `NOT_CONFIGURED` / `CONFIGURED_WITH_KEY` /
+  `KEYLESS_PUBLIC_RATE_LIMIT` / `NO_KEY_REQUIRED` / `MOCK_PROVIDER` / `ENABLED` / `DISABLED`) plus
+  freshness derived from stored lookup rows (`FRESH` / `STALE` / `NO_SUCCESSFUL_LOOKUP_RECORDED`).
+  It performs zero live provider requests and never returns a key, a key fragment, a base URL, a raw
+  upstream body, or a latency figure — proven against this machine's real ambient keys by
+  `operationalOverviewService.test.js` ("no live provider traffic" describe block). The frontend
+  already renders this (`frontend/src/pages/Settings.jsx`): icon+word+color status badges, source
+  citation, no fabricated coverage, unavailable never shown as zero.
+- **Provider error contract.** `VULNERABILITY_ERROR_CODES` (`vulnerabilityTypes.js`) is the closed set:
+  `PROVIDER_RATE_LIMITED`, `PROVIDER_INVALID_KEY`, `PROVIDER_TIMEOUT`, `PROVIDER_UNAVAILABLE`,
+  `PROVIDER_UNREACHABLE`, `PROVIDER_MALFORMED_RESPONSE`, `PROVIDER_REJECTED`, `PROVIDER_DISABLED`,
+  `UNSUPPORTED_IDENTIFIER`, `CATALOG_UNAVAILABLE`. No raw upstream body or header ever reaches a
+  caller, a log line, or an audit row.
+- **Quota is already shared.** The `provider` rate-limit bucket documented above already covers every
+  provider-execution route (IOC enrichment, CVE enrichment, both batch workers, AI suggestion
+  generation) through one budget; a future provider route joins that same bucket rather than getting
+  its own.
+- **New in this ticket**: an opt-in manual NVD live-smoke script,
+  `backend/src/scripts/nvdLiveSmoke.js` (`npm run smoke:nvd`). It requires `LIVE_NVD_SMOKE=1` to be
+  set explicitly, performs exactly one lookup against a permanently published CVE, never prints
+  `NVD_API_KEY`, and is never invoked by any test, evaluator, or CI job.
+  `backend/tests/unit/phase8ProviderFoundationEvidence.test.js` collects the explicit, named
+  assertions for this whole claim set in one place (missing optional keys don't block startup,
+  registries expose exactly the documented provider names, the error contract is closed and
+  distinct, the provider rate-limit budget is a single positive pair, the smoke script cannot run
+  unattended).
+
 ## Security tests
 
 `backend/tests/` (unit, middleware, integration, including real-PostgreSQL concurrency),

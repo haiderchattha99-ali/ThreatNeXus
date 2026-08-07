@@ -19,7 +19,8 @@
     "eval:phase6.3": "node ../eval/run_phase6_3_gate.js",
     "eval:phase7": "node ../eval/run_phase7_gate.js",
     "attack:verify": "node scripts/verifyAttackCatalogue.js",
-    "seed:demo": "node src/scripts/seedDemo.js"
+    "seed:demo": "node src/scripts/seedDemo.js",
+    "smoke:nvd": "node src/scripts/nvdLiveSmoke.js"
   },
   "keywords": [],
   "author": "",

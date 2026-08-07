@@ -515,6 +515,15 @@ the enrichment row records `FAILED` or `RATE_LIMITED`. API keys are read from
 environment variables only, and never appear in a log line, an error response,
 an audit record or a database column.
 
+Provider status (configured/not-configured, freshness — never a live check) is visible at
+`GET /api/dashboard/overview` → `sections.providers` and in the Settings screen, gated on
+`read:dashboard`. See `docs/ai/SECURITY.md` → "Provider foundation" for the full contract. A manual,
+opt-in NVD live-smoke command exists for local verification and never runs in CI:
+
+```
+LIVE_NVD_SMOKE=1 npm run smoke:nvd --prefix backend
+```
+
 ## Known limitations
 
 - **Single report type.** Only Shadowserver-style *Accessible RDP* is ingested.
