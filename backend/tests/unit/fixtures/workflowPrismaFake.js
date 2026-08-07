@@ -168,6 +168,8 @@ function createWorkflowPrismaFake() {
     vulnerabilities: [],
     findingVulnerabilities: [],
     auditLogs: [],
+    // Phase 8C.
+    findingAiSuggestions: [],
     nextId: 1,
   };
 
@@ -521,6 +523,23 @@ function createWorkflowPrismaFake() {
     }),
     riskFactorContribution: table("riskFactorContributions"),
     vulnerability: table("vulnerabilities"),
+    // --- Phase 8C --------------------------------------------------------------
+    findingAiSuggestion: table("findingAiSuggestions", {
+      defaults: () => ({
+        status: "DRAFT",
+        providerModel: null,
+        requestContext: null,
+        requestedByUserId: null,
+        completedAt: null,
+        decidedAt: null,
+        decidedByUserId: null,
+        decisionReason: null,
+      }),
+      relations: {
+        requestedBy: { table: "users", foreignKey: "requestedByUserId" },
+        decidedBy: { table: "users", foreignKey: "decidedByUserId" },
+      },
+    }),
     findingVulnerability: table("findingVulnerabilities", {
       uniques: [{ fields: ["currentAssociationKey"], ignoreNull: true }],
       defaults: () => ({ supersededAt: null, currentAssociationKey: null }),

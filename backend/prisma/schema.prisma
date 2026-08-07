@@ -98,6 +98,13 @@ model User {
   aiSuggestionRuns             AiSuggestionRun[]                 @relation("AiSuggestionRunActor")
   aiSuggestionsDecided         AiFrameworkMappingSuggestion[]    @relation("AiSuggestionDecidedBy")
   aiSuggestionDecisions        AiSuggestionDecision[]            @relation("AiSuggestionDecisionActor")
+
+  // Phase 8C — same SetNull-actor convention. Requesting a Finding-level AI
+  // draft and accepting/rejecting one are explicit human acts that always
+  // carry an actor at write time; the columns are nullable only so deleting a
+  // User nulls the attribution instead of destroying the suggestion history.
+  findingAiSuggestionsRequested FindingAiSuggestion[] @relation("FindingAiSuggestionRequestedBy")
+  findingAiSuggestionsDecided   FindingAiSuggestion[] @relation("FindingAiSuggestionDecidedBy")
 }
 
 model Threat {
@@ -522,6 +529,12 @@ model Finding {
   // orphaned. Nullable because a CASE-scoped mapping cites the case as a whole.
   frameworkMappingEvidence CaseFrameworkMapping[]         @relation("FrameworkMappingEvidenceFinding")
   aiSuggestionEvidence     AiFrameworkMappingSuggestion[] @relation("AiSuggestionEvidenceFinding")
+
+  // Phase 8C — analyst-assist AI suggestion drafts (summary/explanation) for
+  // this Finding. Restrict, same reasoning as every other evidence-bearing
+  // history table hanging off Finding: a suggestion record must never be
+  // orphaned by deleting the Finding it was drafted about.
+  aiSuggestions FindingAiSuggestion[]
 
   // The locked identity key. Its index also covers indicatorValue-prefixed
   // lookups, so no separate indicatorValue index is added.
@@ -2676,4 +2689,98 @@ model AiSuggestionDecision {
 
   @@index([suggestionId, decidedAt])
   @@index([decision])
+}
+
+// ---------------------------------------------------------------------------
+// Phase 8C — analyst-assist AI suggestion drafts on a single Finding
+// (summary / explanation), reusing the Phase 5 AI foundation's shape:
+// disabled by default, provider output is untrusted input validated the same
+// way, and nothing here can become authoritative except through an explicit
+// human decision. Deliberately a SIMPLER shape than AiSuggestionRun +
+// AiFrameworkMappingSuggestion: a narrative draft has no downstream
+// authoritative record to promote into (unlike an ATT&CK mapping), so one
+// request produces exactly one row and there is no separate "run" table.
+// ---------------------------------------------------------------------------
+
+// Two suggestion types for this MVP. Deliberately not open-ended: adding a
+// third goes through a migration, not a caller-supplied string, so the closed
+// set stays enumerable and auditable.
+enum FindingAiSuggestionType {
+  SUMMARY
+  EXPLANATION
+}
+
+// DRAFT is inert: it changes nothing about the Finding, grants nothing, and
+// is never read by any authoritative workflow. ACCEPTED/REJECTED are human
+// decisions. EXPIRED is reached only when a human attempts to accept a DRAFT
+// whose underlying Finding evidence has changed since it was generated (the
+// same staleness guard Phase 5 uses for mapping suggestions) — never by a
+// background job, because this phase adds no scheduler.
+enum FindingAiSuggestionStatus {
+  DRAFT
+  ACCEPTED
+  REJECTED
+  EXPIRED
+}
+
+model FindingAiSuggestion {
+  id        Int     @id @default(autoincrement())
+  findingId Int
+  finding   Finding @relation(fields: [findingId], references: [id], onDelete: Restrict)
+
+  suggestionType FindingAiSuggestionType
+  status         FindingAiSuggestionStatus @default(DRAFT)
+
+  // The immutable draft text. Written once at creation and never rewritten —
+  // accepting or rejecting changes only the decision projection below, the
+  // same content/decision split AiFrameworkMappingSuggestion uses.
+  proposedText String
+
+  // Closed, allow-listed labels naming which snapshot fields the draft was
+  // generated from (see services/aiAssist/aiAssistRules.js
+  // EVIDENCE_REFERENCE_FIELDS) — never a raw provider payload, never a
+  // free-text citation a provider could fabricate.
+  evidenceReferences Json
+
+  // Stable lowercase provider name ("disabled", "mock"), same convention as
+  // AiSuggestionRun.providerName (D-007) — a plain string so a future
+  // provider needs no migration.
+  providerName          String
+  providerModel         String?
+  promptTemplateVersion String
+
+  // sha256 over the bounded, canonical, evidence-only Finding snapshot the
+  // provider was given. Internal only: never serialized to any API response
+  // and never written to AuditLog. Lets acceptance detect that the Finding's
+  // evidence has changed since the draft was generated.
+  inputFingerprint String
+
+  // Closed machine-readable vocabulary (see aiAssistRules.js
+  // SUGGESTION_REASON_CODES). Never free text, never an exception message,
+  // never a provider error string.
+  reasonCode String
+
+  // Bounded analyst-supplied context for this request. Excluded from
+  // inputFingerprint for the same reason as AiSuggestionRun.requestContext:
+  // it describes what the analyst asked, not what the Finding is.
+  requestContext String?
+
+  requestedByUserId Int?
+  requestedBy       User?     @relation("FindingAiSuggestionRequestedBy", fields: [requestedByUserId], references: [id], onDelete: SetNull)
+  requestedAt       DateTime
+  completedAt       DateTime?
+
+  // --- Decision projection --------------------------------------------------
+  decidedAt       DateTime?
+  decidedByUserId Int?
+  decidedBy       User?   @relation("FindingAiSuggestionDecidedBy", fields: [decidedByUserId], references: [id], onDelete: SetNull)
+  // Bounded human text. Required by the service layer on REJECT, optional on
+  // ACCEPT — same convention as AiFrameworkMappingSuggestion.decisionReason.
+  decisionReason  String?
+
+  createdAt DateTime @default(now())
+
+  @@index([findingId, status])
+  @@index([findingId, suggestionType])
+  @@index([findingId, createdAt])
 }

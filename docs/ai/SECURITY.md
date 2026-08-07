@@ -211,6 +211,63 @@ record of what exists and where.
   redaction extension. Backend suite: 2899 passed / 177 skipped (up from the 2858 baseline by exactly
   the 41 new tests this ticket adds).
 
+### Finding-level AI assistance (Phase 8C)
+
+- **A second, independent AI suggestion domain, alongside Phase 5's ATT&CK mapping suggestions.**
+  Phase 5 already shipped disabled-by-default, human-approved AI mapping suggestions
+  (`AiSuggestionRun`/`AiFrameworkMappingSuggestion`, `services/ai/`). This ticket did not touch that
+  code. It adds `FindingAiSuggestion` (own table, own service module `services/aiAssist/`) for two
+  new, smaller suggestion types a mapping candidate cannot express: a **SUMMARY** and an
+  **EXPLANATION** draft for a single Finding.
+- **Reuses the SAME `AI_ENABLED`/`AI_PROVIDER` operator switch** Phase 5 declared — "AI is optional
+  and disabled by default" is one decision, not a per-feature toggle. With `AI_ENABLED=false` (the
+  shipped default), the disabled provider is resolved regardless of `AI_PROVIDER`, and no suggestion
+  request ever reaches a provider call.
+- **Its own small provider registry and contract** (`aiAssistProviderRegistry.js`,
+  `generateSuggestion({snapshot, suggestionType, asOf, signal})` — a different shape from Phase 5's
+  `suggestMappings`), not a modification of the Phase 5 registry. Consistent with this repository's
+  existing convention of domain-separated provider registries (IOC / vulnerability / exposure, and now
+  two independent AI ones) rather than one unified abstraction. `mock` is reachable only with an
+  explicit test-only `allowMockProvider: true` that no production code path ever passes — the same "no
+  silent fallback from production to mock" guarantee Phase 5 established. **There is still no live AI
+  provider anywhere in this repository** (same boundary Phase 5 documented); adding one is a future
+  decision for `DECISIONS.md`, not a config toggle.
+- **A Finding-scoped, prompt-minimized snapshot** (`findingEvidenceSnapshot.js`), built by construction
+  the same way `caseEvidenceSnapshot.js` is: named, explicitly `SELECT`ed columns only. Structurally
+  excludes the Finding's indicator value, port and protocol, and any organization contact detail — a
+  provider is handed report type, triage decision, the stored Risk v1 band/explanation, and
+  analyst-verified CVE ids, nothing else.
+- **Provider output is untrusted input**, validated by the same discipline as Phase 5: only `text` and
+  `evidenceReferences` are ever read off a provider result (everything else is discarded by
+  construction, not merely rejected), text is bounded, and `evidenceReferences` must name only fields
+  present in the snapshot's own closed allow-list.
+- **Generating a draft never mutates the Finding or anything else** — it writes exactly one
+  `FindingAiSuggestion` row, always `DRAFT`. **Accepting one only flips its own review state** (there is
+  no downstream authoritative record to promote into, unlike an ATT&CK mapping), so the safe-acceptance
+  surface is deliberately smaller than Phase 5's.
+- **Decide reuses the pre-existing `review:ai-suggestions` capability** (declared Phase 0, unused by any
+  route until now) rather than a third new grant — ADMIN/REVIEWER accept or reject; ADMIN/ANALYST
+  request/read (`request:ai-finding-suggestions`, `read:ai-finding-suggestions`); VIEWER holds neither.
+  This is a genuine separation of duties: the role that drafts can never also decide.
+- **Staleness on accept, never on reject.** If the Finding's evidence has changed since a draft was
+  generated, an accept attempt transitions the `DRAFT` to `EXPIRED` and is refused — never silently
+  re-derived. Rejecting is unconditional, the same reasoning Phase 5 applies to mapping-suggestion
+  rejection.
+- **Shares the SAME `providerRateLimiter` budget** every other provider-execution route draws on (IOC/CVE/Censys
+  enrichment, AI mapping suggestions) — proven in `phase7RateLimiting.test.js` ("Phase 8C — counts the
+  AI finding-suggestion route in the SAME budget, not a fresh one").
+- **Audit events**: `ai.suggestion.requested`, `.generated`, `.failed`, `.accepted`, `.rejected`,
+  `.unavailable` — actor/role, provider name, closed reason code only, never the proposed text, the
+  snapshot, or the internal fingerprint.
+- **Prompt-injection controls**: analyst-supplied `requestContext` and provider-returned text are plain
+  string values on a data object; nothing in this codebase parses instructions out of either.
+  `findingAiPromptInjection.test.js` drives an adversarial payload end to end and asserts no Finding
+  mutation and no auto-acceptance.
+- **No frontend surface in this ticket.** Backend/API/tests/docs shipped first, per this ticket's own
+  explicit fallback; a Finding-detail UI surface is deferred to Phase 8C.1.
+- **No live smoke script.** Unlike NVD/Censys, there is no live AI provider to smoke-test in this
+  milestone, so none was added.
+
 ## Security tests
 
 `backend/tests/` (unit, middleware, integration, including real-PostgreSQL concurrency),
@@ -223,8 +280,10 @@ It also verifies the pinned ATT&CK catalogue checksum and runs the Phase 6.3 evi
 - **`react-router-dom` is pinned to 7.18.2.** One advisory remains open; it is RSC-mode-only and
   unreachable in a client-only SPA. A 7.11.0 downgrade was tested and rejected — it trades one
   unreachable advisory for fourteen reachable ones.
-- **AI is disabled by default (`AI_ENABLED=false`)** and cannot approve, send, score, close, resolve
-  or make a final framework mapping. Every core workflow must complete with AI off.
+- **AI is disabled by default (`AI_ENABLED=false`)**, covering BOTH suggestion domains (Phase 5 ATT&CK
+  mapping suggestions and Phase 8C Finding summary/explanation drafts) under one switch, and cannot
+  approve, send, score, close, resolve, or make a final framework mapping. Every core workflow must
+  complete with AI off.
 - **No SMTP or webhook client exists**, not even a disabled one. Export is not delivery.
 - **`backend/.env` on the development machine holds live provider keys.** It is correctly gitignored,
   has never been tracked, and is absent from history. It must never be read, printed, copied,

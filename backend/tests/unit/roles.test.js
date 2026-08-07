@@ -122,7 +122,10 @@ describe("capability constants", () => {
     // + Phase 5 framework mapping / AI assistance (manage:framework-mappings,
     //   read:ai-mapping-suggestions, request:ai-mapping-suggestions,
     //   decide:ai-mapping-suggestions)
-    expect(CAPABILITY_VALUES).toHaveLength(10 + 2 + 2 + 1 + 3 + 3 + 5 + 4);
+    // + Phase 8C Finding-level AI assistance (read:ai-finding-suggestions,
+    //   request:ai-finding-suggestions — decide reuses the pre-existing
+    //   review:ai-suggestions grant, so it adds no new capability)
+    expect(CAPABILITY_VALUES).toHaveLength(10 + 2 + 2 + 1 + 3 + 3 + 5 + 4 + 2);
   });
 
   it("defines the Phase 5 framework-mapping and AI-assistance capability set", () => {

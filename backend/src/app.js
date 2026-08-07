@@ -32,6 +32,7 @@ const findingReadRoutes = require("./routes/findingReadRoutes");
 const frameworkMappingRoutes = require("./routes/frameworkMappingRoutes");
 const attackRoutes = require("./routes/attackRoutes");
 const aiAssistanceRoutes = require("./routes/aiAssistanceRoutes");
+const aiFindingSuggestionRoutes = require("./routes/aiFindingSuggestionRoutes");
 const app = express();
 
 const allowedOrigins = env.CORS_ORIGIN.split(",")
@@ -77,6 +78,9 @@ app.use("/api/findings", censysEnrichmentRoutes);
 app.use("/api/findings", findingRiskRoutes);
 app.use("/api/findings", findingVulnerabilityRoutes);
 app.use("/api/findings", findingTriageRoutes);
+// Phase 8C — same "/:id/<sub>" shape as censysEnrichmentRoutes above, so it
+// must also be registered before findingReadRoutes for the same reason.
+app.use("/api/findings", aiFindingSuggestionRoutes);
 // Phase 6 read surface. Registered LAST of the /api/findings routers so its
 // "/" and "/:id" declarations can never shadow a sibling's "/:id/<sub>" path —
 // an Express param segment matches one segment only, so "/:id" cannot swallow

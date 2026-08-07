@@ -1,116 +1,111 @@
-# Handoff: TNX-P8B-CENSYS-PROVIDER
+# Handoff: TNX-P8C-AI-ASSISTANCE-MVP
 
 - From: claude
 - Suggested next writer: unassigned
-- Branch: feat/phase-8b-censys-provider
-- Updated: 2026-08-07T08:30:00Z
+- Branch: feat/phase-8c-ai-assistance-mvp
+- Updated: 2026-08-07T11:15:00Z
+
+## Phase 8B closure note
+
+`feat/phase-8b-censys-provider` (Censys Platform API integration) is merged into `main` via PR #11
+(`19bf6e6`), on top of PR #10. This ticket fast-forwarded local `main` (which was 6 commits stale) and
+branched from the updated tip.
 
 ## Goal
 
-Build exactly one new live provider adapter, Censys, on top of the existing provider foundation and
-NVD/AbuseIPDB patterns (already shipped in Phases 2/6/7, closed out by TNX-P8-PROVIDER-EVIDENCE-GAPFILL)
-— without rebuilding or duplicating any of that foundation. No live calls in tests/CI, no secret
-leakage, quota enforced through the existing shared budget, audit logged, docs updated.
+Build analyst-assist AI suggestions (finding summary draft, analyst explanation draft) that are
+disabled by default and human-approved only. AI must never make final decisions, never automatically
+close findings, never approve mappings, never notify organizations, and never mutate authoritative
+security state without explicit analyst action.
 
-## Two passes — the first one targeted the wrong API
+## The most important decision in this ticket: what NOT to build
 
-**Pass 1** built the full adapter against what looked like the obvious choice: Censys's Search v2 API
-(`search.censys.io`, HTTP Basic Auth with an API ID + secret). Committed, tested, pushed, CI green.
+Before writing anything, this session read the **existing** Phase 5 AI foundation in full
+(`services/ai/`: provider registry, runtime, mapping provider, mock provider, suggestion service, rules,
+decision service, evidence snapshot) and its routes. Phase 5 already shipped disabled-by-default,
+human-approved AI mapping suggestions with a fully worked-out safety architecture: a one-method provider
+contract that returns data only, a bounded/allow-listed evidence snapshot built by construction (not
+redaction), untrusted-provider-output validation through the same rules a human's input clears, and a
+staleness-fingerprint guard on approval.
 
-**Then the user ran the app locally, provided real provider keys, and asked to verify everything live.**
-AbuseIPDB and NVD worked immediately. Censys did not: the user's real credential is `CENSYS_PAT` — a
-Personal Access Token — which doesn't fit a Basic Auth ID/secret pair at all. Censys's product has
-moved to a **Platform API** (`api.platform.censys.io/v3`, Bearer PAT auth) that this session had not
-accounted for. Verified the real contract via web search/fetch rather than guessing (base URL, auth
-header, a versioned `Accept` header, and — importantly — host data nested one level deeper under
-`result.resource`, with `autonomous_system.description` instead of `.name`, and no documented
-certificate field at all).
-
-Asked the user how to handle it; they chose **Pass 2: rewrite the adapter for the Platform API**, not
-skip Censys or ask for a different credential type. Rewrote `censysProvider.js`, `censysConfig.js`,
-`env.js`, `censysExecutionService.js`, `censysLiveSmoke.js`, all four Censys test files, and — caught
-only by live re-verification, not by the test suite — `operationalOverviewService.js`'s dashboard
-status check, which still read the old `CENSYS_API_ID`/`CENSYS_API_SECRET` env vars and silently
-reported `NOT_CONFIGURED` even with a valid PAT present. Also fixed `docker-compose.yml` and
-`docker-compose.offline.yml`, which predated this branch and had never been updated to pass Censys
-env vars through or blackhole its host at all.
-
-**Everything below describes the Pass 2 (current, correct) state.**
+**Phase 8C does not rebuild any of that.** It adds a second, smaller, parallel AI domain — Finding-level
+narrative drafts (SUMMARY / EXPLANATION) — because a mapping candidate cannot express "draft me a
+summary of this finding." It mirrors Phase 5's architecture closely (own registry, own provider
+contract, own rules module) but is genuinely simpler where the domain allows: one request produces one
+row (no separate "run" table, since a narrative draft isn't a batch of candidates), and accepting a
+draft only flips its own review state (no "promotion" transaction, since there is no downstream
+authoritative record — unlike an ATT&CK mapping becoming a `CaseFrameworkMapping`).
 
 ## What this ticket added
 
-Censys is the second live provider, after NVD. It returns internet-exposure/attack-surface data (open
-services, AS ownership) — a materially different shape from AbuseIPDB's reputation score or NVD's CVE
-metadata, so it gets its own module pair and its own Prisma table rather than being forced into either
-existing registry:
+1. **`FindingAiSuggestion`** (Prisma model + 2 enums, additive-only migration
+   `20260807100000_add_phase8c_finding_ai_suggestions`). Own table — no change to any Phase 5 AI table
+   or any other existing column.
+2. **`backend/src/services/aiAssist/`** — `aiAssistRules.js` (pure validation, closed vocabularies),
+   `aiAssistProvider.js` (the contract + the disabled provider — one method,
+   `generateSuggestion({snapshot, suggestionType, asOf, signal})`, returns data only), `mockAiAssistProvider.js`
+   (deterministic, offline, includes deliberately-bad scenarios), `aiAssistProviderRegistry.js` (mock
+   reachable only with an explicit test-only opt-in, exactly Phase 5's "no silent fallback to mock"
+   guarantee), `aiAssistRuntime.js` (reuses `env.AI_ENABLED`/`env.AI_PROVIDER` — **one** operator switch
+   covers both AI domains), `findingEvidenceSnapshot.js` (bounded per-Finding snapshot, reuses
+   `caseEvidenceSnapshot.js`'s `canonicalize`/fingerprint helpers directly rather than reimplementing
+   them), `findingAiSuggestionService.js` (request/list), `findingAiSuggestionDecisionService.js`
+   (accept/reject; staleness detected on accept transitions the draft to `EXPIRED` and refuses — never
+   on reject, matching Phase 5's own reasoning for why rejection needs no guard), `aiAssistSerializers.js`.
+3. **`GET`/`POST /api/findings/:id/ai-suggestions`**, **`POST .../accept`**, **`POST .../reject`** —
+   `backend/src/controllers/aiFindingSuggestionController.js` + `aiFindingSuggestionRoutes.js`, mounted
+   in `app.js` before `findingReadRoutes` (same route-shadowing constraint as `censysEnrichmentRoutes`).
+4. **Two new capabilities** (`read:ai-finding-suggestions`, `request:ai-finding-suggestions`: ADMIN +
+   ANALYST) **and a reuse, not a third new one**: accept/reject is gated on the pre-existing
+   `review:ai-suggestions` capability (declared Phase 0, granted to ADMIN + REVIEWER, unused by any
+   route until this ticket). It fits here — and did not fit Phase 5's mapping-suggestion decide — because
+   accepting a narrative draft creates no downstream authoritative record; it is a genuine review of
+   someone else's output, not a grant of write authority over anything else. The result is real
+   separation of duties: ANALYST drafts, REVIEWER/ADMIN decides, mirroring the notification workflow.
+5. **Rate limiting**: the new POST route draws on the SAME `providerRateLimiter` budget IOC/CVE/Censys
+   enrichment and AI mapping suggestions already share — proven in `phase7RateLimiting.test.js`.
+6. **Audit events**: `ai.suggestion.requested`/`.generated`/`.failed`/`.accepted`/`.rejected`,
+   `ai.unavailable` — provider name, closed reason code, text LENGTH only, never the proposed text, the
+   snapshot, or the internal staleness fingerprint.
+7. **51 new/updated tests** (see `docs/ai/STATE.yaml` `completed` for the exact breakdown). Full backend
+   suite: **2950 passed / 177 skipped**, zero regressions from the 2899 baseline.
 
-1. **`CensysEnrichment`** (Prisma model + migration, additive-only, verified from zero on a disposable
-   PostgreSQL container with zero drift). Deliberately NOT a queue — every row is written once, already
-   terminal, by a synchronous human-triggered lookup. No schema change was needed for the Pass 2
-   rewrite — only the provider adapter's auth/parsing changed, not the persisted normalized shape.
-2. **`censysConfig.js` / `censysTypes.js` / `censysProvider.js`** — targets the Platform API. `CENSYS_PAT`
-   (Bearer token) is the sole required credential; `CENSYS_ORG_ID` is optional (sent as
-   `X-Organization-ID` only when present). Reuses the SAME closed error-code vocabulary
-   (`PROVIDER_RATE_LIMITED`/`PROVIDER_INVALID_KEY`/`PROVIDER_TIMEOUT`/etc.) the IOC and vulnerability
-   providers already speak.
-3. **`censysExecutionService.js`** — resolves the Finding's indicator, calls the provider, persists one
-   row, writes an attempted+outcome audit pair (5 actions). No HTTP dependency.
-4. **`GET`/`POST /api/findings/:id/enrichment/censys`** — reuses `read:findings` / `trigger:finding-
-   enrichment` and the SAME `providerRateLimiter` budget every other provider-execution route shares.
-5. **Dashboard/Settings** — `sections.providers.exposure`, rendered by the existing components.
-6. **`backend/src/scripts/censysLiveSmoke.js`** (`npm run smoke:censys`) — opt-in, `1.1.1.1`, never
-   prints credentials, never runs in CI. **This one WAS executed live this session** (with explicit
-   authorization) — real result: 17 services on `1.1.1.1`, AS `CLOUDFLARENET - Cloudflare, Inc.`
-7. **45 tests** across both passes, all rewritten for the Platform API shape in Pass 2: `censysProvider
-   .test.js` (15), `censysEnrichmentRouteAuthorization.test.js` (14), `censysLiveSmoke.test.js` (3),
-   `phase8bCensysProviderEvidence.test.js` (7), 2 `phase7RateLimiting.test.js` cases, 1
-   `operationalOverviewService.test.js` redaction-list extension.
-8. Docs + `docker-compose.yml`/`docker-compose.offline.yml` updated for the Platform API shape and env
-   passthrough.
+## Two real bugs this ticket's own tests caught (in the tests, not the implementation)
 
-## Live verification (this session, with explicit user authorization)
-
-The user authorized reading `backend/.env` to wire real keys. **Chose not to literally read/display
-it anyway** — grep'd key *names* only, and moved key *values* straight from `backend/.env` into a new
-root `.env` (gitignored, never committed) via shell redirection, so no plaintext value ever entered
-this conversation. All three providers then confirmed live against their real APIs through the actual
-running Docker stack:
-
-- **AbuseIPDB**: real `httpStatus:200` responses across all 18 pending demo findings, classifying the
-  RFC 5737 synthetic ranges as `Reserved`/whitelisted (genuine AbuseIPDB behavior for documentation IPs).
-- **NVD**: real CVE-2021-44228 (Log4Shell) lookup, CVSS 10.0 CRITICAL.
-- **Censys**: real `1.1.1.1` lookup (17 services, `CLOUDFLARENET`) via the smoke script, and a real
-  `httpStatus:200` call through the actual Finding route (empty result, correctly — Censys has never
-  scanned an RFC 5737 documentation address, so "no data" is the honest answer, not a bug).
-
-## Also answered this session (no code change)
-
-The user asked whether Admin can add Analyst accounts through the app. **No** — `manage:users` exists
-as a granted capability but has zero routes wired to it anywhere in the codebase. Public registration
-always creates the least-privileged `VIEWER` role (hardcoded server-side); privileged roles can only
-be assigned by running `seed:users` directly. Flagged as a real gap, not a hidden feature — recorded
-under `known_issues` and `next_action` below.
-
-## Validation
-
-Backend: 2899 passed / 177 skipped, no regressions, after both the rewrite and the dashboard-status
-fix. `git status` clean diff, explicit paths only; `docs/codex/` and the real-key-holding root `.env`
-(gitignored) both untouched by any commit.
+- A route-authorization test wrongly assumed setting `AI_PROVIDER=mock` in the environment would make
+  the real HTTP path return mock-generated text. It does not, by design — the mock provider is reachable
+  only with a test-only `allowMockProvider` flag no production caller ever passes. Fixed the test to
+  assert the correct (and more important) property: **even with `AI_PROVIDER=mock` set, the real HTTP
+  path still resolves to the disabled provider.**
+- A safety-boundary test expected a hostile provider result carrying extra unexpected fields
+  (`riskBand`, `closeFinding`, ...) to be explicitly REJECTED. The actual (correct) behaviour is that the
+  service only ever reads `.text` and `.evidenceReferences` off a provider result — everything else is
+  excluded **by construction**, never even passed to validation. This is the stronger safety property
+  (the same "prompt minimization by construction, not redaction" philosophy `caseEvidenceSnapshot.js`
+  documents), so the test was corrected to assert that instead.
 
 ## Honest gaps
 
-- In-app user management doesn't exist (see above) — a real, user-confirmed gap, not addressed here.
-- Censys is Finding-scoped, synchronous, human-triggered only — no batch/queue worker, matching this
-  phase's explicit "no queues/schedulers" scope.
-- `docker-compose.yml`/`offline.yml` are now correct for Censys but hadn't been touched since Phase 7
-  — worth a broader audit if a fourth provider is ever added.
+- **`prisma migrate deploy` from zero and every `eval:phase*` gate could not be run in this session.**
+  Docker Desktop's daemon never came up (`docker ps` hung indefinitely after launch; no other local
+  Postgres was reachable). The migration SQL was hand-authored mirroring the exact proven Phase 5/8B
+  template rather than machine-generated from a live diff against a real database. **CI's Postgres
+  service container is the first real proof of this migration and must be watched to green before this
+  ticket can be considered fully verified.**
+- No frontend surface — deferred to **Phase 8C.1** per this ticket's own explicit fallback clause.
+  Backend/API/tests/docs shipped first.
+- No live AI provider exists in this repository (same boundary Phase 5 documented) and therefore no live
+  smoke script.
+- `F:\Ismail-AI-Dev-Team\scripts\start-task.ps1` throws against this repo's `STATE.yaml` schema (assumes
+  a `current_work` field this project doesn't have). Worked around, not fixed — out of this repo's scope.
 - `docs/codex/` remains untracked and untouched, per the one-writer boundary.
 
 ## Recommended next phase
 
-Three real options, in no particular priority: (1) build in-app user management — the `manage:users`
-capability already exists and is unused; (2) a third live provider following the same additive
-pattern Censys established; (3) resolve Shadowserver access/licensing terms.
+In order of what this ticket's own gaps suggest: (1) watch CI green, since the migration is unverified
+against a real database locally; (2) Phase 8C.1 — the Finding-detail frontend surface for these
+suggestions; (3) in-app user management (`manage:users` still unused, flagged since Phase 8B); (4) a
+third live provider or Shadowserver licensing.
 
 ## Protected boundaries
 
@@ -118,3 +113,4 @@ pattern Censys established; (3) resolve Shadowserver access/licensing terms.
 - Do not change architecture without updating `DECISIONS.md`.
 - Do not expose secrets or absorb unrelated changes.
 - `docs/codex/` is a foreign path this session did not touch — leave it alone unless its owner asks.
+- `backend/.env` (and any non-`.env.example` env file) must never be read, printed, or committed.
