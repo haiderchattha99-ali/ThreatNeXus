@@ -7,7 +7,10 @@
 // "valid" — the same reasoning abuseIpdbConfig.js already established for
 // AbuseIPDB. No env access, no I/O — pure data + validation only.
 
-const DEFAULT_BASE_URL = "https://search.censys.io/api/v2";
+// Censys's current Platform API. The legacy Search v2 API (search.censys.io)
+// is a different product with a different auth scheme (Basic Auth, API ID +
+// secret) and is not what this provider targets.
+const DEFAULT_BASE_URL = "https://api.platform.censys.io/v3";
 
 // A bounded, safe default — long enough for a slow provider response, short
 // enough that one lookup can never stall a caller indefinitely.

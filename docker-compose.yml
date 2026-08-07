@@ -91,6 +91,8 @@ services:
       IOC_ENRICHMENT_PROVIDER: ${IOC_ENRICHMENT_PROVIDER:-mock}
       ABUSEIPDB_API_KEY: ${ABUSEIPDB_API_KEY:-}
       NVD_API_KEY: ${NVD_API_KEY:-}
+      CENSYS_PAT: ${CENSYS_PAT:-}
+      CENSYS_ORG_ID: ${CENSYS_ORG_ID:-}
       # AI is off by default and there is no live provider in this repository.
       AI_ENABLED: ${AI_ENABLED:-false}
       AI_PROVIDER: ${AI_PROVIDER:-null}

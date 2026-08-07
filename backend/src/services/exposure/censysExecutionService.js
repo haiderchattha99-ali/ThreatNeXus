@@ -83,8 +83,8 @@ async function audit(client, auditContext, event) {
 // production always resolves globalThis.fetch here.
 function buildProvider({ fetchImpl } = {}) {
   return createCensysProvider({
-    apiId: env.CENSYS_API_ID,
-    apiSecret: env.CENSYS_API_SECRET,
+    pat: env.CENSYS_PAT,
+    orgId: env.CENSYS_ORG_ID,
     baseUrl: env.CENSYS_BASE_URL,
     timeoutMs: env.CENSYS_TIMEOUT_MS,
     fetchImpl,

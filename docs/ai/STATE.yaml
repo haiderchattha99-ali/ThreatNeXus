@@ -1,7 +1,7 @@
 {
     "schema_version":  1,
     "ticket":  "TNX-P8B-CENSYS-PROVIDER",
-    "title":  "Phase 8B - Censys live internet-exposure/attack-surface provider integration",
+    "title":  "Phase 8B - Censys live internet-exposure/attack-surface provider integration (Platform API)",
     "status":  "complete",
     "owner":  "unassigned",
     "reviewer":  "codex",
@@ -11,58 +11,57 @@
     "goal":  "Build exactly one new live provider adapter, Censys, using the existing provider foundation and NVD/AbuseIPDB patterns (registries, config safety, audit logging, Phase 7 shared rate limiting) without rebuilding or duplicating any of it. No live calls in tests/CI, no secret leakage, quota enforced, audit logged, docs updated. Do not integrate Shadowserver, Shodan, Netlas, GreyNoise, VirusTotal, OTX, or MISP.",
     "scope":  {
                   "included":  [
-                                   "CensysEnrichment Prisma model + migration (own table, not a bolt-on to IocEnrichment; no queue/lease/retry — synchronous terminal rows only)",
-                                   "censysConfig.js / censysTypes.js / censysProvider.js (self-contained adapter mirroring abuseIpdbProvider.js's defensive HTTP shape)",
+                                   "CensysEnrichment Prisma model + migration (own table, not a bolt-on to IocEnrichment; no queue/lease/retry - synchronous terminal rows only)",
+                                   "censysConfig.js / censysTypes.js / censysProvider.js against Censys's CURRENT Platform API (api.platform.censys.io/v3, Bearer PAT) - corrected mid-session from an initial build against the legacy Search v2 API (Basic Auth) after the user's real credential turned out to be a Personal Access Token",
                                    "censysExecutionService.js: audited, synchronous, human-triggered lookup (5 audit actions: attempted/succeeded/failed/unavailable/rate_limited)",
                                    "GET+POST /api/findings/:id/enrichment/censys, reusing existing read:findings / trigger:finding-enrichment capabilities and the existing providerRateLimiter budget",
                                    "Dashboard sections.providers.exposure + Settings.jsx/DashboardSections.jsx rendering it via the existing CONFIG_STATE/PROVIDER_STATE dictionaries (no new UI vocabulary)",
                                    "Opt-in manual live smoke script (LIVE_CENSYS_SMOKE=1, npm run smoke:censys, lookup against 1.1.1.1, never run in CI)",
-                                   "41 new/updated tests: censysProvider.test.js (15), censysEnrichmentRouteAuthorization.test.js (14), censysLiveSmoke.test.js (3), phase8bCensysProviderEvidence.test.js (7), plus 2 new phase7RateLimiting.test.js cases proving shared quota",
-                                   "Docs: README, docs/ai/SECURITY.md ('Censys - the second live provider' subsection), backend/.env.example, docs/ai/HANDOFF.md, docs/ai/STATE.yaml",
-                                   "Merged the prior TNX-P8-PROVIDER-EVIDENCE-GAPFILL branch into main first (PR #9), per the user's explicit start-gate answer, so this branch starts from an updated main"
+                                   "docker-compose.yml/docker-compose.offline.yml updated to pass CENSYS_PAT/CENSYS_ORG_ID through and blackhole api.platform.censys.io - these predated the Censys branch and had never been touched for it",
+                                   "45 new/updated tests across two passes: censysProvider.test.js (15), censysEnrichmentRouteAuthorization.test.js (14), censysLiveSmoke.test.js (3), phase8bCensysProviderEvidence.test.js (7), 2 phase7RateLimiting.test.js cases, 1 operationalOverviewService.test.js redaction extension - all rewritten a second time for the Platform API credential/response shape",
+                                   "Docs: README, docs/ai/SECURITY.md, backend/.env.example, docs/ai/HANDOFF.md, docs/ai/STATE.yaml - all updated for the Platform API shape",
+                                   "Merged the prior TNX-P8-PROVIDER-EVIDENCE-GAPFILL branch into main first (PR #9), per the user's explicit start-gate answer",
+                                   "Live-verified all three providers (AbuseIPDB, NVD, Censys) against real APIs through the actual running Docker stack, with the user's real keys, with explicit per-key user authorization for wiring (values never displayed/printed by the assistant)"
                                ],
                   "excluded":  [
                                    "Shadowserver, Shodan, Netlas, GreyNoise, VirusTotal, OTX, MISP integration",
                                    "Live AI provider",
-                                   "Scheduled/queued Censys jobs — this phase is explicitly synchronous, human-triggered only",
-                                   "A unified cross-cutting provider registry spanning IOC/vulnerability/exposure — three separate, intentionally un-unified registries by design",
-                                   "PR creation or merge into main (for THIS ticket's branch — the gap-fill PR #9 merge was separately authorized by the user)"
+                                   "Scheduled/queued Censys jobs - this phase is explicitly synchronous, human-triggered only",
+                                   "A unified cross-cutting provider registry spanning IOC/vulnerability/exposure - three separate, intentionally un-unified registries by design",
+                                   "In-app user management (Admin creating/promoting Analyst/Reviewer accounts) - the manage:users capability exists but has zero routes wired to it; out of scope for this ticket, flagged as a real gap",
+                                   "PR creation or merge into main (for THIS ticket's branch - the gap-fill PR #9 merge was separately authorized by the user)"
                                ]
               },
     "completed":  [
                       "Verified the mandatory start gate: fetched origin, confirmed the prior gap-fill branch was NOT merged into main, stopped and reported per the user's own rule 4, got explicit direction to open PR #9 and merge it, then branched feat/phase-8b-censys-provider from the resulting updated main (4fb373c)",
                       "Prisma: CensysEnrichment model + enum, additive-only migration 20260807000000_add_phase8b_censys_exposure_enrichment, verified against a real disposable PostgreSQL instance (migrate deploy from zero, prisma validate, migrate diff --exit-code shows zero drift)",
-                      "censysConfig.js / censysTypes.js / censysProvider.js: full adapter with Basic Auth, bounded timeout+caller-signal composition, 401/403/404/429/5xx/timeout/malformed/unreachable all mapped to the same closed PROVIDER_ERROR_CODES vocabulary iocEnrichmentTypes.js and vulnerabilityTypes.js already use; verified end-to-end with a hand-run script before writing tests",
-                      "censysExecutionService.js: resolves Finding indicator, calls the provider, persists one CensysEnrichment row, writes an attempted+outcome audit pair (5 actions), never throws for an expected provider outcome",
-                      "censysEnrichmentController.js + censysEnrichmentRoutes.js, mounted in app.js: GET/POST /api/findings/:id/enrichment/censys reusing read:findings / trigger:finding-enrichment and the existing providerRateLimiter",
-                      "backend/src/scripts/censysLiveSmoke.js (npm run smoke:censys): opt-in LIVE_CENSYS_SMOKE=1, one lookup against 1.1.1.1 (Cloudflare public DNS, permanent public infrastructure), never prints credentials",
-                      "Dashboard: operationalOverviewService.js buildProvidersSection now queries CensysEnrichment and returns sections.providers.exposure (CONFIGURED/NOT_CONFIGURED + freshness); Settings.jsx and DashboardSections.jsx ProviderFreshness fold the new array into their existing rendering with zero new UI vocabulary",
-                      "Fixed two pre-existing test mock clients (operationalOverviewService.test.js, riskFactorPressure.test.js) that needed a censysEnrichment.aggregate stub added — caught by running the full suite, not assumed",
-                      "41 new/updated tests, all passing: censysProvider.test.js (15), censysEnrichmentRouteAuthorization.test.js (14, full route->controller->service->provider chain with a faked globalThis.fetch), censysLiveSmoke.test.js (3), phase8bCensysProviderEvidence.test.js (7), phase7RateLimiting.test.js +2 (shared-budget and own-budget proofs)",
-                      "Docs: README External providers table + smoke command, docs/ai/SECURITY.md 'Censys - the second live provider (Phase 8B)' subsection, backend/.env.example CENSYS_* block",
-                      "Fixed the CI 'migration count and order match the reviewed history' guard, which pins an exact migration-directory list on purpose — added this ticket's migration folder name to it (.github/workflows/ci.yml), per the guard's own instruction to update it in the same PR",
-                      "Pushed feat/phase-8b-censys-provider (commits 4843c0b, fd297ef) and watched GitHub Actions run 31155494175 to a green conclusion (all required jobs; Mutation and concurrency gates remains manual by design)"
+                      "First pass: built the full adapter, execution service, routes, dashboard integration, smoke script and 41 tests against what was assumed to be Censys's Search v2 API (Basic Auth, API ID + secret). Committed, pushed, CI green (commits 4843c0b, fd297ef, run 31155494175).",
+                      "Ran the app end to end via docker compose (postgres + backend + frontend), seeded 4 role accounts and the demo dataset, verified login/RBAC for all four roles, at the user's request",
+                      "User authorized reading backend/.env to wire real provider keys. Chose NOT to literally Read/display it: grep'd key NAMES only, and copied specific VALUES via shell redirection (grep '^KEY=' >> .env) so the plaintext never entered the conversation transcript, per standing operational-security practice even under explicit permission",
+                      "Wired AbuseIPDB + NVD keys into the running stack and live-verified both against the real APIs (AbuseIPDB: real httpStatus 200 response classifying RFC 5737 ranges as Reserved/whitelisted across all 18 pending findings; NVD: real CVE-2021-44228/Log4Shell lookup, CVSS 10.0 CRITICAL)",
+                      "Discovered the user's real Censys credential is CENSYS_PAT (a Platform API Personal Access Token, Bearer auth) - does not fit the Search v2 Basic Auth shape the adapter was built against. Verified the real Platform API contract via WebSearch/WebFetch (base URL api.platform.censys.io/v3, Bearer auth, versioned Accept header, host data nested under result.resource, autonomous_system.description not .name, no certificate field) rather than guessing.",
+                      "User chose to rewrite the adapter for the Platform API (not skip Censys, not swap to a different credential type). Rewrote censysProvider.js, censysConfig.js, env.js, censysExecutionService.js, censysLiveSmoke.js, and operationalOverviewService.js (the dashboard status check was initially missed and caught by live re-verification, not by the test suite - a real gap in test coverage now closed) for CENSYS_PAT + CENSYS_ORG_ID.",
+                      "Rewrote all Censys tests for the new credential/response shape: censysProvider.test.js (15), censysEnrichmentRouteAuthorization.test.js (14), censysLiveSmoke.test.js (3), phase8bCensysProviderEvidence.test.js (7), plus fixes to phase7RateLimiting.test.js and operationalOverviewService.test.js. Full backend suite reconfirmed green (2899/177) after both the code rewrite and the dashboard-status fix.",
+                      "Updated docker-compose.yml and docker-compose.offline.yml, which predated this branch entirely and never passed CENSYS_PAT/CENSYS_ORG_ID through or blackholed the Censys host - a real gap the live Docker run exposed.",
+                      "Live-verified the rewritten Censys adapter twice: via the opt-in smoke script (real 1.1.1.1 lookup, 17 services, CLOUDFLARENET) and via the actual Finding-scoped API route (httpStatus 200 against a real synthetic-IP finding, correctly empty since Censys has never scanned an RFC 5737 documentation address)",
+                      "Updated README, docs/ai/SECURITY.md, backend/.env.example for the Platform API shape"
                   ],
     "validation":  {
-                       "backend":  "PASS — 2899 passed / 177 skipped (115 files passed, 16 skipped), up from the 2858 baseline by exactly the 41 new tests this ticket adds; no regressions",
-                       "prisma_migrate_from_zero":  "PASS — all 19 migrations (18 pre-existing + this ticket's) applied cleanly on a disposable PostgreSQL 16 container from zero",
-                       "prisma_validate":  "PASS — schema valid",
-                       "prisma_drift":  "PASS — `prisma migrate diff --exit-code` against the same live database reports zero difference after applying this ticket's migration",
-                       "frontend":  "PASS — 143/143 unit tests unchanged, no regressions from the Settings.jsx/DashboardSections.jsx edits",
-                       "route_census":  "PASS — phase7RouteCensus.test.js (the structural walk requiring every mounted route to authenticate + enforce a capability) covers both new Censys routes automatically, no exception-list edit needed",
-                       "rate_limit_sharing":  "PASS — new phase7RateLimiting.test.js case proves the Censys route shares the SAME providerRateLimiter budget as IOC enrichment (2 IOC calls + 1 Censys call = 429), and that the Censys route alone also bounds its own rate",
-                       "secret_hygiene":  "PASS — backend/.env never opened this session; new tests assert injected fake CENSYS_API_ID/CENSYS_API_SECRET values never appear in any response body, audit row, or smoke-script output; no live Censys call was made",
-                       "no_live_calls_in_tests":  "PASS — every censysProvider.test.js case injects its own fetchImpl; censysEnrichmentRouteAuthorization.test.js fakes globalThis.fetch for the full route chain; censysLiveSmoke.test.js never sets the opt-in env var in a way that reaches the network",
-                       "git_status":  "Clean diff, explicit paths staged only; docs/codex/ untouched throughout",
-                       "ci_workflow":  "PASS — GitHub Actions run 31155494175 at commit fd297ef, conclusion success: Secrets/artifact scan, Backend tests, Frontend lint/tests/build, Prisma schema/migration history, Core evaluators, Browser suite (Chromium) all green; Mutation and concurrency gates (manual) intentionally not triggered. First push (31155284518) failed only the frozen migration-history guard, fixed in the same PR (see completed[])."
+                       "backend":  "PASS - 2899 passed / 177 skipped, no regressions, after both the Platform API rewrite and the dashboard-status fix",
+                       "prisma_migrate_from_zero":  "PASS - unchanged from first pass, no schema change in the rewrite (only the provider adapter's auth/parsing changed, not the persisted shape)",
+                       "live_verification":  "PASS - all three providers (AbuseIPDB, NVD, Censys) confirmed making real successful calls to their real APIs through the actual running Docker stack with the user's real keys",
+                       "secret_hygiene":  "PASS - no key value was ever displayed, printed, or included in any assistant message; backend/.env was never fully read, only grep'd for key names and value lengths; values moved directly via shell redirection into a root .env (gitignored) that was never committed",
+                       "no_live_calls_in_tests":  "PASS - all automated tests still inject their own fetchImpl or fake globalThis.fetch; the live verification used docker compose exec / curl against the running container, entirely outside the test suite",
+                       "git_status":  "Clean diff, explicit paths staged only; docs/codex/ untouched throughout; root .env (holding real keys) is gitignored and was never staged"
                    },
     "known_issues":  [
-                         "The manual Censys live smoke was NOT executed against the real Censys API this session (not authorized); implemented and unit-tested with a mocked fetch only.",
-                         "Censys is exposed as a Finding-scoped, synchronous, human-triggered lookup only — there is no batch/queue worker for it (matches this phase's explicit 'no queues/schedulers' scope), so it cannot be bulk-run the way IOC/vulnerability enrichment batches can.",
+                         "In-app user management does not exist: Admin holds a manage:users capability with zero routes wired to it. New Analyst/Reviewer/Admin accounts can only be created by running seed:users directly (server-side), not through the app. Flagged to the user as a real gap, not a hidden feature.",
+                         "Censys is exposed as a Finding-scoped, synchronous, human-triggered lookup only - there is no batch/queue worker for it (matches this phase's explicit 'no queues/schedulers' scope).",
+                         "docker-compose.yml/offline.yml were fixed for Censys env passthrough as part of this session, but had not been touched at all since Phase 7 - worth a broader pass if more providers are added later.",
                          "docs/codex/ remains untracked and untouched, per the one-writer boundary."
                      ],
-    "next_action":  "Run the remaining local gate items (already substantially done), commit with explicit paths, push feat/phase-8b-censys-provider, watch CI to green, release the writer lock.",
+    "next_action":  "None required to close this ticket. Recommended next steps: (1) build in-app user management (the manage:users capability already exists, unused), (2) a third live provider following the same additive pattern, or (3) resolve Shadowserver access/licensing terms.",
     "checkpoint_ref":  "HEAD",
-    "updated_at":  "2026-08-07T00:00:00.0000000Z",
+    "updated_at":  "2026-08-07T08:30:00.0000000Z",
     "next_writer":  "unassigned"
 }

@@ -480,10 +480,10 @@ async function buildProvidersSection(client, asOf) {
     },
   ];
 
-  // Phase 8B — Censys internet-exposure/attack-surface provider. Requires
-  // BOTH CENSYS_API_ID and CENSYS_API_SECRET (Basic Auth pair); a caller with
-  // only one is reported NOT_CONFIGURED, never a fabricated partial state.
-  const censysConfigured = Boolean(env.CENSYS_API_ID) && Boolean(env.CENSYS_API_SECRET);
+  // Phase 8B — Censys internet-exposure/attack-surface provider (Platform
+  // API, Bearer PAT). CENSYS_ORG_ID is optional even when a PAT is present,
+  // so configuration status depends on the PAT alone.
+  const censysConfigured = Boolean(env.CENSYS_PAT);
   const exposureProviders = [
     {
       id: "censys",

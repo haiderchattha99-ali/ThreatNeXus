@@ -1,18 +1,26 @@
 "use strict";
 
 // Real Censys exposure/attack-surface provider (Phase 8B) — the Censys
-// Search v2 "hosts" endpoint, following the exact defensive shape
-// abuseIpdbProvider.js already established for a real third-party HTTP
-// provider: composed timeout+caller-signal, every expected HTTP/transport
-// outcome mapped to a normalized result via createExposureResult, never
-// throwing for an expected outcome. Only throws for a genuine
-// programmer/contract violation.
+// PLATFORM API's host-lookup endpoint (GET /v3/global/asset/host/{ip}),
+// following the exact defensive shape abuseIpdbProvider.js already
+// established for a real third-party HTTP provider: composed
+// timeout+caller-signal, every expected HTTP/transport outcome mapped to a
+// normalized result via createExposureResult, never throwing for an expected
+// outcome. Only throws for a genuine programmer/contract violation.
 //
-// Censys authenticates with HTTP Basic Auth (API ID as username, API secret
-// as password) — both are read only to build that one Authorization header
-// and are never logged, returned, or included in any error. Automated tests
-// only ever reach this module through an injected fetchImpl; nothing here
-// touches the real internet during `npm test`.
+// This is the CURRENT Censys API (censys.com's Platform API, base URL
+// api.platform.censys.io/v3), not the older/legacy Search v2 API
+// (search.censys.io) — an earlier version of this file targeted Search v2's
+// Basic Auth (API ID + secret) shape, which does not accept the Personal
+// Access Token credential Censys actually issues today. Auth is a single
+// Bearer PAT; the response nests host data one level deeper, under
+// `result.resource` rather than `result` directly; and field names differ
+// (`autonomous_system.description` not `.name`; no documented certificate
+// field on this endpoint, so certificateCount is always null here rather than
+// guessed). The PAT is read only to build the Authorization header and is
+// never logged, returned, or included in any error. Automated tests only
+// ever reach this module through an injected fetchImpl; nothing here touches
+// the real internet during `npm test`.
 
 const {
   ENRICHMENT_STATUS,
@@ -30,6 +38,10 @@ const {
 
 const PROVIDER_NAME = "censys";
 const RETRY_AFTER_SECONDS_PATTERN = /^\d+$/;
+// Versioned Accept header the Platform API's host-lookup endpoint documents —
+// distinct from a generic "application/json", and required by Censys to pin
+// the response schema version this provider was written against.
+const HOST_ACCEPT_HEADER = "application/vnd.censys.api.v3.host.v1+json";
 
 function isPlainObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -60,6 +72,10 @@ function getHeader(response, name) {
 
 // Allow-listed extraction only — every field Censys could return that this
 // provider does not explicitly ask for here is dropped, never passed through.
+//
+// Platform API service entries carry BOTH `protocol` (the application-layer
+// name, e.g. "HTTP") and `transport_protocol` (TCP/UDP) — the same two roles
+// Search v2 called `service_name`/`transport_protocol`, just renamed.
 function normalizeServices(rawServices) {
   if (!Array.isArray(rawServices)) return [];
   return rawServices
@@ -67,25 +83,29 @@ function normalizeServices(rawServices) {
     .map((entry) => ({
       port: Number.isInteger(entry.port) ? entry.port : null,
       protocol: typeof entry.transport_protocol === "string" ? entry.transport_protocol : "UNKNOWN",
-      serviceName: typeof entry.service_name === "string" ? entry.service_name : null,
+      serviceName: typeof entry.protocol === "string" ? entry.protocol : null,
     }))
     .filter((entry) => Number.isInteger(entry.port) && entry.port >= 1 && entry.port <= 65535);
 }
 
-function normalizeSuccessPayload(rawResult) {
-  if (!isPlainObject(rawResult)) return null;
+// `resource` is the object at `result.resource` in a Platform API host
+// response — one level deeper than Search v2's `result` was.
+function normalizeSuccessPayload(resource) {
+  if (!isPlainObject(resource)) return null;
 
-  const services = normalizeServices(rawResult.services);
-  const asInfo = isPlainObject(rawResult.autonomous_system) ? rawResult.autonomous_system : null;
+  const services = normalizeServices(resource.services);
+  const asInfo = isPlainObject(resource.autonomous_system) ? resource.autonomous_system : null;
   const autonomousSystemNumber =
     asInfo && Number.isInteger(asInfo.asn) && asInfo.asn >= 0 ? asInfo.asn : null;
+  // Platform API names this field `description`, not `name` (Search v2's
+  // field name) — e.g. "CLOUDFLARENET" arrives here either way.
   const autonomousSystemName =
-    asInfo && typeof asInfo.name === "string" ? asInfo.name : null;
-  const certificateCount = Array.isArray(rawResult.certificates)
-    ? rawResult.certificates.length
-    : typeof rawResult.certificates_count === "number" && Number.isInteger(rawResult.certificates_count)
-      ? rawResult.certificates_count
-      : null;
+    asInfo && typeof asInfo.description === "string" ? asInfo.description : null;
+  // The documented Platform API host-lookup response carries no certificate
+  // field at all (unlike Search v2, which had one) — left null rather than
+  // guessed at a field name Censys has not documented, per this repo's own
+  // rule that unknown stays unknown, never a fabricated value.
+  const certificateCount = null;
 
   return { services, autonomousSystemNumber, autonomousSystemName, certificateCount };
 }
@@ -169,7 +189,7 @@ async function mapHttpResponseToResult({ response, indicator, asOf }) {
       });
     }
 
-    if (!isPlainObject(body) || !isPlainObject(body.result)) {
+    if (!isPlainObject(body) || !isPlainObject(body.result) || !isPlainObject(body.result.resource)) {
       return createExposureResult({
         ...base,
         status: ENRICHMENT_STATUS.FAILED,
@@ -178,7 +198,7 @@ async function mapHttpResponseToResult({ response, indicator, asOf }) {
       });
     }
 
-    const normalized = normalizeSuccessPayload(body.result);
+    const normalized = normalizeSuccessPayload(body.result.resource);
     if (!normalized) {
       return createExposureResult({
         ...base,
@@ -202,10 +222,10 @@ async function mapHttpResponseToResult({ response, indicator, asOf }) {
 
 /**
  * Creates the real CensysProvider. Constructible with no arguments at all —
- * no credentials required to import/construct this module; missing
- * credentials only affect lookup() (SKIPPED_DISABLED).
+ * no credentials required to import/construct this module; a missing PAT
+ * only affects lookup() (SKIPPED_DISABLED).
  *
- * @param {{apiId?: string, apiSecret?: string, baseUrl?: string,
+ * @param {{pat?: string, orgId?: string, baseUrl?: string,
  *   timeoutMs?: number, enabled?: boolean, fetchImpl?: Function}} [config]
  */
 function createCensysProvider(config = {}) {
@@ -223,18 +243,19 @@ function createCensysProvider(config = {}) {
     throw new CensysConfigError(err.message);
   }
 
-  const apiId = typeof config.apiId === "string" ? config.apiId.trim() : "";
-  const apiSecret = typeof config.apiSecret === "string" ? config.apiSecret.trim() : "";
+  const pat = typeof config.pat === "string" ? config.pat.trim() : "";
+  // Optional — Censys documents X-Organization-ID as an optional header for
+  // accounts that belong to more than one organization. Most personal
+  // accounts never need it.
+  const orgId = typeof config.orgId === "string" ? config.orgId.trim() : "";
   const explicitlyDisabled = config.enabled === false;
   const fetchImpl = typeof config.fetchImpl === "function" ? config.fetchImpl : globalThis.fetch;
   if (typeof fetchImpl !== "function") {
     throw new TypeError("createCensysProvider: no fetch implementation available — supply config.fetchImpl");
   }
 
-  // Censys requires BOTH halves of the credential pair — a caller with only
-  // an API ID or only a secret is treated the same as having neither.
   function isEnabled() {
-    return !explicitlyDisabled && apiId !== "" && apiSecret !== "";
+    return !explicitlyDisabled && pat !== "";
   }
 
   function supports({ indicator } = {}) {
@@ -264,17 +285,16 @@ function createCensysProvider(config = {}) {
       });
     }
 
-    const url = `${baseUrl.replace(/\/+$/, "")}/hosts/${encodeURIComponent(indicator)}`;
-    // Basic Auth is built fresh per call from the trimmed credentials and
-    // never stored anywhere else on this object.
-    const authHeader = `Basic ${Buffer.from(`${apiId}:${apiSecret}`, "utf8").toString("base64")}`;
+    const url = `${baseUrl.replace(/\/+$/, "")}/global/asset/host/${encodeURIComponent(indicator)}`;
+    const headers = { Authorization: `Bearer ${pat}`, Accept: HOST_ACCEPT_HEADER };
+    if (orgId !== "") headers["X-Organization-ID"] = orgId;
     const composed = createComposedController(signal, timeoutMs);
 
     let response;
     try {
       response = await fetchImpl(url, {
         method: "GET",
-        headers: { Authorization: authHeader, Accept: "application/json" },
+        headers,
         signal: composed.signal,
       });
     } catch (err) {
@@ -304,9 +324,15 @@ function createCensysProvider(config = {}) {
     return mapHttpResponseToResult({ response, indicator, asOf });
   }
 
-  // Debug/ops-facing summary — deliberately excludes apiId/apiSecret.
+  // Debug/ops-facing summary — deliberately excludes the PAT.
   function describe() {
-    return Object.freeze({ provider: PROVIDER_NAME, baseUrl, timeoutMs, enabled: isEnabled() });
+    return Object.freeze({
+      provider: PROVIDER_NAME,
+      baseUrl,
+      timeoutMs,
+      enabled: isEnabled(),
+      orgIdConfigured: orgId !== "",
+    });
   }
 
   return Object.freeze({

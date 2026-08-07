@@ -154,6 +154,10 @@ record of what exists and where.
 
 ### Censys — the second live provider (Phase 8B)
 
+- **Targets Censys's current Platform API** (`api.platform.censys.io/v3`, Bearer Personal Access
+  Token), not the legacy Search v2 API (`search.censys.io`, Basic Auth API ID + secret) — an earlier
+  draft of this integration was built against Search v2 before a live-credential check surfaced that
+  Censys now issues PATs, not ID/secret pairs, for new accounts. Corrected before merge.
 - **New adapter, new table, no change to the existing two registries.** `censysProvider.js` (self-
   contained, mirrors `abuseIpdbProvider.js`'s defensive shape: composed timeout+caller-signal, every
   expected HTTP/transport outcome mapped to a normalized result, never throws for an expected
@@ -161,10 +165,12 @@ record of what exists and where.
   `PROVIDER_RATE_LIMITED`/`PROVIDER_INVALID_KEY`/`PROVIDER_TIMEOUT`/`PROVIDER_UNAVAILABLE`/
   `PROVIDER_UNREACHABLE`/`PROVIDER_MALFORMED_RESPONSE`/`PROVIDER_REJECTED`/`UNSUPPORTED_INDICATOR`/
   `ENRICHMENT_DISABLED` code vocabulary the rest of the app already speaks), `censysConfig.js` (bounds/
-  defaults, mirrors `abuseIpdbConfig.js`). `CENSYS_API_ID`/`CENSYS_API_SECRET` are both optional at
-  startup and both required together to enable the provider (Basic Auth needs the pair; one alone is
-  reported `NOT_CONFIGURED`, never a half-configured state) — never logged, printed, or included in
-  any error message.
+  defaults, mirrors `abuseIpdbConfig.js`). `CENSYS_PAT` is optional at startup — a missing token only
+  disables the provider (`SKIPPED_DISABLED`), never blocks the app — and `CENSYS_ORG_ID` is optional
+  even when a PAT is set, sent as `X-Organization-ID` only for accounts spanning more than one Censys
+  organization. Neither value is ever logged, printed, or included in any error message. Requests also
+  carry the versioned `Accept: application/vnd.censys.api.v3.host.v1+json` header the host-lookup
+  endpoint documents.
 - **Its own Prisma table (`CensysEnrichment`), not a bolt-on to `IocEnrichment`.** Censys returns
   exposure/attack-surface data (open services, AS ownership) — a materially different shape from
   AbuseIPDB's reputation score, the same reasoning that already keeps `VulnerabilityProviderResult`
@@ -193,10 +199,11 @@ record of what exists and where.
   `LIVE_CENSYS_SMOKE=1`, one lookup against `1.1.1.1` (Cloudflare's public DNS resolver — permanent
   public infrastructure, never a customer/victim asset), never prints credentials, never runs in CI.
   Not executed against the real Censys API this session (not authorized).
-- Tests: `censysProvider.test.js` (15 — construction with no credentials, both-halves-required,
-  unsupported indicator, Basic Auth header construction, success normalization + service-count
-  bounding, 401/403/404/429/5xx/timeout/malformed/unreachable, credential redaction),
-  `censysEnrichmentRouteAuthorization.test.js` (14 — full route→controller→service→provider chain
+- Tests: `censysProvider.test.js` (15 — construction with no credentials, unsupported indicator,
+  Bearer + versioned Accept header construction, optional X-Organization-ID, success normalization
+  from `result.resource` + service-count bounding, 401/403/404/429/5xx/timeout/malformed/unreachable,
+  credential redaction), `censysEnrichmentRouteAuthorization.test.js` (14 — full
+  route→controller→service→provider chain
   with a faked `globalThis.fetch`, capability matrix, 404/401 handling, audit pair, redaction),
   `censysLiveSmoke.test.js` (3), `phase8bCensysProviderEvidence.test.js` (7 — startup safety, registry
   isolation, error-contract closure, shared-quota assertion, smoke-script guard), plus 2 new cases in

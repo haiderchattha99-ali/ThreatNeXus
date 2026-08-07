@@ -326,13 +326,13 @@ function buildConfig() {
     );
   }
 
-  // Phase 8B — Censys internet-exposure/attack-surface provider. Both
-  // CENSYS_API_ID and CENSYS_API_SECRET stay optional at startup exactly like
-  // ABUSEIPDB_API_KEY: a missing credential only affects censysProvider.js's
-  // lookup() (SKIPPED_DISABLED), never whether the app starts. Censys Search
-  // v2 requires BOTH an API ID and a secret (HTTP Basic Auth) — a caller
-  // supplying only one is treated as "not configured", never as "configured
-  // with half a credential".
+  // Phase 8B — Censys internet-exposure/attack-surface provider, against
+  // Censys's current Platform API (Bearer Personal Access Token, not the
+  // legacy Search v2 API's Basic Auth pair). CENSYS_PAT stays optional at
+  // startup exactly like ABUSEIPDB_API_KEY: a missing credential only affects
+  // censysProvider.js's lookup() (SKIPPED_DISABLED), never whether the app
+  // starts. CENSYS_ORG_ID is optional even when CENSYS_PAT is set — only
+  // accounts belonging to more than one Censys organization need it.
   let censysBaseUrl;
   let censysTimeoutMs;
   try {
@@ -411,8 +411,8 @@ function buildConfig() {
     // Phase 8B — Censys configuration. Both credential fields are optional
     // and never required to start the app; never logged or included in any
     // error message this module throws.
-    CENSYS_API_ID: process.env.CENSYS_API_ID || "",
-    CENSYS_API_SECRET: process.env.CENSYS_API_SECRET || "",
+    CENSYS_PAT: process.env.CENSYS_PAT || "",
+    CENSYS_ORG_ID: process.env.CENSYS_ORG_ID || "",
     CENSYS_BASE_URL: censysBaseUrl,
     CENSYS_TIMEOUT_MS: censysTimeoutMs,
 

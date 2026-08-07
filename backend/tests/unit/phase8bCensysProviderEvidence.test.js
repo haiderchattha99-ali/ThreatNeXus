@@ -8,7 +8,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 // censysProvider.test.js and censysEnrichmentRouteAuthorization.test.js
 // already cover in depth.
 
-const MANAGED_KEYS = ["NODE_ENV", "DATABASE_URL", "JWT_SECRET", "CORS_ORIGIN", "CENSYS_API_ID", "CENSYS_API_SECRET"];
+const MANAGED_KEYS = ["NODE_ENV", "DATABASE_URL", "JWT_SECRET", "CORS_ORIGIN", "CENSYS_PAT", "CENSYS_ORG_ID"];
 const VALID_BASE = {
   DATABASE_URL: "postgresql://user:pass@localhost:5432/db",
   JWT_SECRET: "a-reasonably-strong-32-char-plus-secret-value",
@@ -40,16 +40,16 @@ afterEach(() => {
 });
 
 describe("Phase 8B — missing Censys credentials never break startup", () => {
-  it("loads configuration with neither CENSYS_API_ID nor CENSYS_API_SECRET set", () => {
+  it("loads configuration with neither CENSYS_PAT nor CENSYS_ORG_ID set", () => {
     Object.assign(process.env, VALID_BASE);
     const config = loadEnv();
-    expect(config.CENSYS_API_ID).toBe("");
-    expect(config.CENSYS_API_SECRET).toBe("");
+    expect(config.CENSYS_PAT).toBe("");
+    expect(config.CENSYS_ORG_ID).toBe("");
     expect(config.JWT_SECRET).toBe(VALID_BASE.JWT_SECRET);
   });
 
-  it("still fails fast on a missing REQUIRED secret, independent of Censys credentials", () => {
-    Object.assign(process.env, { ...VALID_BASE, CENSYS_API_ID: "id", CENSYS_API_SECRET: "secret" });
+  it("still fails fast on a missing REQUIRED secret, independent of the Censys PAT", () => {
+    Object.assign(process.env, { ...VALID_BASE, CENSYS_PAT: "pat-value" });
     delete process.env.JWT_SECRET;
     expect(() => loadEnv()).toThrowError(/JWT_SECRET/);
   });
