@@ -47,6 +47,7 @@ const prismaStub = {
   auditLog: { create: async () => ({ id: 1 }) },
   finding: { findUnique: async () => null, findFirst: async () => null },
   censysEnrichment: { create: async () => ({ id: 1 }) },
+  greyNoiseEnrichment: { create: async () => ({ id: 1 }) },
 };
 
 let app;
@@ -262,6 +263,28 @@ describe("Phase 7 — the provider-execution bucket", () => {
         .post("/api/findings/1/ai-suggestions")
         .set(auth("ANALYST"))
         .send({ suggestionType: "SUMMARY" });
+
+    await send();
+    await send();
+    expect((await send()).status).toBe(429);
+  });
+
+  it("Phase 8D — counts the GreyNoise route in the SAME budget, not a fresh one", async () => {
+    // Same proof as Phase 8B's Censys case and Phase 8C's AI-suggestion case,
+    // for the newer GreyNoise route.
+    await request(app).post("/api/findings/1/enrichment").set(auth("ADMIN")).send({});
+    await request(app).post("/api/findings/2/enrichment").set(auth("ADMIN")).send({});
+
+    const greyNoise = await request(app)
+      .post("/api/findings/1/enrichment/greynoise")
+      .set(auth("ADMIN"))
+      .send({});
+    expect(greyNoise.status).toBe(429);
+  });
+
+  it("Phase 8D — the GreyNoise route alone also bounds its own request rate", async () => {
+    const send = () =>
+      request(app).post("/api/findings/1/enrichment/greynoise").set(auth("ANALYST")).send({});
 
     await send();
     await send();

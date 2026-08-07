@@ -1,111 +1,83 @@
-# Handoff: TNX-P8C1-AI-ASSISTANCE-FRONTEND
+# Handoff: TNX-P8D-GREYNOISE-PROVIDER
 
 - From: claude
-- Suggested next writer: unassigned
-- Branch: feat/phase-8c1-ai-assistance-frontend
-- Updated: 2026-08-07T11:40:00Z
+- Suggested next writer: claude (in progress)
+- Branch: feat/phase-8d-greynoise-provider
+- Updated: 2026-08-07T12:20:00Z
 
-## Phase 8C closure note
+## Phase 8C.1 closure note
 
-`feat/phase-8c-ai-assistance-mvp` (Finding-level AI assistance backend MVP) is merged into `main` via
-PR #12 (`99c9743`). This ticket branches from that updated tip and touches **zero backend files** — it
-is purely the frontend surface for the already-complete, already-CI-green backend.
+`feat/phase-8c1-ai-assistance-frontend` is merged into `main` via PR #13 (`88a2c48`). This ticket
+branches from that updated tip.
 
 ## Goal
 
-Make the Phase 8C backend AI finding-assistance MVP visible and usable in the frontend: a compact,
-analyst-focused panel on Finding detail. No live AI provider. AI remains suggestion-only — a human
-always accepts or rejects.
+Add exactly one new live provider, GreyNoise, for IP noise/reputation/context using the existing
+provider foundation and Censys/NVD patterns. No live calls in CI/tests, no secret leakage, provider
+rate-limit/audit/status support, optional manual smoke, docs/ai handoff, and green CI.
+
+## The one design decision that mattered most
+
+GreyNoise's data (noise/classification/actor context) doesn't fit `IocEnrichment`'s AbuseIPDB-shaped
+columns (`abuseConfidenceScore`, `totalReports`, `isWhitelisted`, ...) any more than Censys's
+open-services/AS-ownership data did. So this ticket mirrors Censys exactly: its own table
+(`GreyNoiseEnrichment`), its own module set (`services/reputation/`), no queue (synchronous,
+human-triggered lookups only) — rather than forcing GreyNoise into AbuseIPDB's registry/table shape to
+save a migration.
+
+The dashboard status wiring got the same treatment: rather than folding GreyNoise into the existing
+`sections.providers.exposure` array (the smaller diff), it's a new sibling array,
+`sections.providers.reputation` — GreyNoise is neither exposure/attack-surface data nor the single
+selected ioc-reputation slot (`sections.providers.ioc`, a config CHOICE between mock/abuseipdb, not an
+additive list). This is the same per-domain-array pattern Censys itself established for `exposure`,
+applied consistently. The frontend change to surface it was one line in each of `Settings.jsx` and
+`DashboardSections.jsx` — both already render providers as a flattened list regardless of which backend
+array they came from.
 
 ## What this ticket added
 
-1. **`frontend/src/services/api.js`** — `aiFindingAssistService` (request/list/accept/reject), reusing
-   the existing `aiMappingService.getConfig()` for availability rather than adding a second config call:
-   the backend exposes ONE `AI_ENABLED`/`AI_PROVIDER` switch for both AI surfaces (Phase 5 mapping
-   suggestions and Phase 8C finding drafts), so the same response is accurate for both.
-2. **`frontend/src/constants/findingAiAssistance.js`** — presentation vocabulary mirroring
-   `backend/src/services/aiAssist/aiAssistRules.js`: suggestion types, a `StatusBadge` dictionary for
-   DRAFT/ACCEPTED/REJECTED/EXPIRED, reason-code sentences, evidence-reference labels, error mapping.
-3. **`frontend/src/constants/capabilities.js`** — `READ_AI_FINDING_SUGGESTIONS` +
-   `REQUEST_AI_FINDING_SUGGESTIONS` added, mirroring `backend/src/lib/roles.js` exactly. Deciding reuses
-   the pre-existing `REVIEW_AI_SUGGESTIONS` constant, already present from Phase 4/5.
-4. **`frontend/src/components/FindingAiAssistPanel.jsx`** — the panel. Built from the same Phase 6
-   design-system idiom (`Panel`/`StatusBadge`/`States`/`AVAILABILITY`) `FindingDetail.jsx` already uses —
-   NOT Phase 5's older ad-hoc `FrameworkMappingPanel.jsx` styling, since this panel mounts on
-   `FindingDetail`. The *interaction* pattern (capability gating, request/decide flow, anti-automation-
-   bias rules: no accept-all, no pre-selected decision, a rejection reason required before Reject enables,
-   decided drafts stay visible, EXPIRED shown with its staleness reason) is mirrored from
-   `FrameworkMappingPanel.jsx` deliberately — the same rules, a different visual shell.
-5. Mounted on **`frontend/src/pages/FindingDetail.jsx`** as its own full-width `Panel` section.
-6. **16 new component tests** (`FindingAiAssistPanel.test.jsx`) — capability gating, disabled/unavailable
-   states, generate success/403/raw-error-never-shown, decide (reject-reason-required, accept), status
-   rendering for all four states. All passed on the first real run.
-7. **`frontend/e2e/findingAiAssistance.spec.js`** — 4 fixed scenarios plus a per-role loop (7 total):
-   disabled-by-default rendering, VIEWER denial, REVIEWER read-only (no generate control), responsive
-   layout, zero console errors per role. Authored and its assertions manually proven live this session
-   (see below); the spec file itself was not executed locally — see honest gaps.
-8. Docs: `README.md`, `docs/ai/SECURITY.md` (new "Frontend AI-assistance surface" subsection),
-   `docs/ai/HANDOFF.md`, `docs/ai/STATE.yaml`.
+1. **`GreyNoiseEnrichment`** (Prisma model + enum, additive-only migration, verified via `prisma
+   validate`/`prisma generate`).
+2. **`backend/src/services/reputation/`** — `greyNoiseTypes.js`, `greyNoiseConfig.js`,
+   `greyNoiseProvider.js` (Community API, `key` header auth — not Bearer, not Basic — IPv4 only since no
+   IPv6 validator exists anywhere in this codebase to extend safely), `greyNoiseExecutionService.js`.
+   All mirror `censysProvider.js`/`censysExecutionService.js`'s exact defensive shape.
+3. **`GET`/`POST /api/findings/:id/enrichment/greynoise`** — reuses `read:findings` /
+   `trigger:finding-enrichment` (no new capability) and the SAME `providerRateLimiter` budget every
+   other provider-execution route shares.
+4. **`backend/src/scripts/greyNoiseLiveSmoke.js`** (`npm run smoke:greynoise`), opt-in via
+   `LIVE_GREYNOISE_SMOKE=1`. **Not executed this session** — not authorized.
+5. **Dashboard**: new `sections.providers.reputation` array; `Settings.jsx`/`DashboardSections.jsx`
+   updated with one line each.
+6. **`docker-compose.yml`/`docker-compose.offline.yml`** updated for `GREYNOISE_API_KEY` passthrough and
+   the offline blackhole host.
+7. **40 new/updated tests** (see `docs/ai/STATE.yaml` `completed` for the breakdown). Full backend
+   suite: **2990 passed / 177 skipped**, zero regressions from the 2950 baseline.
 
-## Genuine live browser verification this session
+## Two real regressions this ticket's own tests caught (in existing tests, not new code)
 
-Docker's daemon (unavailable throughout Phase 8C) came up mid-session, surfacing a stale docker-compose
-stack from an earlier session (Postgres/backend/frontend containers, images predating the Phase 8C
-merge). Rather than disturb it, this session:
+Adding the `reputation` section to `buildProvidersSection`'s output broke two pre-existing tests:
+- `operationalOverviewService.test.js`'s roll-up-total assertion (`summary.total`) didn't account for
+  the new array — fixed by adding `+ reputation.length`.
+- `riskFactorPressure.test.js` has its own separate Prisma fake, which was missing a
+  `greyNoiseEnrichment.aggregate` stub entirely — the whole `providers` dashboard section failed with a
+  `TypeError` as a result (caught gracefully by the Phase 6 availability contract, but the test still
+  failed because `liveLookupPerformed` was undefined on a failed section). Fixed by adding the stub,
+  mirroring the existing `censysEnrichment` one.
 
-- Ran `prisma migrate deploy` against the real Postgres (applied the one pending Phase 8C migration —
-  additive, already proven safe by CI — directly, a second independent proof it applies cleanly).
-- Reseeded the four well-known demo accounts with a locally-chosen password (`seedUsers.js`, idempotent
-  upsert — **note**: this changes those accounts' password on that specific stale local container; CI
-  seeds its own fresh database and is unaffected, but the next person using that exact local Docker
-  stack will need to re-run `seed:users` with their own password).
-- Ran **this session's own backend code** (not the stale container) on a free port against that same
-  database, and a frontend dev server pointed at it.
-- Logged in for real as ANALYST, REVIEWER and VIEWER and opened a real seeded Finding:
-  - The AI assistance panel renders correctly with real server-issued capabilities (not mocked).
-  - VIEWER: `DeniedState` with the real capability name (`read:ai-finding-suggestions`) from the real
-    403 response.
-  - REVIEWER: panel visible (read access), correctly NO generate control (real capability data).
-  - ANALYST: panel visible, correctly shows "Disabled" — `AI_ENABLED` is unset by default, the shipped
-    reality — never a fabricated "AI online" state.
-  - Zero console errors on any role. No horizontal overflow at 375px (mobile) or 768px (tablet).
-  - The rest of the Finding-detail page (triage, risk explanation, ownership, timeline, cases) renders
-    unaffected by mounting the new panel.
-- Cleaned up every verification-only artifact afterward (temporary `frontend/.env.local`,
-  `.claude/launch.json`, the local backend process, the browser preview server) — working tree confirmed
-  clean before staging.
-
-## CI result
-
-Two runs. First push (`8c49779`, run
-[31173166431](https://github.com/haiderchattha99-ali/ThreatNeXus/actions/runs/31173166431)) — 5 jobs
-green, **"Browser suite (Chromium)" FAILED**: `findingAiAssistance.spec.js`'s VIEWER test could not find
-the capability code (`read:ai-finding-suggestions`) in the `DeniedState`. Root cause: `DeniedState`
-renders its `capability` prop only inside its own default fallback text, and the panel's `!canRead`
-branch was passing custom `children`, which silently overrides that fallback — so the code never
-appeared. A real bug the new Playwright spec caught on its first real execution, which is exactly what
-it's for. Fixed in `5a2aed4` by dropping the custom children so `DeniedState`'s own fallback (which
-already names the capability) renders. Re-ran the 16 component tests and lint locally — both clean —
-before pushing the fix.
-
-Second push (`5a2aed4`, run
-[31173470851](https://github.com/haiderchattha99-ali/ThreatNeXus/actions/runs/31173470851)) — **all jobs
-green**, including the Browser suite.
+Both are exactly the kind of thing a full test-suite run before committing is for.
 
 ## Honest gaps
 
-- **The populated-draft rendering cannot be observed through any live browser session, by design.**
-  `aiAssistRuntime.js` never resolves the mock provider without a test-only flag no production HTTP path
-  ever passes — the same boundary Phase 8C's backend documents, not a new gap introduced here. It is
-  covered instead by `FindingAiAssistPanel.test.jsx`, which injects the mock provider response directly
-  at the component level (16 tests: draft cards, evidence tags, accept/reject, all four statuses).
-- Zero backend files touched — this ticket is frontend-only, by its own explicit scope.
+- **Manual live GreyNoise smoke was not run** — awaiting explicit user authorization, per instruction.
+- `F-drive start-task.ps1` throws against this repo's `STATE.yaml` schema — worked around, not fixed,
+  same known gap as Phases 8C/8C.1.
 - `docs/codex/` remains untracked and untouched, per the one-writer boundary.
 
 ## Recommended next phase
 
-(1) In-app user management (`manage:users` still unused, flagged since Phase 8B); (2) GreyNoise, Shodan,
-or Netlas as a fourth live provider, or resolve Shadowserver licensing.
+Per this ticket's own instruction: Shodan or Netlas as the next live provider, following this exact
+same pattern (own table, own module set, no queue, shared rate-limit budget, dashboard sibling array).
 
 ## Protected boundaries
 
@@ -114,4 +86,4 @@ or Netlas as a fourth live provider, or resolve Shadowserver licensing.
 - Do not expose secrets or absorb unrelated changes.
 - `docs/codex/` is a foreign path this session did not touch — leave it alone unless its owner asks.
 - `backend/.env` (and any non-`.env.example` env file) must never be read, printed, or committed.
-- The Phase 8C backend is complete and untouched by this ticket; do not rewrite it.
+- AbuseIPDB, NVD, and Censys are untouched and unaffected — verified by registry-isolation tests.

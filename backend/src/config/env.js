@@ -18,6 +18,13 @@ const {
   validateTimeoutMs: validateCensysTimeoutMs,
 } = require("../services/exposure/censysConfig");
 const {
+  GreyNoiseConfigError,
+  DEFAULT_BASE_URL: GREYNOISE_DEFAULT_BASE_URL,
+  DEFAULT_TIMEOUT_MS: GREYNOISE_DEFAULT_TIMEOUT_MS,
+  validateBaseUrl: validateGreyNoiseBaseUrl,
+  validateTimeoutMs: validateGreyNoiseTimeoutMs,
+} = require("../services/reputation/greyNoiseConfig");
+const {
   VulnerabilityConfigError,
   NVD_DEFAULT_BASE_URL,
   NVD_DEFAULT_TIMEOUT_MS,
@@ -348,6 +355,30 @@ function buildConfig() {
     );
   }
 
+  // Phase 8D — GreyNoise internet-noise/reputation provider (Community API).
+  // GREYNOISE_API_KEY stays optional at startup exactly like
+  // CENSYS_PAT/ABUSEIPDB_API_KEY: a missing credential only affects
+  // greyNoiseProvider.js's lookup() (SKIPPED_DISABLED), never whether the
+  // app starts.
+  let greyNoiseBaseUrl;
+  let greyNoiseTimeoutMs;
+  try {
+    greyNoiseBaseUrl = validateGreyNoiseBaseUrl(
+      requireString(process.env.GREYNOISE_BASE_URL) || GREYNOISE_DEFAULT_BASE_URL
+    );
+    greyNoiseTimeoutMs = validateGreyNoiseTimeoutMs(
+      parseOptionalInt("GREYNOISE_TIMEOUT_MS", process.env.GREYNOISE_TIMEOUT_MS, GREYNOISE_DEFAULT_TIMEOUT_MS, {
+        strict: true,
+      })
+    );
+  } catch (err) {
+    throw new ConfigError(
+      err instanceof GreyNoiseConfigError
+        ? err.message
+        : `Invalid GreyNoise configuration: ${err.message}`
+    );
+  }
+
   // Declared, not consumed by anything: no code reads this value — the TTL
   // policy (enrichmentTtlPolicy.js) is a pure module configured through
   // explicit policy input, never through the environment.
@@ -415,6 +446,13 @@ function buildConfig() {
     CENSYS_ORG_ID: process.env.CENSYS_ORG_ID || "",
     CENSYS_BASE_URL: censysBaseUrl,
     CENSYS_TIMEOUT_MS: censysTimeoutMs,
+
+    // Phase 8D — GreyNoise configuration. Optional and never required to
+    // start the app; never logged or included in any error message this
+    // module throws.
+    GREYNOISE_API_KEY: process.env.GREYNOISE_API_KEY || "",
+    GREYNOISE_BASE_URL: greyNoiseBaseUrl,
+    GREYNOISE_TIMEOUT_MS: greyNoiseTimeoutMs,
 
     // Phase 5 — declared, not consumed by anything in Phase 0. Off by default.
     AI_ENABLED: (process.env.AI_ENABLED || "false").trim().toLowerCase() === "true",

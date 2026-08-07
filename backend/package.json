@@ -21,7 +21,8 @@
     "attack:verify": "node scripts/verifyAttackCatalogue.js",
     "seed:demo": "node src/scripts/seedDemo.js",
     "smoke:nvd": "node src/scripts/nvdLiveSmoke.js",
-    "smoke:censys": "node src/scripts/censysLiveSmoke.js"
+    "smoke:censys": "node src/scripts/censysLiveSmoke.js",
+    "smoke:greynoise": "node src/scripts/greyNoiseLiveSmoke.js"
   },
   "keywords": [],
   "author": "",
