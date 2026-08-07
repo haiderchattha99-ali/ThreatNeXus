@@ -61,12 +61,20 @@ existing registry:
 8. Docs: README ("External providers" table gained a Censys row + the smoke command),
    `docs/ai/SECURITY.md` gained a "Censys — the second live provider (Phase 8B)" subsection,
    `backend/.env.example` gained the `CENSYS_*` block.
+9. `.github/workflows/ci.yml` — the "migration count and order match the reviewed history" job pins
+   an exact migration-directory list on purpose, specifically to catch a silent migration change; it
+   correctly failed on the first push because this ticket's migration folder wasn't in that list yet.
+   Fixed in the same PR (commit `fd297ef`), per the guard's own instruction.
 
 ## Validation
 
 See `docs/ai/STATE.yaml` → `validation`. Backend: 2899 passed / 177 skipped (2858 baseline + exactly
 41 new tests, no regressions). Frontend: 143/143 unchanged. Prisma: migrate-from-zero, validate, and
-`--exit-code` drift check all pass against a real, disposable PostgreSQL 16 container.
+`--exit-code` drift check all pass against a real, disposable PostgreSQL 16 container. Pushed at
+commit `fd297ef`; GitHub Actions run
+[31155494175](https://github.com/haiderchattha99-ali/ThreatNeXus/actions/runs/31155494175) is green
+(Secrets/artifact scan, Backend tests, Frontend lint/tests/build, Prisma schema/migration history,
+Core evaluators, Browser suite Chromium; Mutation/concurrency gates remain manual by design).
 
 ## Honest gaps
 

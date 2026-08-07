@@ -2,8 +2,8 @@
     "schema_version":  1,
     "ticket":  "TNX-P8B-CENSYS-PROVIDER",
     "title":  "Phase 8B - Censys live internet-exposure/attack-surface provider integration",
-    "status":  "in_progress",
-    "owner":  "claude",
+    "status":  "complete",
+    "owner":  "unassigned",
     "reviewer":  "codex",
     "branch":  "feat/phase-8b-censys-provider",
     "worktree":  "C:\\Users\\LENOVO\\Desktop\\ThreatNeXus",
@@ -39,7 +39,9 @@
                       "Dashboard: operationalOverviewService.js buildProvidersSection now queries CensysEnrichment and returns sections.providers.exposure (CONFIGURED/NOT_CONFIGURED + freshness); Settings.jsx and DashboardSections.jsx ProviderFreshness fold the new array into their existing rendering with zero new UI vocabulary",
                       "Fixed two pre-existing test mock clients (operationalOverviewService.test.js, riskFactorPressure.test.js) that needed a censysEnrichment.aggregate stub added — caught by running the full suite, not assumed",
                       "41 new/updated tests, all passing: censysProvider.test.js (15), censysEnrichmentRouteAuthorization.test.js (14, full route->controller->service->provider chain with a faked globalThis.fetch), censysLiveSmoke.test.js (3), phase8bCensysProviderEvidence.test.js (7), phase7RateLimiting.test.js +2 (shared-budget and own-budget proofs)",
-                      "Docs: README External providers table + smoke command, docs/ai/SECURITY.md 'Censys - the second live provider (Phase 8B)' subsection, backend/.env.example CENSYS_* block"
+                      "Docs: README External providers table + smoke command, docs/ai/SECURITY.md 'Censys - the second live provider (Phase 8B)' subsection, backend/.env.example CENSYS_* block",
+                      "Fixed the CI 'migration count and order match the reviewed history' guard, which pins an exact migration-directory list on purpose — added this ticket's migration folder name to it (.github/workflows/ci.yml), per the guard's own instruction to update it in the same PR",
+                      "Pushed feat/phase-8b-censys-provider (commits 4843c0b, fd297ef) and watched GitHub Actions run 31155494175 to a green conclusion (all required jobs; Mutation and concurrency gates remains manual by design)"
                   ],
     "validation":  {
                        "backend":  "PASS — 2899 passed / 177 skipped (115 files passed, 16 skipped), up from the 2858 baseline by exactly the 41 new tests this ticket adds; no regressions",
@@ -52,7 +54,7 @@
                        "secret_hygiene":  "PASS — backend/.env never opened this session; new tests assert injected fake CENSYS_API_ID/CENSYS_API_SECRET values never appear in any response body, audit row, or smoke-script output; no live Censys call was made",
                        "no_live_calls_in_tests":  "PASS — every censysProvider.test.js case injects its own fetchImpl; censysEnrichmentRouteAuthorization.test.js fakes globalThis.fetch for the full route chain; censysLiveSmoke.test.js never sets the opt-in env var in a way that reaches the network",
                        "git_status":  "Clean diff, explicit paths staged only; docs/codex/ untouched throughout",
-                       "ci_workflow":  "Pending — not yet pushed at the time this checkpoint was written"
+                       "ci_workflow":  "PASS — GitHub Actions run 31155494175 at commit fd297ef, conclusion success: Secrets/artifact scan, Backend tests, Frontend lint/tests/build, Prisma schema/migration history, Core evaluators, Browser suite (Chromium) all green; Mutation and concurrency gates (manual) intentionally not triggered. First push (31155284518) failed only the frozen migration-history guard, fixed in the same PR (see completed[])."
                    },
     "known_issues":  [
                          "The manual Censys live smoke was NOT executed against the real Censys API this session (not authorized); implemented and unit-tested with a mocked fetch only.",
