@@ -23,6 +23,15 @@ const CAPABILITIES = Object.freeze({
   TRIAGE_FINDINGS: "triage:findings",
   MANAGE_CASES: "manage:cases",
   REVIEW_NOTIFICATIONS: "review:notifications",
+  // Declared Phase 0, unused by any route until Phase 8C: it was drafted on a
+  // review-of-somebody-else's-work model, which did not fit Phase 5's
+  // mapping-suggestion decide (approving there creates an active mapping, so
+  // it needed mapping-write authority — see DECIDE_AI_MAPPING_SUGGESTIONS).
+  // It DOES fit Phase 8C's Finding-narrative-suggestion decide: accepting a
+  // summary/explanation draft writes nothing but the draft's own review
+  // state, so it is genuinely a review of someone else's output, not a grant
+  // of write authority over anything else. See the routes wiring in
+  // aiFindingSuggestionRoutes.js.
   REVIEW_AI_SUGGESTIONS: "review:ai-suggestions",
   MANAGE_USERS: "manage:users",
   MANAGE_SYSTEM: "manage:system",
@@ -175,6 +184,25 @@ const CAPABILITIES = Object.freeze({
   // an active mapping. REVIEW_AI_SUGGESTIONS is left in place, still granted,
   // and still unused by any route.
   DECIDE_AI_MAPPING_SUGGESTIONS: "decide:ai-mapping-suggestions",
+
+  // Phase 8C — Finding-level AI assistance (summary/explanation drafts). Two
+  // additive, non-hierarchical grants, same convention as every capability
+  // above. Deciding a draft deliberately reuses the pre-existing
+  // REVIEW_AI_SUGGESTIONS grant below rather than minting a third one — see
+  // its own comment for why that capability fits here in a way it did not
+  // fit Phase 5's mapping-suggestion decide.
+  //
+  // Reading a Finding's suggestion history. ADMIN, ANALYST and REVIEWER —
+  // deliberately NOT VIEWER, the same policy Phase 5 applies to
+  // READ_AI_MAPPING_SUGGESTIONS and for the same reason: an undecided machine
+  // draft is not oversight material.
+  READ_AI_FINDING_SUGGESTIONS: "read:ai-finding-suggestions",
+
+  // Causing a generation call (and therefore, once a live provider exists,
+  // causing provider spend). ADMIN and ANALYST, mirroring how
+  // REQUEST_AI_MAPPING_SUGGESTIONS and TRIGGER_FINDING_ENRICHMENT gate their
+  // own provider-execution routes.
+  REQUEST_AI_FINDING_SUGGESTIONS: "request:ai-finding-suggestions",
 });
 
 const CAPABILITY_VALUES = Object.freeze(Object.values(CAPABILITIES));
@@ -223,6 +251,13 @@ const ROLE_CAPABILITIES = Object.freeze({
     // reactivate a mapping, cannot cause a generation run, and cannot approve
     // or reject a suggestion. Phase 5 adds no write of any kind to REVIEWER.
     CAPABILITIES.READ_AI_MAPPING_SUGGESTIONS,
+    // Phase 8C — a reviewer may read a Finding's AI suggestion drafts (they
+    // need to see one to decide it) and may accept or reject via the
+    // pre-existing REVIEW_AI_SUGGESTIONS grant, already held above. They hold
+    // neither TRIAGE_FINDINGS nor REQUEST_AI_FINDING_SUGGESTIONS, so they
+    // cannot triage a Finding or cause a generation call — their only write
+    // in this phase is the accept/reject decision itself.
+    CAPABILITIES.READ_AI_FINDING_SUGGESTIONS,
   ]),
   ANALYST: Object.freeze([
     ...READ_ONLY_CAPABILITIES,
@@ -275,6 +310,14 @@ const ROLE_CAPABILITIES = Object.freeze({
     CAPABILITIES.READ_AI_MAPPING_SUGGESTIONS,
     CAPABILITIES.REQUEST_AI_MAPPING_SUGGESTIONS,
     CAPABILITIES.DECIDE_AI_MAPPING_SUGGESTIONS,
+    // Phase 8C — an analyst may read and request Finding-level AI drafts on
+    // findings they work, the same TRIGGER_FINDING_ENRICHMENT-style grant
+    // shape. ANALYST is deliberately NOT granted REVIEW_AI_SUGGESTIONS here,
+    // which is what makes it impossible for the role that requests a draft to
+    // also accept or reject one — their own or anybody else's, the same
+    // separation of duties Phase 4 applies to notifications.
+    CAPABILITIES.READ_AI_FINDING_SUGGESTIONS,
+    CAPABILITIES.REQUEST_AI_FINDING_SUGGESTIONS,
   ]),
   ADMIN: Object.freeze([...CAPABILITY_VALUES]),
 });

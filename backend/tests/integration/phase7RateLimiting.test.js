@@ -243,6 +243,31 @@ describe("Phase 7 — the provider-execution bucket", () => {
     expect((await send()).status).toBe(429);
   });
 
+  it("Phase 8C — counts the AI finding-suggestion route in the SAME budget, not a fresh one", async () => {
+    // Same proof as Phase 8B's Censys case, for the newer AI-assist route: a
+    // caller cannot get a bigger effective budget by switching to it.
+    await request(app).post("/api/findings/1/enrichment").set(auth("ADMIN")).send({});
+    await request(app).post("/api/findings/2/enrichment").set(auth("ADMIN")).send({});
+
+    const aiSuggestion = await request(app)
+      .post("/api/findings/1/ai-suggestions")
+      .set(auth("ADMIN"))
+      .send({ suggestionType: "SUMMARY" });
+    expect(aiSuggestion.status).toBe(429);
+  });
+
+  it("Phase 8C — the AI finding-suggestion route alone also bounds its own request rate", async () => {
+    const send = () =>
+      request(app)
+        .post("/api/findings/1/ai-suggestions")
+        .set(auth("ANALYST"))
+        .send({ suggestionType: "SUMMARY" });
+
+    await send();
+    await send();
+    expect((await send()).status).toBe(429);
+  });
+
   it("does not rate-limit reading enrichment results", async () => {
     // Reading spends nothing. Limiting a read because it shares a router with a
     // write would be an availability bug wearing a security-control costume.
