@@ -2,8 +2,8 @@
     "schema_version":  1,
     "ticket":  "TNX-P8C1-AI-ASSISTANCE-FRONTEND",
     "title":  "Phase 8C.1 - Frontend AI assistance surface (Finding detail: draft generation, accept/reject, disabled/denied states)",
-    "status":  "complete",
-    "owner":  "unassigned",
+    "status":  "in_progress",
+    "owner":  "claude",
     "reviewer":  "codex",
     "branch":  "feat/phase-8c1-ai-assistance-frontend",
     "worktree":  "C:\\Users\\LENOVO\\Desktop\\ThreatNeXus",
@@ -42,7 +42,8 @@
                       "Docker's daemon (unavailable throughout Phase 8C) came up mid-session, surfacing a STALE docker-compose stack from an earlier session (postgres/backend/frontend containers, images pre-dating the Phase 8C merge). Used it for genuine additional verification without disturbing it: ran `prisma migrate deploy` against the real Postgres (applied the one pending Phase 8C migration, additive, already proven safe by CI), reseeded the four well-known demo accounts with a locally-chosen password via seedUsers.js (idempotent upsert), and ran MY OWN backend process (not the stale container) on a free port against that same database",
                       "Live-verified in a real browser against that real stack: ANALYST/REVIEWER/VIEWER login, the AI assistance panel renders correctly on a real seeded Finding, VIEWER gets the DeniedState with the real capability name from the real server response, REVIEWER sees the panel with no generate control (real capability data, not mocked), the disabled state renders accurately (AI_ENABLED unset = false, the shipped default), zero console errors on any role, no horizontal overflow at mobile (375px) or tablet (768px) widths, and the rest of the Finding-detail page (triage, risk explanation, ownership, timeline) is unaffected by mounting the new panel",
                       "Cleaned up every verification-only artifact: temporary frontend/.env.local and .claude/launch.json deleted, local verification backend process killed, browser preview server stopped - working tree confirmed clean before staging",
-                      "Updated README.md, docs/ai/SECURITY.md, docs/ai/HANDOFF.md, docs/ai/STATE.yaml"
+                      "Updated README.md, docs/ai/SECURITY.md, docs/ai/HANDOFF.md, docs/ai/STATE.yaml",
+                      "Committed (8c49779), pushed, watched CI (run 31173166431): 5 jobs green, 'Browser suite (Chromium)' FAILED on findingAiAssistance.spec.js's VIEWER test - DeniedState's `capability` prop only renders inside its own default fallback text, and passing custom `children` (as the panel's !canRead branch did) suppressed it entirely, so the capability code never appeared for the spec to find. A real bug the new Playwright spec caught on its first real execution, exactly what it is for. Fixed by dropping the custom children and using DeniedState's own fallback (which already names the capability) - re-ran the 16 component tests and lint locally, both still clean - committed the fix (see checkpoint_ref) and re-pushed"
                   ],
     "validation":  {
                        "frontend_lint":  "PASS - oxlint clean, zero new warnings in any new or touched file",

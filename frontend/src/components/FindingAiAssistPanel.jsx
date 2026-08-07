@@ -308,10 +308,11 @@ export function FindingAiAssistPanel({ findingId }) {
   if (!canRead) {
     return (
       <Panel title="AI assistance" titleLevel="h3">
-        <DeniedState capability={CAPABILITIES.READ_AI_FINDING_SUGGESTIONS} dense>
-          Your role does not hold the capability required to see AI-generated drafts for this
-          finding. Everything else on this page works exactly the same without it.
-        </DeniedState>
+        {/* No custom children: DeniedState's own fallback text names the
+            missing capability explicitly (its `capability` prop is only
+            rendered as part of that fallback), which is what
+            findingAiAssistance.spec.js asserts on. */}
+        <DeniedState capability={CAPABILITIES.READ_AI_FINDING_SUGGESTIONS} dense />
       </Panel>
     )
   }
