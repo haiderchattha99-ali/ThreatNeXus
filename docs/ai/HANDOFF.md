@@ -84,14 +84,17 @@ authoritative record — unlike an ATT&CK mapping becoming a `CaseFrameworkMappi
   (the same "prompt minimization by construction, not redaction" philosophy `caseEvidenceSnapshot.js`
   documents), so the test was corrected to assert that instead.
 
+## CI result
+
+Pushed as `36a058e`. Run [31169482260](https://github.com/haiderchattha99-ali/ThreatNeXus/actions/runs/31169482260)
+— **all jobs green**, including the two gates that could not run locally (Docker's daemon never came up
+in this sandbox): the "Prisma schema and migration history" job's `migrate deploy from an empty database`
+and `No drift between schema and applied migrations` steps, and the "Core evaluators" job's `eval:phase5`
+and `eval:phase7`. Backend tests also ran and passed against real PostgreSQL in CI. "Mutation and
+concurrency gates" is a manual-trigger-only job and was not run — not required for this ticket.
+
 ## Honest gaps
 
-- **`prisma migrate deploy` from zero and every `eval:phase*` gate could not be run in this session.**
-  Docker Desktop's daemon never came up (`docker ps` hung indefinitely after launch; no other local
-  Postgres was reachable). The migration SQL was hand-authored mirroring the exact proven Phase 5/8B
-  template rather than machine-generated from a live diff against a real database. **CI's Postgres
-  service container is the first real proof of this migration and must be watched to green before this
-  ticket can be considered fully verified.**
 - No frontend surface — deferred to **Phase 8C.1** per this ticket's own explicit fallback clause.
   Backend/API/tests/docs shipped first.
 - No live AI provider exists in this repository (same boundary Phase 5 documented) and therefore no live

@@ -42,28 +42,29 @@
                       "Wrote and iterated 51 new tests; fixed 2 genuine test-authoring bugs found by running them (a route test wrongly assumed AI_PROVIDER=mock is reachable via env alone - it correctly is not, by design; a safety-boundary test wrongly expected hostile extra provider-result fields to be explicitly rejected rather than silently excluded by construction, which is the stronger and correct behaviour) and 1 pre-existing test (roles.test.js's capability-count formula) for the 2 new capabilities",
                       "Full backend suite green: 2950 passed / 177 skipped, zero regressions",
                       "Ran available local hygiene gates: prisma validate, prisma generate, npm run attack:verify, git grep for the CI hygiene job's exact credential-shaped-literal patterns and committed-.env/build-artifact checks against every new file - all clean",
-                      "Updated README.md, docs/ai/SECURITY.md, docs/ai/HANDOFF.md, docs/ai/STATE.yaml"
+                      "Updated README.md, docs/ai/SECURITY.md, docs/ai/HANDOFF.md, docs/ai/STATE.yaml",
+                      "Committed (36a058e), pushed feat/phase-8c-ai-assistance-mvp, and watched CI to completion: run 31169482260, ALL jobs green, including the two gates that could not run locally - 'migrate deploy from an empty database' + 'No drift between schema and applied migrations' (Prisma schema and migration history job) and eval:phase5/eval:phase7 (Core evaluators job) - plus Backend tests against real PostgreSQL, Frontend lint/tests/build, Secrets and generated artifacts, and the Browser suite (Chromium). Released the writer lock."
                   ],
     "validation":  {
-                       "backend":  "PASS - 2950 passed / 177 skipped, zero regressions",
+                       "backend":  "PASS - 2950 passed / 177 skipped locally, zero regressions; also PASS against real PostgreSQL in CI",
                        "prisma_validate":  "PASS",
                        "prisma_generate":  "PASS",
-                       "prisma_migrate_from_zero":  "NOT RUN - Docker Desktop's daemon never came up in this sandboxed session (docker ps hung indefinitely after launch); no other local Postgres was available. Migration SQL was hand-authored mirroring the exact proven Phase 5/8B template rather than machine-generated from a live diff. CI's own Postgres service container is the first real proof and must be watched.",
-                       "evaluators":  "NOT RUN - eval:phase5/eval:phase7 etc. refuse to run without EVAL_DATABASE_URL pointed at a real dedicated database, unavailable for the same reason. CI runs these against its own Postgres service.",
-                       "secret_hygiene":  "PASS - no .env file read/printed/committed; no new credential or API key introduced (no new provider); git grep for CI's exact credential-shaped-literal patterns run manually against every new file, clean",
+                       "prisma_migrate_from_zero":  "PASS (CI) - run 31169482260, 'Prisma schema and migration history' job: 'migrate deploy from an empty database' and 'No drift between schema and applied migrations' both green. Not run locally (Docker's daemon never came up in this sandbox); CI's own Postgres service container supplied the real proof.",
+                       "evaluators":  "PASS (CI) - run 31169482260, 'Core evaluators' job: eval:phase5 (framework mappings, guarded AI assistance) and eval:phase7 (no-key startup, offline operation, AI off) both green, alongside every other phase evaluator. Not run locally for the same DB reason.",
+                       "secret_hygiene":  "PASS - no .env file read/printed/committed; no new credential or API key introduced (no new provider); git grep for CI's exact credential-shaped-literal patterns run manually against every new file AND by CI's own 'Secrets and generated artifacts' job, both clean",
                        "no_live_calls_in_tests":  "PASS - every test injects its own runtime/provider or uses the mock provider; aiAssistSafetyBoundaries.test.js explicitly proxies global.fetch and asserts zero calls in a disabled run",
                        "attack_verify":  "PASS",
+                       "ci":  "PASS - https://github.com/haiderchattha99-ali/ThreatNeXus/actions/runs/31169482260 (all jobs green: schema/migration, frontend, core evaluators, backend-vs-real-Postgres, secrets scan, Chromium browser suite; 'Mutation and concurrency gates' is a manual-trigger-only job, not required, not run)",
                        "git_status":  "Clean diff, explicit paths staged only; docs/codex/ untouched throughout (locally excluded via .git/info/exclude, not the shared .gitignore); backend/.env and the root .env (if present) never read or staged"
                    },
     "known_issues":  [
-                         "prisma migrate deploy from zero and every eval:phase* gate could not be run locally in this session - Docker Desktop's daemon did not come up (docker ps hung indefinitely; no other local Postgres was reachable on 5432). CI's Postgres service container is the first real verification of the migration and must be watched to green.",
                          "F-drive start-task.ps1 throws against this repo's STATE.yaml schema (assumes a current_work field this project's schema does not have). Worked around by writing STATE.yaml/WRITER_LOCK.json directly in the script's intended shape rather than patching shared F-drive tooling for an unrelated repo. Not fixed.",
                          "No frontend surface for Phase 8C - deferred to Phase 8C.1 per this ticket's own explicit fallback clause.",
                          "No live AI provider exists in this repository (same as Phase 5) and therefore no live smoke script - a future ticket adding one needs a DECISIONS.md entry first, per this repo's own convention.",
                          "docs/codex/ remains untracked and untouched, per the one-writer boundary."
                      ],
-    "next_action":  "Push feat/phase-8c-ai-assistance-mvp and watch CI (its Postgres service is the first real migrate-from-zero + evaluator proof). If CI is green: (1) build the Phase 8C.1 Finding-detail frontend surface for these suggestions, (2) in-app user management (manage:users capability still unused, flagged since Phase 8B), (3) a third live provider, or (4) resolve Shadowserver access/licensing terms.",
-    "checkpoint_ref":  "HEAD",
-    "updated_at":  "2026-08-07T11:15:00.0000000Z",
+    "next_action":  "None required to close this ticket - CI is green. Recommended next steps, no particular priority: (1) Phase 8C.1 - the Finding-detail frontend surface for these suggestions, (2) in-app user management (manage:users capability still unused, flagged since Phase 8B), (3) a third live provider, or (4) resolve Shadowserver access/licensing terms.",
+    "checkpoint_ref":  "36a058e",
+    "updated_at":  "2026-08-07T11:35:00.0000000Z",
     "next_writer":  "unassigned"
 }
