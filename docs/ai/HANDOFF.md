@@ -1,114 +1,111 @@
-# Handoff: TNX-P8C-AI-ASSISTANCE-MVP
+# Handoff: TNX-P8C1-AI-ASSISTANCE-FRONTEND
 
 - From: claude
 - Suggested next writer: unassigned
-- Branch: feat/phase-8c-ai-assistance-mvp
-- Updated: 2026-08-07T11:15:00Z
+- Branch: feat/phase-8c1-ai-assistance-frontend
+- Updated: 2026-08-07T11:40:00Z
 
-## Phase 8B closure note
+## Phase 8C closure note
 
-`feat/phase-8b-censys-provider` (Censys Platform API integration) is merged into `main` via PR #11
-(`19bf6e6`), on top of PR #10. This ticket fast-forwarded local `main` (which was 6 commits stale) and
-branched from the updated tip.
+`feat/phase-8c-ai-assistance-mvp` (Finding-level AI assistance backend MVP) is merged into `main` via
+PR #12 (`99c9743`). This ticket branches from that updated tip and touches **zero backend files** — it
+is purely the frontend surface for the already-complete, already-CI-green backend.
 
 ## Goal
 
-Build analyst-assist AI suggestions (finding summary draft, analyst explanation draft) that are
-disabled by default and human-approved only. AI must never make final decisions, never automatically
-close findings, never approve mappings, never notify organizations, and never mutate authoritative
-security state without explicit analyst action.
-
-## The most important decision in this ticket: what NOT to build
-
-Before writing anything, this session read the **existing** Phase 5 AI foundation in full
-(`services/ai/`: provider registry, runtime, mapping provider, mock provider, suggestion service, rules,
-decision service, evidence snapshot) and its routes. Phase 5 already shipped disabled-by-default,
-human-approved AI mapping suggestions with a fully worked-out safety architecture: a one-method provider
-contract that returns data only, a bounded/allow-listed evidence snapshot built by construction (not
-redaction), untrusted-provider-output validation through the same rules a human's input clears, and a
-staleness-fingerprint guard on approval.
-
-**Phase 8C does not rebuild any of that.** It adds a second, smaller, parallel AI domain — Finding-level
-narrative drafts (SUMMARY / EXPLANATION) — because a mapping candidate cannot express "draft me a
-summary of this finding." It mirrors Phase 5's architecture closely (own registry, own provider
-contract, own rules module) but is genuinely simpler where the domain allows: one request produces one
-row (no separate "run" table, since a narrative draft isn't a batch of candidates), and accepting a
-draft only flips its own review state (no "promotion" transaction, since there is no downstream
-authoritative record — unlike an ATT&CK mapping becoming a `CaseFrameworkMapping`).
+Make the Phase 8C backend AI finding-assistance MVP visible and usable in the frontend: a compact,
+analyst-focused panel on Finding detail. No live AI provider. AI remains suggestion-only — a human
+always accepts or rejects.
 
 ## What this ticket added
 
-1. **`FindingAiSuggestion`** (Prisma model + 2 enums, additive-only migration
-   `20260807100000_add_phase8c_finding_ai_suggestions`). Own table — no change to any Phase 5 AI table
-   or any other existing column.
-2. **`backend/src/services/aiAssist/`** — `aiAssistRules.js` (pure validation, closed vocabularies),
-   `aiAssistProvider.js` (the contract + the disabled provider — one method,
-   `generateSuggestion({snapshot, suggestionType, asOf, signal})`, returns data only), `mockAiAssistProvider.js`
-   (deterministic, offline, includes deliberately-bad scenarios), `aiAssistProviderRegistry.js` (mock
-   reachable only with an explicit test-only opt-in, exactly Phase 5's "no silent fallback to mock"
-   guarantee), `aiAssistRuntime.js` (reuses `env.AI_ENABLED`/`env.AI_PROVIDER` — **one** operator switch
-   covers both AI domains), `findingEvidenceSnapshot.js` (bounded per-Finding snapshot, reuses
-   `caseEvidenceSnapshot.js`'s `canonicalize`/fingerprint helpers directly rather than reimplementing
-   them), `findingAiSuggestionService.js` (request/list), `findingAiSuggestionDecisionService.js`
-   (accept/reject; staleness detected on accept transitions the draft to `EXPIRED` and refuses — never
-   on reject, matching Phase 5's own reasoning for why rejection needs no guard), `aiAssistSerializers.js`.
-3. **`GET`/`POST /api/findings/:id/ai-suggestions`**, **`POST .../accept`**, **`POST .../reject`** —
-   `backend/src/controllers/aiFindingSuggestionController.js` + `aiFindingSuggestionRoutes.js`, mounted
-   in `app.js` before `findingReadRoutes` (same route-shadowing constraint as `censysEnrichmentRoutes`).
-4. **Two new capabilities** (`read:ai-finding-suggestions`, `request:ai-finding-suggestions`: ADMIN +
-   ANALYST) **and a reuse, not a third new one**: accept/reject is gated on the pre-existing
-   `review:ai-suggestions` capability (declared Phase 0, granted to ADMIN + REVIEWER, unused by any
-   route until this ticket). It fits here — and did not fit Phase 5's mapping-suggestion decide — because
-   accepting a narrative draft creates no downstream authoritative record; it is a genuine review of
-   someone else's output, not a grant of write authority over anything else. The result is real
-   separation of duties: ANALYST drafts, REVIEWER/ADMIN decides, mirroring the notification workflow.
-5. **Rate limiting**: the new POST route draws on the SAME `providerRateLimiter` budget IOC/CVE/Censys
-   enrichment and AI mapping suggestions already share — proven in `phase7RateLimiting.test.js`.
-6. **Audit events**: `ai.suggestion.requested`/`.generated`/`.failed`/`.accepted`/`.rejected`,
-   `ai.unavailable` — provider name, closed reason code, text LENGTH only, never the proposed text, the
-   snapshot, or the internal staleness fingerprint.
-7. **51 new/updated tests** (see `docs/ai/STATE.yaml` `completed` for the exact breakdown). Full backend
-   suite: **2950 passed / 177 skipped**, zero regressions from the 2899 baseline.
+1. **`frontend/src/services/api.js`** — `aiFindingAssistService` (request/list/accept/reject), reusing
+   the existing `aiMappingService.getConfig()` for availability rather than adding a second config call:
+   the backend exposes ONE `AI_ENABLED`/`AI_PROVIDER` switch for both AI surfaces (Phase 5 mapping
+   suggestions and Phase 8C finding drafts), so the same response is accurate for both.
+2. **`frontend/src/constants/findingAiAssistance.js`** — presentation vocabulary mirroring
+   `backend/src/services/aiAssist/aiAssistRules.js`: suggestion types, a `StatusBadge` dictionary for
+   DRAFT/ACCEPTED/REJECTED/EXPIRED, reason-code sentences, evidence-reference labels, error mapping.
+3. **`frontend/src/constants/capabilities.js`** — `READ_AI_FINDING_SUGGESTIONS` +
+   `REQUEST_AI_FINDING_SUGGESTIONS` added, mirroring `backend/src/lib/roles.js` exactly. Deciding reuses
+   the pre-existing `REVIEW_AI_SUGGESTIONS` constant, already present from Phase 4/5.
+4. **`frontend/src/components/FindingAiAssistPanel.jsx`** — the panel. Built from the same Phase 6
+   design-system idiom (`Panel`/`StatusBadge`/`States`/`AVAILABILITY`) `FindingDetail.jsx` already uses —
+   NOT Phase 5's older ad-hoc `FrameworkMappingPanel.jsx` styling, since this panel mounts on
+   `FindingDetail`. The *interaction* pattern (capability gating, request/decide flow, anti-automation-
+   bias rules: no accept-all, no pre-selected decision, a rejection reason required before Reject enables,
+   decided drafts stay visible, EXPIRED shown with its staleness reason) is mirrored from
+   `FrameworkMappingPanel.jsx` deliberately — the same rules, a different visual shell.
+5. Mounted on **`frontend/src/pages/FindingDetail.jsx`** as its own full-width `Panel` section.
+6. **16 new component tests** (`FindingAiAssistPanel.test.jsx`) — capability gating, disabled/unavailable
+   states, generate success/403/raw-error-never-shown, decide (reject-reason-required, accept), status
+   rendering for all four states. All passed on the first real run.
+7. **`frontend/e2e/findingAiAssistance.spec.js`** — 4 fixed scenarios plus a per-role loop (7 total):
+   disabled-by-default rendering, VIEWER denial, REVIEWER read-only (no generate control), responsive
+   layout, zero console errors per role. Authored and its assertions manually proven live this session
+   (see below); the spec file itself was not executed locally — see honest gaps.
+8. Docs: `README.md`, `docs/ai/SECURITY.md` (new "Frontend AI-assistance surface" subsection),
+   `docs/ai/HANDOFF.md`, `docs/ai/STATE.yaml`.
 
-## Two real bugs this ticket's own tests caught (in the tests, not the implementation)
+## Genuine live browser verification this session
 
-- A route-authorization test wrongly assumed setting `AI_PROVIDER=mock` in the environment would make
-  the real HTTP path return mock-generated text. It does not, by design — the mock provider is reachable
-  only with a test-only `allowMockProvider` flag no production caller ever passes. Fixed the test to
-  assert the correct (and more important) property: **even with `AI_PROVIDER=mock` set, the real HTTP
-  path still resolves to the disabled provider.**
-- A safety-boundary test expected a hostile provider result carrying extra unexpected fields
-  (`riskBand`, `closeFinding`, ...) to be explicitly REJECTED. The actual (correct) behaviour is that the
-  service only ever reads `.text` and `.evidenceReferences` off a provider result — everything else is
-  excluded **by construction**, never even passed to validation. This is the stronger safety property
-  (the same "prompt minimization by construction, not redaction" philosophy `caseEvidenceSnapshot.js`
-  documents), so the test was corrected to assert that instead.
+Docker's daemon (unavailable throughout Phase 8C) came up mid-session, surfacing a stale docker-compose
+stack from an earlier session (Postgres/backend/frontend containers, images predating the Phase 8C
+merge). Rather than disturb it, this session:
+
+- Ran `prisma migrate deploy` against the real Postgres (applied the one pending Phase 8C migration —
+  additive, already proven safe by CI — directly, a second independent proof it applies cleanly).
+- Reseeded the four well-known demo accounts with a locally-chosen password (`seedUsers.js`, idempotent
+  upsert — **note**: this changes those accounts' password on that specific stale local container; CI
+  seeds its own fresh database and is unaffected, but the next person using that exact local Docker
+  stack will need to re-run `seed:users` with their own password).
+- Ran **this session's own backend code** (not the stale container) on a free port against that same
+  database, and a frontend dev server pointed at it.
+- Logged in for real as ANALYST, REVIEWER and VIEWER and opened a real seeded Finding:
+  - The AI assistance panel renders correctly with real server-issued capabilities (not mocked).
+  - VIEWER: `DeniedState` with the real capability name (`read:ai-finding-suggestions`) from the real
+    403 response.
+  - REVIEWER: panel visible (read access), correctly NO generate control (real capability data).
+  - ANALYST: panel visible, correctly shows "Disabled" — `AI_ENABLED` is unset by default, the shipped
+    reality — never a fabricated "AI online" state.
+  - Zero console errors on any role. No horizontal overflow at 375px (mobile) or 768px (tablet).
+  - The rest of the Finding-detail page (triage, risk explanation, ownership, timeline, cases) renders
+    unaffected by mounting the new panel.
+- Cleaned up every verification-only artifact afterward (temporary `frontend/.env.local`,
+  `.claude/launch.json`, the local backend process, the browser preview server) — working tree confirmed
+  clean before staging.
 
 ## CI result
 
-Pushed as `36a058e`. Run [31169482260](https://github.com/haiderchattha99-ali/ThreatNeXus/actions/runs/31169482260)
-— **all jobs green**, including the two gates that could not run locally (Docker's daemon never came up
-in this sandbox): the "Prisma schema and migration history" job's `migrate deploy from an empty database`
-and `No drift between schema and applied migrations` steps, and the "Core evaluators" job's `eval:phase5`
-and `eval:phase7`. Backend tests also ran and passed against real PostgreSQL in CI. "Mutation and
-concurrency gates" is a manual-trigger-only job and was not run — not required for this ticket.
+Two runs. First push (`8c49779`, run
+[31173166431](https://github.com/haiderchattha99-ali/ThreatNeXus/actions/runs/31173166431)) — 5 jobs
+green, **"Browser suite (Chromium)" FAILED**: `findingAiAssistance.spec.js`'s VIEWER test could not find
+the capability code (`read:ai-finding-suggestions`) in the `DeniedState`. Root cause: `DeniedState`
+renders its `capability` prop only inside its own default fallback text, and the panel's `!canRead`
+branch was passing custom `children`, which silently overrides that fallback — so the code never
+appeared. A real bug the new Playwright spec caught on its first real execution, which is exactly what
+it's for. Fixed in `5a2aed4` by dropping the custom children so `DeniedState`'s own fallback (which
+already names the capability) renders. Re-ran the 16 component tests and lint locally — both clean —
+before pushing the fix.
+
+Second push (`5a2aed4`, run
+[31173470851](https://github.com/haiderchattha99-ali/ThreatNeXus/actions/runs/31173470851)) — **all jobs
+green**, including the Browser suite.
 
 ## Honest gaps
 
-- No frontend surface — deferred to **Phase 8C.1** per this ticket's own explicit fallback clause.
-  Backend/API/tests/docs shipped first.
-- No live AI provider exists in this repository (same boundary Phase 5 documented) and therefore no live
-  smoke script.
-- `F:\Ismail-AI-Dev-Team\scripts\start-task.ps1` throws against this repo's `STATE.yaml` schema (assumes
-  a `current_work` field this project doesn't have). Worked around, not fixed — out of this repo's scope.
+- **The populated-draft rendering cannot be observed through any live browser session, by design.**
+  `aiAssistRuntime.js` never resolves the mock provider without a test-only flag no production HTTP path
+  ever passes — the same boundary Phase 8C's backend documents, not a new gap introduced here. It is
+  covered instead by `FindingAiAssistPanel.test.jsx`, which injects the mock provider response directly
+  at the component level (16 tests: draft cards, evidence tags, accept/reject, all four statuses).
+- Zero backend files touched — this ticket is frontend-only, by its own explicit scope.
 - `docs/codex/` remains untracked and untouched, per the one-writer boundary.
 
 ## Recommended next phase
 
-In order of what this ticket's own gaps suggest: (1) watch CI green, since the migration is unverified
-against a real database locally; (2) Phase 8C.1 — the Finding-detail frontend surface for these
-suggestions; (3) in-app user management (`manage:users` still unused, flagged since Phase 8B); (4) a
-third live provider or Shadowserver licensing.
+(1) In-app user management (`manage:users` still unused, flagged since Phase 8B); (2) GreyNoise, Shodan,
+or Netlas as a fourth live provider, or resolve Shadowserver licensing.
 
 ## Protected boundaries
 
@@ -117,3 +114,4 @@ third live provider or Shadowserver licensing.
 - Do not expose secrets or absorb unrelated changes.
 - `docs/codex/` is a foreign path this session did not touch — leave it alone unless its owner asks.
 - `backend/.env` (and any non-`.env.example` env file) must never be read, printed, or committed.
+- The Phase 8C backend is complete and untouched by this ticket; do not rewrite it.

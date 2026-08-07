@@ -251,6 +251,36 @@ export const aiMappingService = {
     apiClient.post(`/cases/${caseId}/ai/mapping-suggestions/${suggestionId}/reject`, { reason }),
 }
 
+// Phase 8C — Finding-level AI assistance (summary/explanation drafts).
+//
+// Shares aiMappingService.getConfig() rather than duplicating it: the backend
+// exposes ONE AI_ENABLED/AI_PROVIDER switch for both suggestion domains, so
+// the same /ai/config response (aiEnabled, assistanceAvailable, providerName,
+// reasonCode) is accurate for this feature too. There is no separate config
+// endpoint to call.
+//
+// Optional (never required to start the app, and disabled by default): every
+// call below is safe with AI off. requestSuggestion answers 200 with a
+// recorded DRAFT/AI_DISABLED row rather than an error.
+export const aiFindingAssistService = {
+  listSuggestions: (findingId) => apiClient.get(`/findings/${findingId}/ai-suggestions`),
+
+  requestSuggestion: (findingId, suggestionType, requestContext) =>
+    apiClient.post(`/findings/${findingId}/ai-suggestions`, {
+      suggestionType,
+      ...(requestContext ? { requestContext } : {}),
+    }),
+
+  acceptSuggestion: (findingId, suggestionId, reason) =>
+    apiClient.post(
+      `/findings/${findingId}/ai-suggestions/${suggestionId}/accept`,
+      reason ? { reason } : {},
+    ),
+
+  rejectSuggestion: (findingId, suggestionId, reason) =>
+    apiClient.post(`/findings/${findingId}/ai-suggestions/${suggestionId}/reject`, { reason }),
+}
+
 export const findingTriageService = {
   getTriage: (findingId) => apiClient.get(`/findings/${findingId}/triage`),
 

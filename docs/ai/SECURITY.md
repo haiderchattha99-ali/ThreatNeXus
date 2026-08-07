@@ -263,10 +263,39 @@ record of what exists and where.
   string values on a data object; nothing in this codebase parses instructions out of either.
   `findingAiPromptInjection.test.js` drives an adversarial payload end to end and asserts no Finding
   mutation and no auto-acceptance.
-- **No frontend surface in this ticket.** Backend/API/tests/docs shipped first, per this ticket's own
-  explicit fallback; a Finding-detail UI surface is deferred to Phase 8C.1.
 - **No live smoke script.** Unlike NVD/Censys, there is no live AI provider to smoke-test in this
   milestone, so none was added.
+
+### Frontend AI-assistance surface (Phase 8C.1)
+
+- **`FindingAiAssistPanel.jsx`**, mounted on the Finding-detail page, is the ONLY frontend surface for
+  this feature. It calls the four Phase 8C endpoints and the existing shared `/api/ai/config` (the same
+  one Phase 5's AI mapping panel already used — one `AI_ENABLED`/`AI_PROVIDER` switch covers both
+  frontend surfaces, so there is no second config call to keep in sync).
+- **Role rendering is driven entirely by the capabilities the server returns at login**, never by a
+  locally hardcoded role table — `hasCapability(capabilities, CAPABILITIES.READ_AI_FINDING_SUGGESTIONS)`
+  etc. This is UX only: the backend re-checks every capability on every request regardless of what the
+  panel renders, and a denied request creates no row. A 403 renders a `DeniedState` inline; nothing in
+  this panel ever triggers a sign-out (only a 401 on a non-login route does, in the shared axios
+  interceptor — untouched by this ticket).
+- **Availability is mapped onto the SAME `AVAILABILITY` status vocabulary** the rest of the app already
+  uses for "disabled" vs "unavailable" vs "available" (`theme/tokens.js`) — not a bespoke tone invented
+  for this one panel, and never a fabricated "AI online" state when the backend reports otherwise.
+- **A draft is never rendered as a finding fact.** Every draft carries its own `StatusBadge`
+  (DRAFT/ACCEPTED/REJECTED/EXPIRED — label, icon and colour together, never colour alone), its evidence
+  references as human-readable tags from a closed allow-list, and an advisory note that accepting only
+  records a human reviewer's decision — it never closes, scores or reclassifies the Finding. No raw
+  provider error, prompt, or backend exception text ever reaches the DOM: every error path renders
+  through `describeAiAssistError`, which maps a closed set of backend codes to prose and falls back to a
+  generic message for anything else.
+- **No live-provider content is reachable through the browser.** Because `aiAssistRuntime.js` never
+  resolves the mock provider without an explicit test-only flag no production HTTP path ever passes, the
+  panel's only observable live state is "disabled" (the shipped default) or "no provider configured" —
+  proven against a real backend and a real seeded Postgres database in this session (see
+  `docs/ai/HANDOFF.md`). The populated-draft rendering (accept/reject, evidence tags, every status) is
+  covered by `FindingAiAssistPanel.test.jsx`, which injects the mock provider response directly, and by
+  `frontend/e2e/findingAiAssistance.spec.js` for the disabled/denied states CI's own seeded stack can
+  reach.
 
 ## Security tests
 
