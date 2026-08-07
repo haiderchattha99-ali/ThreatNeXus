@@ -13,16 +13,14 @@ const request = require("supertest");
 const jwt = require("jsonwebtoken");
 
 const JWT_SECRET = "a-reasonably-strong-32-char-plus-secret-value";
-const SECRET_ID = "SECRET-CENSYS-ID-MUST-NOT-LEAK";
-const SECRET_SECRET = "SECRET-CENSYS-SECRET-MUST-NOT-LEAK";
+const SECRET_PAT = "SECRET-CENSYS-PAT-MUST-NOT-LEAK";
 
 const BASE_ENV = {
   NODE_ENV: "test",
   DATABASE_URL: "postgresql://test:test@localhost:5432/test_db",
   JWT_SECRET,
   CORS_ORIGIN: "http://localhost:5173",
-  CENSYS_API_ID: SECRET_ID,
-  CENSYS_API_SECRET: SECRET_SECRET,
+  CENSYS_PAT: SECRET_PAT,
 };
 
 const store = {
@@ -67,9 +65,9 @@ function fakeSuccessFetch() {
     status: 200,
     headers: { get: () => null },
     json: async () => ({
-      code: 200,
-      status: "OK",
-      result: { services: [{ port: 443, transport_protocol: "TCP", service_name: "HTTP" }] },
+      result: {
+        resource: { services: [{ port: 443, protocol: "HTTP", transport_protocol: "TCP" }] },
+      },
     }),
   });
 }
@@ -157,13 +155,12 @@ describe("GET /api/findings/:id/enrichment/censys — read:findings", () => {
     expect(res.status).toBe(404);
   });
 
-  it("never leaks CENSYS_API_ID/CENSYS_API_SECRET in the response body", async () => {
+  it("never leaks CENSYS_PAT in the response body", async () => {
     const res = await auth(request(app).post("/api/findings/1/enrichment/censys"), "ADMIN").send({});
     expect(res.status).toBe(200);
     const read = await auth(request(app).get("/api/findings/1/enrichment/censys"), "ADMIN");
     const serialized = JSON.stringify(read.body) + JSON.stringify(res.body);
-    expect(serialized).not.toContain(SECRET_ID);
-    expect(serialized).not.toContain(SECRET_SECRET);
+    expect(serialized).not.toContain(SECRET_PAT);
   });
 });
 
@@ -203,8 +200,7 @@ describe("POST /api/findings/:id/enrichment/censys — trigger:finding-enrichmen
     const actions = store.auditLogs.map((e) => e.action);
     expect(actions).toEqual(["censys.lookup.attempted", "censys.lookup.succeeded"]);
     const serialized = JSON.stringify(store.auditLogs);
-    expect(serialized).not.toContain(SECRET_ID);
-    expect(serialized).not.toContain(SECRET_SECRET);
+    expect(serialized).not.toContain(SECRET_PAT);
     expect(serialized).not.toMatch(/"code":200,"status":"OK"/); // the raw Censys envelope, never audited
   });
 });

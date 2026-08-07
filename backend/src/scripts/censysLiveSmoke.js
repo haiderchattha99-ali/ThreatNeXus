@@ -10,9 +10,9 @@
 //
 // Never run in CI: gated behind an explicit opt-in env var nothing in this
 // repository's automated tests, evaluators, or CI workflow ever sets.
-// CENSYS_API_ID/CENSYS_API_SECRET (if present) are read only to decide
-// whether to pass them to the provider — their values are never printed,
-// logged, or included in output.
+// CENSYS_PAT/CENSYS_ORG_ID (if present) are read only to decide whether to
+// pass them to the provider — their values are never printed, logged, or
+// included in output.
 
 const { createCensysProvider } = require("../services/exposure/censysProvider");
 
@@ -40,8 +40,8 @@ async function runCensysLiveSmoke({ env = process.env, fetchImpl } = {}) {
   assertOptedIn(env);
 
   const provider = createCensysProvider({
-    apiId: env.CENSYS_API_ID || null,
-    apiSecret: env.CENSYS_API_SECRET || null,
+    pat: env.CENSYS_PAT || null,
+    orgId: env.CENSYS_ORG_ID || null,
     fetchImpl,
   });
   const result = await provider.lookup({ indicator: SMOKE_INDICATOR, asOf: new Date() });

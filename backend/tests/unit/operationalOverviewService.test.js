@@ -192,7 +192,7 @@ describe("operationalOverviewService — no live provider traffic", () => {
     // meaningful rather than vacuous — and it stays meaningful on a machine
     // with none, because a blank key is skipped rather than matched.
     const env = require("../../src/config/env");
-    for (const secret of [env.ABUSEIPDB_API_KEY, env.NVD_API_KEY, env.CENSYS_API_ID, env.CENSYS_API_SECRET]) {
+    for (const secret of [env.ABUSEIPDB_API_KEY, env.NVD_API_KEY, env.CENSYS_PAT]) {
       if (typeof secret === "string" && secret.length >= 8) {
         expect(serialized).not.toContain(secret);
         // Not even a leading fragment.

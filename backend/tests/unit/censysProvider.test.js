@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 
-// Phase 8B — the real Censys exposure/attack-surface provider.
+// Phase 8B — the real Censys exposure/attack-surface provider, against
+// Censys's Platform API (Bearer PAT, GET /v3/global/asset/host/{ip}).
 //
 // EVERY test injects its own fetchImpl. Nothing here touches the network,
 // and no test requires or consumes real credentials. A provider must be
@@ -11,8 +12,7 @@ const { ENRICHMENT_STATUS, PROVIDER_ERROR_CODES } = require("../../src/services/
 
 const ASOF = new Date("2026-08-07T00:00:00Z");
 const IP = "1.1.1.1";
-const SECRET_ID = "SECRET-CENSYS-ID";
-const SECRET_SECRET = "SECRET-CENSYS-SECRET-VALUE";
+const SECRET_PAT = "SECRET-CENSYS-PAT-VALUE";
 
 function fakeFetch({ status = 200, body = {}, headers = {}, calls = [] } = {}) {
   return async (url, init) => {
@@ -32,17 +32,20 @@ function throwingFetch(error) {
   };
 }
 
+// The Platform API nests host data under result.resource — one level deeper
+// than the legacy Search v2 API's result — and names fields differently
+// (protocol/transport_protocol both present; autonomous_system.description
+// not .name; no documented certificate field on this endpoint).
 const HOST_SUCCESS_BODY = {
-  code: 200,
-  status: "OK",
   result: {
-    ip: IP,
-    services: [
-      { port: 443, transport_protocol: "TCP", service_name: "HTTP" },
-      { port: 53, transport_protocol: "UDP", service_name: "DNS" },
-    ],
-    autonomous_system: { asn: 13335, name: "CLOUDFLARENET" },
-    certificates: ["a", "b"],
+    resource: {
+      ip: IP,
+      services: [
+        { port: 443, protocol: "HTTP", transport_protocol: "TCP" },
+        { port: 53, protocol: "DNS", transport_protocol: "UDP" },
+      ],
+      autonomous_system: { asn: 13335, description: "CLOUDFLARENET" },
+    },
   },
 };
 
@@ -54,7 +57,7 @@ describe("CensysProvider", () => {
     expect(provider.describe().enabled).toBe(false);
   });
 
-  it("returns SKIPPED_DISABLED without any fetch call when no credentials are configured", async () => {
+  it("returns SKIPPED_DISABLED without any fetch call when no PAT is configured", async () => {
     let called = false;
     const provider = createCensysProvider({ fetchImpl: async () => { called = true; } });
     const result = await provider.lookup({ indicator: IP, asOf: ASOF });
@@ -63,23 +66,10 @@ describe("CensysProvider", () => {
     expect(called).toBe(false);
   });
 
-  it("treats only one of apiId/apiSecret present as still not configured", async () => {
-    let called = false;
-    const provider = createCensysProvider({
-      apiId: SECRET_ID,
-      // apiSecret intentionally omitted
-      fetchImpl: async () => { called = true; },
-    });
-    const result = await provider.lookup({ indicator: IP, asOf: ASOF });
-    expect(result.status).toBe(ENRICHMENT_STATUS.SKIPPED_DISABLED);
-    expect(called).toBe(false);
-  });
-
   it("returns UNSUPPORTED_INDICATOR for a non-IPv4 indicator without any fetch call", async () => {
     let called = false;
     const provider = createCensysProvider({
-      apiId: SECRET_ID,
-      apiSecret: SECRET_SECRET,
+      pat: SECRET_PAT,
       fetchImpl: async () => { called = true; return { ok: true, status: 200, headers: { get: () => null }, json: async () => ({}) }; },
     });
     const result = await provider.lookup({ indicator: "not-an-ip", asOf: ASOF });
@@ -87,11 +77,10 @@ describe("CensysProvider", () => {
     expect(called).toBe(false);
   });
 
-  it("sends Basic Auth built from apiId/apiSecret and normalizes a successful response", async () => {
+  it("sends Bearer auth built from the PAT, the versioned Accept header, and normalizes a successful response", async () => {
     const calls = [];
     const provider = createCensysProvider({
-      apiId: SECRET_ID,
-      apiSecret: SECRET_SECRET,
+      pat: SECRET_PAT,
       fetchImpl: fakeFetch({ body: HOST_SUCCESS_BODY, calls }),
     });
     const result = await provider.lookup({ indicator: IP, asOf: ASOF });
@@ -103,30 +92,41 @@ describe("CensysProvider", () => {
     ]);
     expect(result.data.autonomousSystemNumber).toBe(13335);
     expect(result.data.autonomousSystemName).toBe("CLOUDFLARENET");
-    expect(result.data.certificateCount).toBe(2);
+    // The Platform API host endpoint documents no certificate field — always
+    // null rather than guessed.
+    expect(result.data.certificateCount).toBeNull();
 
     expect(calls).toHaveLength(1);
-    const expectedAuth = `Basic ${Buffer.from(`${SECRET_ID}:${SECRET_SECRET}`).toString("base64")}`;
-    expect(calls[0].init.headers.Authorization).toBe(expectedAuth);
-    expect(calls[0].url).toContain(`/hosts/${IP}`);
+    expect(calls[0].init.headers.Authorization).toBe(`Bearer ${SECRET_PAT}`);
+    expect(calls[0].init.headers.Accept).toBe("application/vnd.censys.api.v3.host.v1+json");
+    expect(calls[0].init.headers["X-Organization-ID"]).toBeUndefined();
+    expect(calls[0].url).toContain(`/global/asset/host/${IP}`);
   });
 
-  it("never leaks the credentials into a result, an error, or describe()", async () => {
+  it("adds X-Organization-ID only when orgId is configured", async () => {
+    const calls = [];
     const provider = createCensysProvider({
-      apiId: SECRET_ID,
-      apiSecret: SECRET_SECRET,
+      pat: SECRET_PAT,
+      orgId: "org-123",
+      fetchImpl: fakeFetch({ body: HOST_SUCCESS_BODY, calls }),
+    });
+    await provider.lookup({ indicator: IP, asOf: ASOF });
+    expect(calls[0].init.headers["X-Organization-ID"]).toBe("org-123");
+  });
+
+  it("never leaks the PAT into a result, an error, or describe()", async () => {
+    const provider = createCensysProvider({
+      pat: SECRET_PAT,
       fetchImpl: fakeFetch({ body: HOST_SUCCESS_BODY }),
     });
     const result = await provider.lookup({ indicator: IP, asOf: ASOF });
     const serialized = JSON.stringify({ result, describe: provider.describe() });
-    expect(serialized).not.toContain(SECRET_ID);
-    expect(serialized).not.toContain(SECRET_SECRET);
+    expect(serialized).not.toContain(SECRET_PAT);
   });
 
   it("maps a 404 to NOT_FOUND", async () => {
     const provider = createCensysProvider({
-      apiId: SECRET_ID,
-      apiSecret: SECRET_SECRET,
+      pat: SECRET_PAT,
       fetchImpl: fakeFetch({ status: 404, body: {} }),
     });
     const result = await provider.lookup({ indicator: IP, asOf: ASOF });
@@ -137,8 +137,7 @@ describe("CensysProvider", () => {
     for (const status of [401, 403]) {
       // eslint-disable-next-line no-await-in-loop
       const provider = createCensysProvider({
-        apiId: SECRET_ID,
-        apiSecret: SECRET_SECRET,
+        pat: SECRET_PAT,
         fetchImpl: fakeFetch({ status, body: { error: "some upstream text that must never surface" } }),
       });
       // eslint-disable-next-line no-await-in-loop
@@ -151,8 +150,7 @@ describe("CensysProvider", () => {
 
   it("maps 429 to RATE_LIMITED and parses Retry-After", async () => {
     const provider = createCensysProvider({
-      apiId: SECRET_ID,
-      apiSecret: SECRET_SECRET,
+      pat: SECRET_PAT,
       fetchImpl: fakeFetch({ status: 429, headers: { "retry-after": "90" } }),
     });
     const result = await provider.lookup({ indicator: IP, asOf: ASOF });
@@ -162,8 +160,7 @@ describe("CensysProvider", () => {
 
   it("maps 5xx to FAILED / PROVIDER_UNAVAILABLE", async () => {
     const provider = createCensysProvider({
-      apiId: SECRET_ID,
-      apiSecret: SECRET_SECRET,
+      pat: SECRET_PAT,
       fetchImpl: fakeFetch({ status: 503 }),
     });
     const result = await provider.lookup({ indicator: IP, asOf: ASOF });
@@ -173,8 +170,7 @@ describe("CensysProvider", () => {
 
   it("maps a malformed JSON body to FAILED / PROVIDER_MALFORMED_RESPONSE", async () => {
     const provider = createCensysProvider({
-      apiId: SECRET_ID,
-      apiSecret: SECRET_SECRET,
+      pat: SECRET_PAT,
       fetchImpl: async () => ({
         ok: true,
         status: 200,
@@ -187,11 +183,10 @@ describe("CensysProvider", () => {
     expect(result.errorInfo.code).toBe(PROVIDER_ERROR_CODES.PROVIDER_MALFORMED_RESPONSE);
   });
 
-  it("maps a response with no result object to FAILED / PROVIDER_MALFORMED_RESPONSE", async () => {
+  it("maps a response missing result.resource to FAILED / PROVIDER_MALFORMED_RESPONSE", async () => {
     const provider = createCensysProvider({
-      apiId: SECRET_ID,
-      apiSecret: SECRET_SECRET,
-      fetchImpl: fakeFetch({ body: { code: 200, status: "OK" } }),
+      pat: SECRET_PAT,
+      fetchImpl: fakeFetch({ body: { result: {} } }),
     });
     const result = await provider.lookup({ indicator: IP, asOf: ASOF });
     expect(result.status).toBe(ENRICHMENT_STATUS.FAILED);
@@ -200,8 +195,7 @@ describe("CensysProvider", () => {
 
   it("maps a genuine timeout to TIMEOUT, distinct from caller cancellation", async () => {
     const provider = createCensysProvider({
-      apiId: SECRET_ID,
-      apiSecret: SECRET_SECRET,
+      pat: SECRET_PAT,
       timeoutMs: 1000,
       fetchImpl: async (_url, init) =>
         new Promise((_resolve, reject) => {
@@ -219,8 +213,7 @@ describe("CensysProvider", () => {
 
   it("maps an unreachable transport failure to FAILED / PROVIDER_UNREACHABLE without leaking the raw error", async () => {
     const provider = createCensysProvider({
-      apiId: SECRET_ID,
-      apiSecret: SECRET_SECRET,
+      pat: SECRET_PAT,
       fetchImpl: throwingFetch(new Error("ECONNREFUSED 10.0.0.1:443 SECRET-INTERNAL-DETAIL")),
     });
     const result = await provider.lookup({ indicator: IP, asOf: ASOF });
@@ -232,13 +225,12 @@ describe("CensysProvider", () => {
   it("caps normalized services at MAX_SERVICES rather than rejecting a large host", async () => {
     const manyServices = Array.from({ length: 80 }, (_, i) => ({
       port: 1000 + i,
+      protocol: "X",
       transport_protocol: "TCP",
-      service_name: "X",
     }));
     const provider = createCensysProvider({
-      apiId: SECRET_ID,
-      apiSecret: SECRET_SECRET,
-      fetchImpl: fakeFetch({ body: { code: 200, status: "OK", result: { services: manyServices } } }),
+      pat: SECRET_PAT,
+      fetchImpl: fakeFetch({ body: { result: { resource: { services: manyServices } } } }),
     });
     const result = await provider.lookup({ indicator: IP, asOf: ASOF });
     expect(result.status).toBe(ENRICHMENT_STATUS.SUCCESS);

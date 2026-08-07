@@ -39,18 +39,18 @@ describe("censysLiveSmoke", () => {
       status: 200,
       headers: { get: () => null },
       json: async () => ({
-        code: 200,
-        status: "OK",
         result: {
-          ip: SMOKE_INDICATOR,
-          services: [{ port: 53, transport_protocol: "UDP", service_name: "DNS" }],
-          autonomous_system: { asn: 13335, name: "CLOUDFLARENET" },
+          resource: {
+            ip: SMOKE_INDICATOR,
+            services: [{ port: 53, protocol: "DNS", transport_protocol: "UDP" }],
+            autonomous_system: { asn: 13335, description: "CLOUDFLARENET" },
+          },
         },
       }),
     });
 
     const summary = await runCensysLiveSmoke({
-      env: { [OPT_IN_ENV]: "1", CENSYS_API_ID: "SECRET-ID-MUST-NOT-APPEAR", CENSYS_API_SECRET: "SECRET-VALUE-MUST-NOT-APPEAR" },
+      env: { [OPT_IN_ENV]: "1", CENSYS_PAT: "SECRET-PAT-MUST-NOT-APPEAR" },
       fetchImpl,
     });
 
@@ -62,7 +62,6 @@ describe("censysLiveSmoke", () => {
       autonomousSystemName: "CLOUDFLARENET",
       queriedAt: summary.queriedAt,
     });
-    expect(JSON.stringify(summary)).not.toContain("SECRET-ID-MUST-NOT-APPEAR");
-    expect(JSON.stringify(summary)).not.toContain("SECRET-VALUE-MUST-NOT-APPEAR");
+    expect(JSON.stringify(summary)).not.toContain("SECRET-PAT-MUST-NOT-APPEAR");
   });
 });
