@@ -54,7 +54,11 @@ user chose the smallest honest option: gap-fill only, no rebuild.
 
 ## Validation
 
-See `docs/ai/STATE.yaml` → `validation` for the exact commands run and their results.
+See `docs/ai/STATE.yaml` → `validation` for the exact commands run and their results. Pushed at
+commit `0fb6f4d`; GitHub Actions run
+[31152565277](https://github.com/haiderchattha99-ali/ThreatNeXus/actions/runs/31152565277) is green
+(Prisma, Backend tests, Frontend lint/tests/build, Core evaluators, Secrets/artifact scan, Browser
+suite Chromium; Mutation/concurrency gates remain manual by design, matching Phase 7 precedent).
 
 ## Honest gaps
 

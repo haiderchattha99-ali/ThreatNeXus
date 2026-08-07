@@ -42,7 +42,8 @@
                        "git_status":  "Clean diff: README.md, backend/package.json, docs/ai/HANDOFF.md, docs/ai/SECURITY.md, docs/ai/STATE.yaml modified; backend/src/scripts/nvdLiveSmoke.js, backend/tests/unit/nvdLiveSmoke.test.js, backend/tests/unit/phase8ProviderFoundationEvidence.test.js added; docs/codex/ untouched throughout",
                        "prisma":  "Not run — no schema change in this ticket",
                        "frontend":  "Not run — no frontend file touched in this ticket",
-                       "secret_hygiene":  "PASS — backend/.env never opened this session; new tests assert the injected fake secret never appears in output; no live NVD_API_KEY value was read, printed, or committed"
+                       "secret_hygiene":  "PASS — backend/.env never opened this session; new tests assert the injected fake secret never appears in output; no live NVD_API_KEY value was read, printed, or committed",
+                       "ci_workflow":  "PASS — GitHub Actions run 31152565277 at commit 0fb6f4d, conclusion success: Prisma schema/migration, Backend tests, Frontend lint/tests/build, Core evaluators, Secrets/artifact scan, Browser suite (Chromium) all green; Mutation and concurrency gates (manual) intentionally not triggered, matching Phase 7 precedent"
                    },
     "known_issues":  [
                          "No standalone /api/providers/status REST endpoint exists — status is served embedded in GET /api/dashboard/overview only. Not built this session; a possible future addition if a non-dashboard consumer needs it.",
@@ -52,7 +53,7 @@
                          "start-task.ps1's Assert-TeamClean cannot succeed in this repo while docs/codex/ stays untracked-but-present; the writer lock and STATE.yaml updates were written directly instead of through the script for this reason."
                      ],
     "next_action":  "None required to close this ticket. A genuinely new Phase 8 would be a SECOND live provider behind either existing registry, or resolving Shadowserver access/licensing terms first.",
-    "checkpoint_ref":  "HEAD",
+    "checkpoint_ref":  "0fb6f4d48b800b31b0ec26e273a5cc34f4948df3",
     "updated_at":  "2026-08-07T00:00:00.0000000Z",
     "next_writer":  "unassigned"
 }
