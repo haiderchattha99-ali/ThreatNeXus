@@ -11,6 +11,13 @@ const {
   validateMaxAgeDays: validateAbuseIpdbMaxAgeDays,
 } = require("../services/enrichment/abuseIpdbConfig");
 const {
+  CensysConfigError,
+  DEFAULT_BASE_URL: CENSYS_DEFAULT_BASE_URL,
+  DEFAULT_TIMEOUT_MS: CENSYS_DEFAULT_TIMEOUT_MS,
+  validateBaseUrl: validateCensysBaseUrl,
+  validateTimeoutMs: validateCensysTimeoutMs,
+} = require("../services/exposure/censysConfig");
+const {
   VulnerabilityConfigError,
   NVD_DEFAULT_BASE_URL,
   NVD_DEFAULT_TIMEOUT_MS,
@@ -319,6 +326,28 @@ function buildConfig() {
     );
   }
 
+  // Phase 8B — Censys internet-exposure/attack-surface provider. Both
+  // CENSYS_API_ID and CENSYS_API_SECRET stay optional at startup exactly like
+  // ABUSEIPDB_API_KEY: a missing credential only affects censysProvider.js's
+  // lookup() (SKIPPED_DISABLED), never whether the app starts. Censys Search
+  // v2 requires BOTH an API ID and a secret (HTTP Basic Auth) — a caller
+  // supplying only one is treated as "not configured", never as "configured
+  // with half a credential".
+  let censysBaseUrl;
+  let censysTimeoutMs;
+  try {
+    censysBaseUrl = validateCensysBaseUrl(requireString(process.env.CENSYS_BASE_URL) || CENSYS_DEFAULT_BASE_URL);
+    censysTimeoutMs = validateCensysTimeoutMs(
+      parseOptionalInt("CENSYS_TIMEOUT_MS", process.env.CENSYS_TIMEOUT_MS, CENSYS_DEFAULT_TIMEOUT_MS, {
+        strict: true,
+      })
+    );
+  } catch (err) {
+    throw new ConfigError(
+      err instanceof CensysConfigError ? err.message : `Invalid Censys configuration: ${err.message}`
+    );
+  }
+
   // Declared, not consumed by anything: no code reads this value — the TTL
   // policy (enrichmentTtlPolicy.js) is a pure module configured through
   // explicit policy input, never through the environment.
@@ -378,6 +407,14 @@ function buildConfig() {
     VULNERABILITY_BATCH_SIZE: vulnerabilityBatchSize,
     VULNERABILITY_LEASE_SECONDS: vulnerabilityLeaseSeconds,
     VULNERABILITY_MAX_ATTEMPTS: vulnerabilityMaxAttempts,
+
+    // Phase 8B — Censys configuration. Both credential fields are optional
+    // and never required to start the app; never logged or included in any
+    // error message this module throws.
+    CENSYS_API_ID: process.env.CENSYS_API_ID || "",
+    CENSYS_API_SECRET: process.env.CENSYS_API_SECRET || "",
+    CENSYS_BASE_URL: censysBaseUrl,
+    CENSYS_TIMEOUT_MS: censysTimeoutMs,
 
     // Phase 5 — declared, not consumed by anything in Phase 0. Off by default.
     AI_ENABLED: (process.env.AI_ENABLED || "false").trim().toLowerCase() === "true",

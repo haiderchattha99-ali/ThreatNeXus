@@ -153,7 +153,9 @@ const Settings = () => {
   }, [load])
 
   const providers = overview?.sections?.providers
-  const providerRows = providers ? [providers.ioc, ...(providers.vulnerability || [])].filter(Boolean) : []
+  const providerRows = providers
+    ? [providers.ioc, ...(providers.vulnerability || []), ...(providers.exposure || [])].filter(Boolean)
+    : []
 
   return (
     <>

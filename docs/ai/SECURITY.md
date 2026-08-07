@@ -152,6 +152,58 @@ record of what exists and where.
   distinct, the provider rate-limit budget is a single positive pair, the smoke script cannot run
   unattended).
 
+### Censys — the second live provider (Phase 8B)
+
+- **New adapter, new table, no change to the existing two registries.** `censysProvider.js` (self-
+  contained, mirrors `abuseIpdbProvider.js`'s defensive shape: composed timeout+caller-signal, every
+  expected HTTP/transport outcome mapped to a normalized result, never throws for an expected
+  outcome), `censysTypes.js` (own closed status/error taxonomy, reusing the same
+  `PROVIDER_RATE_LIMITED`/`PROVIDER_INVALID_KEY`/`PROVIDER_TIMEOUT`/`PROVIDER_UNAVAILABLE`/
+  `PROVIDER_UNREACHABLE`/`PROVIDER_MALFORMED_RESPONSE`/`PROVIDER_REJECTED`/`UNSUPPORTED_INDICATOR`/
+  `ENRICHMENT_DISABLED` code vocabulary the rest of the app already speaks), `censysConfig.js` (bounds/
+  defaults, mirrors `abuseIpdbConfig.js`). `CENSYS_API_ID`/`CENSYS_API_SECRET` are both optional at
+  startup and both required together to enable the provider (Basic Auth needs the pair; one alone is
+  reported `NOT_CONFIGURED`, never a half-configured state) — never logged, printed, or included in
+  any error message.
+- **Its own Prisma table (`CensysEnrichment`), not a bolt-on to `IocEnrichment`.** Censys returns
+  exposure/attack-surface data (open services, AS ownership) — a materially different shape from
+  AbuseIPDB's reputation score, the same reasoning that already keeps `VulnerabilityProviderResult`
+  separate from IOC reputation. Additive-only migration
+  (`20260807000000_add_phase8b_censys_exposure_enrichment`), one enum + one table, no existing column
+  touched.
+- **No queue.** Deliberately NOT modelled on `IocEnrichment`'s PENDING/lease/retry/dead-letter
+  lifecycle — every row is written once, already terminal, by a synchronous, human-triggered lookup
+  (`censysExecutionService.js`, `POST /api/findings/:id/enrichment/censys`). This phase's explicit
+  scope excludes queues/schedulers.
+- **Same authorization and quota as every other provider route.** `GET .../enrichment/censys` reuses
+  `read:findings`; `POST .../enrichment/censys` reuses `trigger:finding-enrichment` (ADMIN/ANALYST
+  only) and the SAME `providerRateLimiter` budget IOC/CVE enrichment and the batch workers already
+  share — proven in `phase7RateLimiting.test.js` ("Phase 8B — counts the Censys route in the SAME
+  budget, not a fresh one"). `phase7RouteCensus.test.js` (the structural route-authorization walk)
+  covers both new routes automatically.
+- **Audit events**: `censys.lookup.attempted`, `.succeeded`, `.failed`, `.unavailable`,
+  `.rate_limited` — actor/role (from `buildAuditContext`), provider id, terminal status, and the
+  closed `errorCode` only, never a raw upstream body or the credentials.
+- **Dashboard/Settings.** `sections.providers.exposure` (new array, parallel to `.ioc`/`.vulnerability`)
+  reports `CONFIGURED`/`NOT_CONFIGURED` plus freshness from `CensysEnrichment`, zero live calls,
+  rendered by the existing Settings panel and dashboard `ProviderFreshness` component — no new UI
+  component, no new status vocabulary (`CONFIGURED`/`NOT_CONFIGURED` already existed in
+  `Settings.jsx`'s `CONFIG_STATE` dictionary).
+- **Manual live smoke**: `backend/src/scripts/censysLiveSmoke.js` (`npm run smoke:censys`), opt-in via
+  `LIVE_CENSYS_SMOKE=1`, one lookup against `1.1.1.1` (Cloudflare's public DNS resolver — permanent
+  public infrastructure, never a customer/victim asset), never prints credentials, never runs in CI.
+  Not executed against the real Censys API this session (not authorized).
+- Tests: `censysProvider.test.js` (15 — construction with no credentials, both-halves-required,
+  unsupported indicator, Basic Auth header construction, success normalization + service-count
+  bounding, 401/403/404/429/5xx/timeout/malformed/unreachable, credential redaction),
+  `censysEnrichmentRouteAuthorization.test.js` (14 — full route→controller→service→provider chain
+  with a faked `globalThis.fetch`, capability matrix, 404/401 handling, audit pair, redaction),
+  `censysLiveSmoke.test.js` (3), `phase8bCensysProviderEvidence.test.js` (7 — startup safety, registry
+  isolation, error-contract closure, shared-quota assertion, smoke-script guard), plus 2 new cases in
+  `phase7RateLimiting.test.js` for the shared/own-budget proof and an `operationalOverviewService.js`
+  redaction extension. Backend suite: 2899 passed / 177 skipped (up from the 2858 baseline by exactly
+  the 41 new tests this ticket adds).
+
 ## Security tests
 
 `backend/tests/` (unit, middleware, integration, including real-PostgreSQL concurrency),

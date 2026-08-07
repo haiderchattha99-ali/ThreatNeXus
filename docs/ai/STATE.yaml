@@ -1,59 +1,68 @@
 {
     "schema_version":  1,
-    "ticket":  "TNX-P8-PROVIDER-EVIDENCE-GAPFILL",
-    "title":  "Phase 8 provider-foundation evidence gap-fill (registries, NVD, status, audit, quotas already shipped Phase 2/6/7 - this closes only the narrow remaining gaps)",
+    "ticket":  "TNX-P8B-CENSYS-PROVIDER",
+    "title":  "Phase 8B - Censys live internet-exposure/attack-surface provider integration",
     "status":  "complete",
     "owner":  "unassigned",
     "reviewer":  "codex",
-    "branch":  "feat/phase-8-provider-evidence-gapfill",
+    "branch":  "feat/phase-8b-censys-provider",
     "worktree":  "C:\\Users\\LENOVO\\Desktop\\ThreatNeXus",
-    "starting_commit":  "38c4b81d3a5a29c582adb6033c269ade55c23179",
-    "goal":  "The user asked for a Phase 8A/8AB 'secure provider foundation + live NVD adapter'. Investigation before writing any code found this already exists: two provider registries (providerRegistry.js for IOC, vulnerabilityProviderRegistry.js for vulnerability), a live NvdCveProvider wired into vulnerability enrichment since Phase 2 (S2B), a safe provider-status surface on GET /api/dashboard/overview (Phase 6), a frontend Settings.jsx panel rendering it, Phase 7 rate limiting on provider execution routes, and existing audit logging + redaction tests (redact.test.js, iocEnrichmentSecurity.test.js). The user chose the 'small honest gap-fill' option instead of rebuilding a duplicate provider abstraction. This ticket adds only the genuinely missing pieces.",
+    "starting_commit":  "4fb373c",
+    "goal":  "Build exactly one new live provider adapter, Censys, using the existing provider foundation and NVD/AbuseIPDB patterns (registries, config safety, audit logging, Phase 7 shared rate limiting) without rebuilding or duplicating any of it. No live calls in tests/CI, no secret leakage, quota enforced, audit logged, docs updated. Do not integrate Shadowserver, Shodan, Netlas, GreyNoise, VirusTotal, OTX, or MISP.",
     "scope":  {
                   "included":  [
-                                   "Opt-in manual NVD live-smoke script (LIVE_NVD_SMOKE=1 gated, never run in CI, never prints the key)",
-                                   "Compact Phase 8 provider-foundation evidence test suite (not a new heavy eval gate — DB-backed invariants already proven by eval:phase7)",
-                                   "Docs: README, docs/ai/SECURITY.md, docs/ai/HANDOFF.md, docs/ai/STATE.yaml updated to correctly attribute the existing provider foundation to Phases 2/6/7 and record this ticket's narrow addition"
+                                   "CensysEnrichment Prisma model + migration (own table, not a bolt-on to IocEnrichment; no queue/lease/retry — synchronous terminal rows only)",
+                                   "censysConfig.js / censysTypes.js / censysProvider.js (self-contained adapter mirroring abuseIpdbProvider.js's defensive HTTP shape)",
+                                   "censysExecutionService.js: audited, synchronous, human-triggered lookup (5 audit actions: attempted/succeeded/failed/unavailable/rate_limited)",
+                                   "GET+POST /api/findings/:id/enrichment/censys, reusing existing read:findings / trigger:finding-enrichment capabilities and the existing providerRateLimiter budget",
+                                   "Dashboard sections.providers.exposure + Settings.jsx/DashboardSections.jsx rendering it via the existing CONFIG_STATE/PROVIDER_STATE dictionaries (no new UI vocabulary)",
+                                   "Opt-in manual live smoke script (LIVE_CENSYS_SMOKE=1, npm run smoke:censys, lookup against 1.1.1.1, never run in CI)",
+                                   "41 new/updated tests: censysProvider.test.js (15), censysEnrichmentRouteAuthorization.test.js (14), censysLiveSmoke.test.js (3), phase8bCensysProviderEvidence.test.js (7), plus 2 new phase7RateLimiting.test.js cases proving shared quota",
+                                   "Docs: README, docs/ai/SECURITY.md ('Censys - the second live provider' subsection), backend/.env.example, docs/ai/HANDOFF.md, docs/ai/STATE.yaml",
+                                   "Merged the prior TNX-P8-PROVIDER-EVIDENCE-GAPFILL branch into main first (PR #9), per the user's explicit start-gate answer, so this branch starts from an updated main"
                                ],
                   "excluded":  [
-                                   "A new/duplicate provider registry (two already exist)",
-                                   "A new NVD adapter (nvdCveProvider.js already live since Phase 2 S2B)",
-                                   "A new provider-status endpoint (already served at GET /api/dashboard/overview -> sections.providers, read:dashboard-gated)",
-                                   "A new frontend provider panel (Settings.jsx already renders one)",
-                                   "A new eval/run_phase8_gate.js (would duplicate eval:phase7's already-passing DB-backed invariant proof)",
-                                   "Censys, Shodan, Netlas, GreyNoise, VirusTotal, OTX, MISP, Shadowserver ingestion, live AI, scheduled jobs, automatic notification sending",
-                                   "PR creation or merge into main"
+                                   "Shadowserver, Shodan, Netlas, GreyNoise, VirusTotal, OTX, MISP integration",
+                                   "Live AI provider",
+                                   "Scheduled/queued Censys jobs — this phase is explicitly synchronous, human-triggered only",
+                                   "A unified cross-cutting provider registry spanning IOC/vulnerability/exposure — three separate, intentionally un-unified registries by design",
+                                   "PR creation or merge into main (for THIS ticket's branch — the gap-fill PR #9 merge was separately authorized by the user)"
                                ]
               },
     "completed":  [
-                      "Investigated the requested 'Phase 8 provider foundation' scope against the actual codebase BEFORE writing code; found registries, live NVD, safe status surface, frontend panel, rate limiting and redaction tests already shipped across Phases 2/6/7; presented file:line evidence to the user via AskUserQuestion and got explicit direction to gap-fill only",
-                      "backend/src/scripts/nvdLiveSmoke.js: opt-in (LIVE_NVD_SMOKE=1) manual NVD live-smoke command, reuses NvdCveProvider directly (zero new HTTP code), one lookup against CVE-2021-44228, never prints NVD_API_KEY, wired as `npm run smoke:nvd`",
-                      "backend/tests/unit/nvdLiveSmoke.test.js: 3 tests — opt-in guard rejects before any fetch, successful mocked lookup returns only safe normalized fields, injected fake secret never appears in output",
-                      "backend/tests/unit/phase8ProviderFoundationEvidence.test.js: 7 tests — missing NVD_API_KEY/ABUSEIPDB_API_KEY never break startup while JWT_SECRET absence still fails fast, both registries expose exactly their documented provider names, the vulnerability error-code contract is closed/distinct and contains the safe set, a single positive provider rate-limit budget exists, the smoke script cannot run unattended",
-                      "README.md External providers section: pointer to the existing provider-status surface (GET /api/dashboard/overview -> sections.providers, Settings screen) and the new smoke command",
-                      "docs/ai/SECURITY.md: new 'Provider foundation (Phase 8 evidence)' section citing every existing claim by file (registries, live NVD, status surface, error contract, shared quota bucket) plus what this ticket added",
-                      "docs/ai/HANDOFF.md and docs/ai/STATE.yaml rewritten to reflect the evidence-based scope"
+                      "Verified the mandatory start gate: fetched origin, confirmed the prior gap-fill branch was NOT merged into main, stopped and reported per the user's own rule 4, got explicit direction to open PR #9 and merge it, then branched feat/phase-8b-censys-provider from the resulting updated main (4fb373c)",
+                      "Prisma: CensysEnrichment model + enum, additive-only migration 20260807000000_add_phase8b_censys_exposure_enrichment, verified against a real disposable PostgreSQL instance (migrate deploy from zero, prisma validate, migrate diff --exit-code shows zero drift)",
+                      "censysConfig.js / censysTypes.js / censysProvider.js: full adapter with Basic Auth, bounded timeout+caller-signal composition, 401/403/404/429/5xx/timeout/malformed/unreachable all mapped to the same closed PROVIDER_ERROR_CODES vocabulary iocEnrichmentTypes.js and vulnerabilityTypes.js already use; verified end-to-end with a hand-run script before writing tests",
+                      "censysExecutionService.js: resolves Finding indicator, calls the provider, persists one CensysEnrichment row, writes an attempted+outcome audit pair (5 actions), never throws for an expected provider outcome",
+                      "censysEnrichmentController.js + censysEnrichmentRoutes.js, mounted in app.js: GET/POST /api/findings/:id/enrichment/censys reusing read:findings / trigger:finding-enrichment and the existing providerRateLimiter",
+                      "backend/src/scripts/censysLiveSmoke.js (npm run smoke:censys): opt-in LIVE_CENSYS_SMOKE=1, one lookup against 1.1.1.1 (Cloudflare public DNS, permanent public infrastructure), never prints credentials",
+                      "Dashboard: operationalOverviewService.js buildProvidersSection now queries CensysEnrichment and returns sections.providers.exposure (CONFIGURED/NOT_CONFIGURED + freshness); Settings.jsx and DashboardSections.jsx ProviderFreshness fold the new array into their existing rendering with zero new UI vocabulary",
+                      "Fixed two pre-existing test mock clients (operationalOverviewService.test.js, riskFactorPressure.test.js) that needed a censysEnrichment.aggregate stub added — caught by running the full suite, not assumed",
+                      "41 new/updated tests, all passing: censysProvider.test.js (15), censysEnrichmentRouteAuthorization.test.js (14, full route->controller->service->provider chain with a faked globalThis.fetch), censysLiveSmoke.test.js (3), phase8bCensysProviderEvidence.test.js (7), phase7RateLimiting.test.js +2 (shared-budget and own-budget proofs)",
+                      "Docs: README External providers table + smoke command, docs/ai/SECURITY.md 'Censys - the second live provider (Phase 8B)' subsection, backend/.env.example CENSYS_* block",
+                      "Fixed the CI 'migration count and order match the reviewed history' guard, which pins an exact migration-directory list on purpose — added this ticket's migration folder name to it (.github/workflows/ci.yml), per the guard's own instruction to update it in the same PR",
+                      "Pushed feat/phase-8b-censys-provider (commits 4843c0b, fd297ef) and watched GitHub Actions run 31155494175 to a green conclusion (all required jobs; Mutation and concurrency gates remains manual by design)"
                   ],
     "validation":  {
-                       "backend":  "PASS — 2858 passed / 177 skipped (111 files passed, 16 skipped), up from the prior session's 2848/177 baseline by exactly the 10 new tests added this session; no regressions",
-                       "new_tests":  "PASS — nvdLiveSmoke.test.js (3/3), phase8ProviderFoundationEvidence.test.js (7/7)",
-                       "manual_smoke_guard":  "PASS — `node src/scripts/nvdLiveSmoke.js` with no LIVE_NVD_SMOKE set exits 1 with a safe refusal message, no key printed, no network attempted",
-                       "registries_load":  "PASS — both provider registries require cleanly with no key present",
-                       "git_status":  "Clean diff: README.md, backend/package.json, docs/ai/HANDOFF.md, docs/ai/SECURITY.md, docs/ai/STATE.yaml modified; backend/src/scripts/nvdLiveSmoke.js, backend/tests/unit/nvdLiveSmoke.test.js, backend/tests/unit/phase8ProviderFoundationEvidence.test.js added; docs/codex/ untouched throughout",
-                       "prisma":  "Not run — no schema change in this ticket",
-                       "frontend":  "Not run — no frontend file touched in this ticket",
-                       "secret_hygiene":  "PASS — backend/.env never opened this session; new tests assert the injected fake secret never appears in output; no live NVD_API_KEY value was read, printed, or committed",
-                       "ci_workflow":  "PASS — GitHub Actions run 31152565277 at commit 0fb6f4d, conclusion success: Prisma schema/migration, Backend tests, Frontend lint/tests/build, Core evaluators, Secrets/artifact scan, Browser suite (Chromium) all green; Mutation and concurrency gates (manual) intentionally not triggered, matching Phase 7 precedent"
+                       "backend":  "PASS — 2899 passed / 177 skipped (115 files passed, 16 skipped), up from the 2858 baseline by exactly the 41 new tests this ticket adds; no regressions",
+                       "prisma_migrate_from_zero":  "PASS — all 19 migrations (18 pre-existing + this ticket's) applied cleanly on a disposable PostgreSQL 16 container from zero",
+                       "prisma_validate":  "PASS — schema valid",
+                       "prisma_drift":  "PASS — `prisma migrate diff --exit-code` against the same live database reports zero difference after applying this ticket's migration",
+                       "frontend":  "PASS — 143/143 unit tests unchanged, no regressions from the Settings.jsx/DashboardSections.jsx edits",
+                       "route_census":  "PASS — phase7RouteCensus.test.js (the structural walk requiring every mounted route to authenticate + enforce a capability) covers both new Censys routes automatically, no exception-list edit needed",
+                       "rate_limit_sharing":  "PASS — new phase7RateLimiting.test.js case proves the Censys route shares the SAME providerRateLimiter budget as IOC enrichment (2 IOC calls + 1 Censys call = 429), and that the Censys route alone also bounds its own rate",
+                       "secret_hygiene":  "PASS — backend/.env never opened this session; new tests assert injected fake CENSYS_API_ID/CENSYS_API_SECRET values never appear in any response body, audit row, or smoke-script output; no live Censys call was made",
+                       "no_live_calls_in_tests":  "PASS — every censysProvider.test.js case injects its own fetchImpl; censysEnrichmentRouteAuthorization.test.js fakes globalThis.fetch for the full route chain; censysLiveSmoke.test.js never sets the opt-in env var in a way that reaches the network",
+                       "git_status":  "Clean diff, explicit paths staged only; docs/codex/ untouched throughout",
+                       "ci_workflow":  "PASS — GitHub Actions run 31155494175 at commit fd297ef, conclusion success: Secrets/artifact scan, Backend tests, Frontend lint/tests/build, Prisma schema/migration history, Core evaluators, Browser suite (Chromium) all green; Mutation and concurrency gates (manual) intentionally not triggered. First push (31155284518) failed only the frozen migration-history guard, fixed in the same PR (see completed[])."
                    },
     "known_issues":  [
-                         "No standalone /api/providers/status REST endpoint exists — status is served embedded in GET /api/dashboard/overview only. Not built this session; a possible future addition if a non-dashboard consumer needs it.",
-                         "The user's prompt named error codes (PROVIDER_NOT_CONFIGURED, PROVIDER_AUTH_FAILED, PROVIDER_BAD_RESPONSE) that don't exist verbatim; the existing closed set (PROVIDER_DISABLED/PROVIDER_INVALID_KEY/PROVIDER_REJECTED) covers the same cases under different names — documented, not renamed, to avoid unforced churn to a tested enum.",
-                         "The manual NVD live smoke was NOT executed against the real NVD API this session (not authorized); implemented and unit-tested with a mocked fetch only.",
-                         "docs/codex/ remains untracked and untouched, per the one-writer boundary.",
-                         "start-task.ps1's Assert-TeamClean cannot succeed in this repo while docs/codex/ stays untracked-but-present; the writer lock and STATE.yaml updates were written directly instead of through the script for this reason."
+                         "The manual Censys live smoke was NOT executed against the real Censys API this session (not authorized); implemented and unit-tested with a mocked fetch only.",
+                         "Censys is exposed as a Finding-scoped, synchronous, human-triggered lookup only — there is no batch/queue worker for it (matches this phase's explicit 'no queues/schedulers' scope), so it cannot be bulk-run the way IOC/vulnerability enrichment batches can.",
+                         "docs/codex/ remains untracked and untouched, per the one-writer boundary."
                      ],
-    "next_action":  "None required to close this ticket. A genuinely new Phase 8 would be a SECOND live provider behind either existing registry, or resolving Shadowserver access/licensing terms first.",
-    "checkpoint_ref":  "0fb6f4d48b800b31b0ec26e273a5cc34f4948df3",
+    "next_action":  "Run the remaining local gate items (already substantially done), commit with explicit paths, push feat/phase-8b-censys-provider, watch CI to green, release the writer lock.",
+    "checkpoint_ref":  "HEAD",
     "updated_at":  "2026-08-07T00:00:00.0000000Z",
     "next_writer":  "unassigned"
 }

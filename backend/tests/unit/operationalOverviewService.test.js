@@ -70,6 +70,7 @@ function makeClient(overrides = {}) {
     aiFrameworkMappingSuggestion: { count: zeroCount },
     iocEnrichment: { aggregate: vi.fn(async () => ({ _max: { queriedAt: null } })) },
     vulnerabilityProviderResult: { groupBy: emptyGroup },
+    censysEnrichment: { aggregate: vi.fn(async () => ({ _max: { queriedAt: null } })) },
   };
 
   return { ...base, ...overrides };
@@ -191,7 +192,7 @@ describe("operationalOverviewService — no live provider traffic", () => {
     // meaningful rather than vacuous — and it stays meaningful on a machine
     // with none, because a blank key is skipped rather than matched.
     const env = require("../../src/config/env");
-    for (const secret of [env.ABUSEIPDB_API_KEY, env.NVD_API_KEY]) {
+    for (const secret of [env.ABUSEIPDB_API_KEY, env.NVD_API_KEY, env.CENSYS_API_ID, env.CENSYS_API_SECRET]) {
       if (typeof secret === "string" && secret.length >= 8) {
         expect(serialized).not.toContain(secret);
         // Not even a leading fragment.
@@ -205,6 +206,9 @@ describe("operationalOverviewService — no live provider traffic", () => {
       expect(provider.status).toMatch(
         /^(CONFIGURED_WITH_KEY|KEYLESS_PUBLIC_RATE_LIMIT|NO_KEY_REQUIRED)$/
       );
+    }
+    for (const provider of providers.exposure) {
+      expect(provider.status).toMatch(/^(CONFIGURED|NOT_CONFIGURED)$/);
     }
   });
 
@@ -552,9 +556,9 @@ describe("operationalOverviewService — stored observation trend", () => {
 describe("operationalOverviewService — provider freshness summary and audience", () => {
   it("rolls provider freshness up from the entries in the same snapshot", async () => {
     const result = await buildOperationalOverview({ role: "ADMIN", asOf: ASOF, client: makeClient() });
-    const { summary, ioc, vulnerability } = result.sections.providers;
+    const { summary, ioc, vulnerability, exposure } = result.sections.providers;
 
-    expect(summary.total).toBe(1 + vulnerability.length);
+    expect(summary.total).toBe(1 + vulnerability.length + exposure.length);
     expect(summary.fresh + summary.stale + summary.noSuccessfulLookup).toBe(summary.total);
     // With no stored lookup anywhere, nothing may be reported as fresh.
     expect(summary.noSuccessfulLookup).toBe(summary.total);

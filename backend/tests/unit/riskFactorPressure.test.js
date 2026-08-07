@@ -133,6 +133,7 @@ function makeClient({ contributionRows = CONTRIBUTION_ROWS, currentScores = 2, f
     aiFrameworkMappingSuggestion: { count: zeroCount },
     iocEnrichment: { aggregate: vi.fn(async () => ({ _max: { queriedAt: null } })) },
     vulnerabilityProviderResult: { groupBy: emptyGroup },
+    censysEnrichment: { aggregate: vi.fn(async () => ({ _max: { queriedAt: null } })) },
   };
 
   // Every delegate also gets every write method, recording any call. Nothing in
