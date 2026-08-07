@@ -75,6 +75,23 @@ merge). Rather than disturb it, this session:
   `.claude/launch.json`, the local backend process, the browser preview server) — working tree confirmed
   clean before staging.
 
+## CI result
+
+Two runs. First push (`8c49779`, run
+[31173166431](https://github.com/haiderchattha99-ali/ThreatNeXus/actions/runs/31173166431)) — 5 jobs
+green, **"Browser suite (Chromium)" FAILED**: `findingAiAssistance.spec.js`'s VIEWER test could not find
+the capability code (`read:ai-finding-suggestions`) in the `DeniedState`. Root cause: `DeniedState`
+renders its `capability` prop only inside its own default fallback text, and the panel's `!canRead`
+branch was passing custom `children`, which silently overrides that fallback — so the code never
+appeared. A real bug the new Playwright spec caught on its first real execution, which is exactly what
+it's for. Fixed in `5a2aed4` by dropping the custom children so `DeniedState`'s own fallback (which
+already names the capability) renders. Re-ran the 16 component tests and lint locally — both clean —
+before pushing the fix.
+
+Second push (`5a2aed4`, run
+[31173470851](https://github.com/haiderchattha99-ali/ThreatNeXus/actions/runs/31173470851)) — **all jobs
+green**, including the Browser suite.
+
 ## Honest gaps
 
 - **The populated-draft rendering cannot be observed through any live browser session, by design.**
@@ -82,20 +99,13 @@ merge). Rather than disturb it, this session:
   ever passes — the same boundary Phase 8C's backend documents, not a new gap introduced here. It is
   covered instead by `FindingAiAssistPanel.test.jsx`, which injects the mock provider response directly
   at the component level (16 tests: draft cards, evidence tags, accept/reject, all four statuses).
-- **`frontend/e2e/findingAiAssistance.spec.js` was not run locally.** Running it would have required
-  stopping the pre-existing stale Docker containers occupying the default ports this session was
-  otherwise careful not to disturb. Its assertions were manually proven true in a live browser (see
-  above); CI's "Browser suite (Chromium)" job is this spec's first real execution, against a freshly
-  built, freshly seeded stack.
 - Zero backend files touched — this ticket is frontend-only, by its own explicit scope.
 - `docs/codex/` remains untracked and untouched, per the one-writer boundary.
 
 ## Recommended next phase
 
-(1) Watch CI green, since the new Playwright spec is unverified in that environment specifically
-(though its assertions were manually proven live); (2) in-app user management (`manage:users` still
-unused, flagged since Phase 8B); (3) GreyNoise, Shodan, or Netlas as a fourth live provider, or resolve
-Shadowserver licensing.
+(1) In-app user management (`manage:users` still unused, flagged since Phase 8B); (2) GreyNoise, Shodan,
+or Netlas as a fourth live provider, or resolve Shadowserver licensing.
 
 ## Protected boundaries
 

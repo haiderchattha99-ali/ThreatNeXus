@@ -2,8 +2,8 @@
     "schema_version":  1,
     "ticket":  "TNX-P8C1-AI-ASSISTANCE-FRONTEND",
     "title":  "Phase 8C.1 - Frontend AI assistance surface (Finding detail: draft generation, accept/reject, disabled/denied states)",
-    "status":  "in_progress",
-    "owner":  "claude",
+    "status":  "complete",
+    "owner":  "unassigned",
     "reviewer":  "codex",
     "branch":  "feat/phase-8c1-ai-assistance-frontend",
     "worktree":  "C:\\Users\\LENOVO\\Desktop\\ThreatNeXus",
@@ -43,7 +43,8 @@
                       "Live-verified in a real browser against that real stack: ANALYST/REVIEWER/VIEWER login, the AI assistance panel renders correctly on a real seeded Finding, VIEWER gets the DeniedState with the real capability name from the real server response, REVIEWER sees the panel with no generate control (real capability data, not mocked), the disabled state renders accurately (AI_ENABLED unset = false, the shipped default), zero console errors on any role, no horizontal overflow at mobile (375px) or tablet (768px) widths, and the rest of the Finding-detail page (triage, risk explanation, ownership, timeline) is unaffected by mounting the new panel",
                       "Cleaned up every verification-only artifact: temporary frontend/.env.local and .claude/launch.json deleted, local verification backend process killed, browser preview server stopped - working tree confirmed clean before staging",
                       "Updated README.md, docs/ai/SECURITY.md, docs/ai/HANDOFF.md, docs/ai/STATE.yaml",
-                      "Committed (8c49779), pushed, watched CI (run 31173166431): 5 jobs green, 'Browser suite (Chromium)' FAILED on findingAiAssistance.spec.js's VIEWER test - DeniedState's `capability` prop only renders inside its own default fallback text, and passing custom `children` (as the panel's !canRead branch did) suppressed it entirely, so the capability code never appeared for the spec to find. A real bug the new Playwright spec caught on its first real execution, exactly what it is for. Fixed by dropping the custom children and using DeniedState's own fallback (which already names the capability) - re-ran the 16 component tests and lint locally, both still clean - committed the fix (see checkpoint_ref) and re-pushed"
+                      "Committed (8c49779), pushed, watched CI (run 31173166431): 5 jobs green, 'Browser suite (Chromium)' FAILED on findingAiAssistance.spec.js's VIEWER test - DeniedState's `capability` prop only renders inside its own default fallback text, and passing custom `children` (as the panel's !canRead branch did) suppressed it entirely, so the capability code never appeared for the spec to find. A real bug the new Playwright spec caught on its first real execution, exactly what it is for. Fixed by dropping the custom children and using DeniedState's own fallback (which already names the capability) - re-ran the 16 component tests and lint locally, both still clean",
+                      "Committed the fix (5a2aed4), pushed, watched CI again (run 31173470851): ALL jobs green including 'Browser suite (Chromium)' - Frontend lint/tests/build, Secrets and generated artifacts, Prisma schema and migration history, Core evaluators, Backend tests against real PostgreSQL, and the Browser suite. Released the writer lock."
                   ],
     "validation":  {
                        "frontend_lint":  "PASS - oxlint clean, zero new warnings in any new or touched file",
@@ -51,18 +52,18 @@
                        "frontend_build":  "PASS - vite build succeeded, production bundle scanned for secret-shaped literals, clean",
                        "browser_verification":  "PASS - live-verified in a real browser against a real backend and a real seeded PostgreSQL database this session (see completed[] for detail); not merely against mocks",
                        "backend":  "UNCHANGED - zero backend files touched by this ticket; the Phase 8C backend suite (2950/177, CI run 31169482260) remains the authoritative backend proof",
-                       "e2e_ci":  "PENDING - frontend/e2e/findingAiAssistance.spec.js was authored and its assertions were manually proven live in this session, but the spec FILE itself was not executed locally (would have required stopping the pre-existing stale Docker containers occupying the default ports). CI's 'Browser suite (Chromium)' job runs it against a freshly built, freshly seeded stack and is the authoritative execution.",
+                       "e2e_ci":  "PASS (CI) - run 31173470851, 'Browser suite (Chromium)' job green. Its first real execution (run 31173166431) caught a genuine bug (DeniedState capability text suppressed by custom children); fixed and re-verified green. Not run locally - would have required stopping the pre-existing stale Docker containers occupying the default ports.",
+                       "ci":  "PASS - https://github.com/haiderchattha99-ali/ThreatNeXus/actions/runs/31173470851 (all jobs green: frontend lint/tests/build, secrets scan, schema/migration, core evaluators, backend-vs-real-Postgres, Chromium browser suite; 'Mutation and concurrency gates' is manual-trigger-only, not required, not run)",
                        "git_status":  "Clean diff, explicit paths staged only; docs/codex/ untouched throughout; backend/.env and the root .env (if present) never read, printed or staged; the temporary local-verification password change to the four demo accounts on the STALE local Docker Postgres is NOT part of this diff and does not affect CI (CI seeds its own fresh database)"
                    },
     "known_issues":  [
                          "The populated-draft rendering (a real generated DRAFT card with evidence tags and accept/reject) cannot be observed through a live browser session anywhere, by design: aiAssistRuntime.js never resolves the mock provider without a test-only flag no production HTTP path ever passes. This is the SAME boundary Phase 8C's backend documents, not a new gap - covered instead by FindingAiAssistPanel.test.jsx (16 tests, mock-injected at the component level).",
-                         "frontend/e2e/findingAiAssistance.spec.js was not run locally (see e2e_ci above); CI is its first real execution.",
                          "This session locally changed the four demo-account passwords on a STALE, pre-existing local Docker Postgres container (left over from an earlier session) in order to browser-verify live. That container/database is not part of this repo's tracked state and does not affect CI, but the next person using that SPECIFIC local Docker stack will need to re-run seed:users or seed:demo with their own password.",
                          "F-drive start-task.ps1 throws against this repo's STATE.yaml schema (assumes a current_work field this project's schema does not have). Worked around, not fixed - same known gap as Phase 8C.",
                          "docs/codex/ remains untracked and untouched, per the one-writer boundary."
                      ],
-    "next_action":  "Commit, push feat/phase-8c1-ai-assistance-frontend, and watch CI (its 'Browser suite (Chromium)' job is the first real execution of the new Playwright spec, against a freshly seeded stack).",
-    "checkpoint_ref":  "99c9743",
-    "updated_at":  "2026-08-07T11:40:00.0000000Z",
+    "next_action":  "None required to close this ticket - CI is green. Recommended next steps, no particular priority: (1) in-app user management (manage:users capability still unused, flagged since Phase 8B), (2) GreyNoise, Shodan, or Netlas as a fourth live provider, or (3) resolve Shadowserver access/licensing terms.",
+    "checkpoint_ref":  "5a2aed4",
+    "updated_at":  "2026-08-07T11:55:00.0000000Z",
     "next_writer":  "unassigned"
 }
