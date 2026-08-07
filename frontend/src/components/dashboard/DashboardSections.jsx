@@ -343,7 +343,9 @@ export function RecentActivity({ activity }) {
 }
 
 export function ProviderFreshness({ providers, showSettings = false }) {
-  const rows = providers ? [providers.ioc, ...(providers.vulnerability || [])].filter(Boolean) : []
+  const rows = providers
+    ? [providers.ioc, ...(providers.vulnerability || []), ...(providers.exposure || [])].filter(Boolean)
+    : []
   const summary = providers?.summary
   return (
     <Panel title="Stored provider evidence" description="Freshness of prior successful lookups. This view performs no provider request." actions={showSettings ? <Button component={RouterLink} to="/settings" size="small" variant="text">Settings</Button> : undefined} footer={<DataDefinition source={summary?.source} asOf={summary?.asOf || providers?.asOf} note={providers?.disclaimer} />}>

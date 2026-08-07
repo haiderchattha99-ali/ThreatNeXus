@@ -412,13 +412,17 @@ function providerFreshness(lastSuccessAt, asOf) {
 async function buildProvidersSection(client, asOf) {
   const iso = asOf.toISOString();
 
-  const [lastIocSuccess, vulnerabilityLastSuccess] = await Promise.all([
+  const [lastIocSuccess, vulnerabilityLastSuccess, lastCensysSuccess] = await Promise.all([
     client.iocEnrichment.aggregate({
       where: { status: "SUCCESS" },
       _max: { queriedAt: true },
     }),
     client.vulnerabilityProviderResult.groupBy({
       by: ["provider"],
+      where: { status: "SUCCESS" },
+      _max: { queriedAt: true },
+    }),
+    client.censysEnrichment.aggregate({
       where: { status: "SUCCESS" },
       _max: { queriedAt: true },
     }),
@@ -476,12 +480,26 @@ async function buildProvidersSection(client, asOf) {
     },
   ];
 
+  // Phase 8B — Censys internet-exposure/attack-surface provider. Requires
+  // BOTH CENSYS_API_ID and CENSYS_API_SECRET (Basic Auth pair); a caller with
+  // only one is reported NOT_CONFIGURED, never a fabricated partial state.
+  const censysConfigured = Boolean(env.CENSYS_API_ID) && Boolean(env.CENSYS_API_SECRET);
+  const exposureProviders = [
+    {
+      id: "censys",
+      name: "Censys (internet exposure / attack surface)",
+      status: censysConfigured ? "CONFIGURED" : "NOT_CONFIGURED",
+      ...providerFreshness(lastCensysSuccess?._max?.queriedAt, asOf),
+      source: "CensysEnrichment.queriedAt WHERE status = SUCCESS",
+    },
+  ];
+
   // Phase 6.1 — a one-line freshness roll-up, so "can I trust the stored
   // intelligence context behind these scores?" is answerable at a glance
   // without reading four rows. Every figure is a count of the rows above; it
   // asserts nothing the individual entries do not already say, and in
   // particular it is NOT a health, uptime or availability score.
-  const allProviders = [iocProvider, ...vulnerabilityProviders];
+  const allProviders = [iocProvider, ...vulnerabilityProviders, ...exposureProviders];
   const countState = (state) => allProviders.filter((p) => p.state === state).length;
   const summary = {
     total: allProviders.length,
@@ -499,6 +517,7 @@ async function buildProvidersSection(client, asOf) {
     summary,
     ioc: iocProvider,
     vulnerability: vulnerabilityProviders,
+    exposure: exposureProviders,
     ai: {
       id: "ai-mapping-assistance",
       name: "AI mapping assistance",

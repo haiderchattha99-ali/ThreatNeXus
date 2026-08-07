@@ -1,86 +1,87 @@
-# Handoff: TNX-P8-PROVIDER-EVIDENCE-GAPFILL
+# Handoff: TNX-P8B-CENSYS-PROVIDER
 
 - From: claude
 - Suggested next writer: unassigned
-- Branch: feat/phase-8-provider-evidence-gapfill
+- Branch: feat/phase-8b-censys-provider
 - Updated: 2026-08-07T00:00:00Z
 
 ## Goal
 
-The user asked for a "Phase 8A/8AB secure provider foundation + live NVD adapter": provider
-registry, key-safety checks, health/status surfaces, audit logs, quotas, null/mock provider
-behavior, tests, CI gates, docs.
+Build exactly one new live provider adapter, Censys, on top of the existing provider foundation and
+NVD/AbuseIPDB patterns (already shipped in Phases 2/6/7, closed out by TNX-P8-PROVIDER-EVIDENCE-GAPFILL)
+— without rebuilding or duplicating any of that foundation. No live calls in tests/CI, no secret
+leakage, quota enforced through the existing shared budget, audit logged, docs updated. Shadowserver
+and every other provider stay unintegrated.
 
-## What actually happened this session
+## Start-gate finding, before any code was written
 
-Before writing any code, the repository was inspected against that request. Every major deliverable
-already existed:
+The mandatory start gate required verifying the prior `TNX-P8-PROVIDER-EVIDENCE-GAPFILL` branch was
+merged into `main` before branching. It was not — no PR had been opened for it. Per the user's own
+rule ("if not merged, stop and report; do not cherry-pick silently"), this was reported rather than
+silently resolved. The user chose to open a PR (#9) and merge it immediately, so this ticket's branch
+starts from an updated `main` (`4fb373c`) that already includes the gap-fill work.
 
-- Two provider registries (`providerRegistry.js` for IOC, `vulnerabilityProviderRegistry.js` for
-  vulnerability), each with frozen factory maps and mock/real providers — Phase 2.
-- A live `NvdCveProvider`, optional key, safe 404/malformed/timeout/429/5xx handling — Phase 2 (§2B).
-- A safe provider-status surface at `GET /api/dashboard/overview` → `sections.providers`, gated on
-  `read:dashboard`, zero live calls, tested against this machine's real ambient keys for leakage —
-  Phase 6.
-- A frontend Settings panel rendering that status (icon+word+color, no fabricated coverage) — Phase 6.
-- A shared `provider` rate-limit bucket covering every provider-execution route — Phase 7.
-- Secret-hygiene sweeps (`redact.test.js`, `iocEnrichmentSecurity.test.js`,
-  `phase7ReleaseSecurity.test.js`) and a DB-backed release gate (`eval:phase7`) that already proves
-  no-key startup, zero outbound network calls, and keys unreachable from the frontend bundle.
+## What this ticket added
 
-Building a second, competing provider registry/adapter under a new "Phase 8" ticket would have
-duplicated working, tested infrastructure — the exact thing `AGENTS.md` and the build-guard skill
-warn against. This was surfaced to the user with file:line evidence before any code was written; the
-user chose the smallest honest option: gap-fill only, no rebuild.
+Censys is the second live provider, after NVD. It returns internet-exposure/attack-surface data (open
+services, AS ownership) — a materially different shape from AbuseIPDB's reputation score or NVD's CVE
+metadata, so it gets its own module pair and its own Prisma table rather than being forced into either
+existing registry:
 
-## What this ticket actually added
-
-1. `backend/src/scripts/nvdLiveSmoke.js` (`npm run smoke:nvd`) — an opt-in manual NVD live-smoke
-   command. Requires `LIVE_NVD_SMOKE=1` explicitly, performs exactly one lookup (CVE-2021-44228),
-   never prints `NVD_API_KEY`, never runs in an automated test or CI job.
-2. `backend/tests/unit/nvdLiveSmoke.test.js` — proves the opt-in guard rejects before any fetch is
-   attempted, and that a successful (mocked) lookup returns only safe normalized fields.
-3. `backend/tests/unit/phase8ProviderFoundationEvidence.test.js` — the compact, non-duplicative
-   remainder: explicit named assertions that missing `NVD_API_KEY`/`ABUSEIPDB_API_KEY` never break
-   startup while `JWT_SECRET` absence still fails fast, that both registries expose exactly their
-   documented provider names, that the vulnerability error-code contract is closed and distinct, that
-   a single positive provider rate-limit budget exists, and that the smoke script cannot run
-   unattended. No new `eval/run_phase8_gate.js` was written — the DB-backed invariants it would have
-   re-proven are already proven by `eval:phase7` and the existing unit suite; a new heavy gate would
-   have been redundant, not stronger.
-4. Docs: README ("External providers" section gained a pointer to the status surface and the smoke
-   command), `docs/ai/SECURITY.md` gained a "Provider foundation (Phase 8 evidence)" section citing
-   every claim above by file, `docs/ai/STATE.yaml` updated.
+1. **`CensysEnrichment`** (Prisma model + migration `20260807000000_add_phase8b_censys_exposure_enrichment`,
+   additive-only, verified from zero on a disposable PostgreSQL container with zero drift). Deliberately
+   NOT a queue — no PENDING/lease/retry/dead-letter — every row is written once, already terminal, by a
+   synchronous human-triggered lookup. This phase's scope explicitly excludes queues/schedulers.
+2. **`censysConfig.js` / `censysTypes.js` / `censysProvider.js`** — a self-contained adapter mirroring
+   `abuseIpdbProvider.js`'s defensive HTTP shape (composed timeout+caller-signal, every expected outcome
+   mapped to a normalized, deep-frozen result, never throws for an expected outcome). Basic Auth from
+   `CENSYS_API_ID`+`CENSYS_API_SECRET`, both required together — one alone is `NOT_CONFIGURED`, never a
+   half-configured state. Reuses the SAME closed error-code vocabulary
+   (`PROVIDER_RATE_LIMITED`/`PROVIDER_INVALID_KEY`/`PROVIDER_TIMEOUT`/etc.) the IOC and vulnerability
+   providers already speak.
+3. **`censysExecutionService.js`** — resolves the Finding's indicator, calls the provider, persists one
+   row, writes an attempted+outcome audit pair (5 actions: attempted/succeeded/failed/unavailable/
+   rate_limited). No HTTP dependency, mirrors `enrichmentExecutionService.js`'s shape.
+4. **`GET`/`POST /api/findings/:id/enrichment/censys`** — reuses the existing `read:findings` /
+   `trigger:finding-enrichment` capabilities and the SAME `providerRateLimiter` budget every other
+   provider-execution route already shares (proven: a caller cannot get a bigger effective budget by
+   switching routes). `phase7RouteCensus.test.js`'s structural walk covers both routes automatically.
+5. **Dashboard/Settings** — `sections.providers.exposure` (new array, parallel to `.ioc`/`.vulnerability`),
+   rendered by the EXISTING Settings/DashboardSections components with zero new UI vocabulary
+   (`CONFIGURED`/`NOT_CONFIGURED` already existed in `Settings.jsx`'s status dictionary).
+6. **`backend/src/scripts/censysLiveSmoke.js`** (`npm run smoke:censys`) — opt-in via
+   `LIVE_CENSYS_SMOKE=1`, one lookup against `1.1.1.1` (Cloudflare's public DNS resolver, permanent
+   public infrastructure, never a customer/victim asset), never prints credentials, never runs in CI.
+7. **41 new/updated tests**: `censysProvider.test.js` (15), `censysEnrichmentRouteAuthorization.test.js`
+   (14 — full route→controller→service→provider chain with a faked `globalThis.fetch`),
+   `censysLiveSmoke.test.js` (3), `phase8bCensysProviderEvidence.test.js` (7), plus 2 new
+   `phase7RateLimiting.test.js` cases and a redaction-assertion extension in
+   `operationalOverviewService.test.js`. Two pre-existing test mock clients needed a
+   `censysEnrichment.aggregate` stub added — caught by running the full suite, not assumed.
+8. Docs: README ("External providers" table gained a Censys row + the smoke command),
+   `docs/ai/SECURITY.md` gained a "Censys — the second live provider (Phase 8B)" subsection,
+   `backend/.env.example` gained the `CENSYS_*` block.
 
 ## Validation
 
-See `docs/ai/STATE.yaml` → `validation` for the exact commands run and their results. Pushed at
-commit `0fb6f4d`; GitHub Actions run
-[31152565277](https://github.com/haiderchattha99-ali/ThreatNeXus/actions/runs/31152565277) is green
-(Prisma, Backend tests, Frontend lint/tests/build, Core evaluators, Secrets/artifact scan, Browser
-suite Chromium; Mutation/concurrency gates remain manual by design, matching Phase 7 precedent).
+See `docs/ai/STATE.yaml` → `validation`. Backend: 2899 passed / 177 skipped (2858 baseline + exactly
+41 new tests, no regressions). Frontend: 143/143 unchanged. Prisma: migrate-from-zero, validate, and
+`--exit-code` drift check all pass against a real, disposable PostgreSQL 16 container.
 
 ## Honest gaps
 
-- No standalone `/api/providers/status` REST endpoint exists — status is only served embedded in
-  `GET /api/dashboard/overview`. Not built this session; flagged as a possible future addition if a
-  consumer other than the dashboard/Settings page needs it.
-- The prompt's literal error-code names (`PROVIDER_NOT_CONFIGURED`, `PROVIDER_AUTH_FAILED`,
-  `PROVIDER_BAD_RESPONSE`) don't exist verbatim; the existing closed set
-  (`PROVIDER_DISABLED`/`PROVIDER_INVALID_KEY`/`PROVIDER_REJECTED`) covers the same cases under
-  different names. Documented in SECURITY.md rather than renamed, to avoid unforced churn to a
-  tested, working enum.
-- The manual NVD live smoke was **not executed** against the real NVD API this session (no
-  authorization was given to do so); it is implemented, unit-tested with a mocked fetch, and
-  documented as available.
+- The manual Censys live smoke was **not executed** against the real Censys API this session (no
+  authorization was given to do so); implemented and unit-tested with a mocked fetch only.
+- Censys is Finding-scoped, synchronous, and human-triggered only — no batch/queue worker exists for
+  it (matches this phase's explicit "no queues/schedulers" scope), so unlike IOC/vulnerability
+  enrichment it cannot be bulk-run across many Findings in one call.
 - `docs/codex/` remains untracked and untouched, per the one-writer boundary.
 
 ## Recommended next phase
 
-A genuinely new "Phase 8" would be adding a **second** live provider behind the existing IOC or
-vulnerability registry (the pattern already supports it additively — see `PROVIDER_FACTORIES` in
-either registry file), or resolving Shadowserver access/licensing terms before any Shadowserver work
-is attempted. Neither is started here.
+A third live provider (Shodan/Netlas/GreyNoise/VirusTotal/OTX/MISP) following the same additive
+pattern Censys just established, or resolving Shadowserver access/licensing terms before any
+Shadowserver work is attempted. Neither is started here.
 
 ## Protected boundaries
 

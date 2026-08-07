@@ -936,6 +936,69 @@ model IocEnrichment {
 }
 
 // ===========================================================================
+// Phase 8B — Censys internet-exposure/attack-surface enrichment.
+//
+// Deliberately NOT modelled on IocEnrichment's queue (no PENDING, no lease,
+// no retry, no dead-letter): this is a synchronous, human-triggered lookup,
+// never a scheduled or batched job (ponytail scope: "no queues/schedulers").
+// One row is appended per completed attempt — an attempt is never left
+// PENDING, so every row here is already terminal at insert time.
+//
+// Kept in its own table rather than added as nullable columns on
+// IocEnrichment: Censys returns exposure/attack-surface data (open services,
+// AS ownership), a materially different shape from AbuseIPDB's reputation
+// score, exactly the same reasoning that already keeps vulnerability
+// enrichment (VulnerabilityProviderResult) separate from IOC reputation
+// enrichment. Keyed by indicator only (not a Finding foreign key), mirroring
+// IocEnrichment — a read joins to Finding.indicatorValue, so this table stays
+// reusable if more than one Finding ever shares the same indicator.
+enum CensysEnrichmentStatus {
+  SUCCESS
+  NOT_FOUND
+  RATE_LIMITED
+  INVALID_KEY
+  TIMEOUT
+  FAILED
+  UNSUPPORTED_INDICATOR
+  SKIPPED_DISABLED
+}
+
+model CensysEnrichment {
+  id Int @id @default(autoincrement())
+
+  // Canonical indicator this attempt was for (strict dotted-quad IPv4, same
+  // rule IocEnrichment.indicator uses).
+  indicator String
+  status    CensysEnrichmentStatus
+
+  // Always the caller's explicit evaluation time — no wall-clock default,
+  // same rule every other provider result table in this schema follows.
+  queriedAt DateTime
+
+  // Transport/diagnostic context. errorCode is a closed vocabulary value;
+  // there is no raw-body column, so an upstream payload has nowhere to land.
+  httpStatus        Int?
+  errorCode         String?
+  retryAfterSeconds Int?
+
+  // --- Normalized SUCCESS payload only (null for every other status) ------
+  // A bounded, validated array of {port, protocol, serviceName}. Never the
+  // raw Censys response — only the allow-listed fields censysProvider.js
+  // extracts land here.
+  services               Json?
+  autonomousSystemNumber Int?
+  autonomousSystemName   String?
+  // Count only, never certificate contents/fingerprints — enough to say
+  // "N certificates observed" without persisting anything sensitive.
+  certificateCount       Int?
+
+  createdAt DateTime @default(now())
+
+  // Freshest-lookup-for-this-indicator reads, and history in queriedAt order.
+  @@index([indicator, queriedAt])
+}
+
+// ===========================================================================
 // Phase 2 (P2-T3) — Deterministic, explainable, append-only risk scoring.
 //
 // Additive only. Introduces RiskScore + RiskFactorContribution and three

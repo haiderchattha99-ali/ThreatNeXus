@@ -46,6 +46,7 @@ const prismaStub = {
   },
   auditLog: { create: async () => ({ id: 1 }) },
   finding: { findUnique: async () => null, findFirst: async () => null },
+  censysEnrichment: { create: async () => ({ id: 1 }) },
 };
 
 let app;
@@ -220,6 +221,26 @@ describe("Phase 7 — the provider-execution bucket", () => {
 
     const batch = await request(app).post("/api/enrichment/batches/run").set(auth("ADMIN")).send({});
     expect(batch.status).toBe(429);
+  });
+
+  it("Phase 8B — counts the Censys route in the SAME budget, not a fresh one", async () => {
+    // A caller cannot get a bigger effective budget by switching from IOC
+    // enrichment to the newer Censys route — both spend the same provider
+    // quota, so two of one plus one of the other must already refuse.
+    await request(app).post("/api/findings/1/enrichment").set(auth("ADMIN")).send({});
+    await request(app).post("/api/findings/2/enrichment").set(auth("ADMIN")).send({});
+
+    const censys = await request(app).post("/api/findings/1/enrichment/censys").set(auth("ADMIN")).send({});
+    expect(censys.status).toBe(429);
+  });
+
+  it("Phase 8B — the Censys route alone also bounds its own request rate", async () => {
+    const send = () =>
+      request(app).post("/api/findings/1/enrichment/censys").set(auth("ANALYST")).send({});
+
+    await send();
+    await send();
+    expect((await send()).status).toBe(429);
   });
 
   it("does not rate-limit reading enrichment results", async () => {

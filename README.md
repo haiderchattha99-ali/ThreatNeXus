@@ -505,6 +505,7 @@ Shadowserver schema.
 | **CISA KEV** | Known-exploited status for analyst-asserted CVEs | No | Public catalogue. |
 | **FIRST EPSS** | Exploit-prediction score | No | Public API. |
 | **NVD** | CVE metadata | Optional (`NVD_API_KEY`) | Public rate limit applies without a key. |
+| **Censys** | Internet-exposure / attack-surface context (open services, AS ownership) for an indicator | Optional (`CENSYS_API_ID` + `CENSYS_API_SECRET`, both required together) | Phase 8B — the second live provider after NVD. Without both credentials the provider returns `SKIPPED_DISABLED`; nothing blocks. Triggered per Finding at `POST /api/findings/:id/enrichment/censys` (ADMIN/ANALYST), read at the `GET` counterpart (existing `read:findings` matrix). No queue — a synchronous, human-triggered, audited lookup. |
 | **AI mapping assistance** | Framework mapping suggestions | **No live provider ships** | Disabled by default; offline mock for tests only. |
 
 > **NVD attribution.** This product uses the NVD API but is not endorsed or
@@ -522,7 +523,11 @@ opt-in NVD live-smoke command exists for local verification and never runs in CI
 
 ```
 LIVE_NVD_SMOKE=1 npm run smoke:nvd --prefix backend
+LIVE_CENSYS_SMOKE=1 npm run smoke:censys --prefix backend
 ```
+
+Shadowserver, Shodan, Netlas, GreyNoise, VirusTotal, OTX and MISP remain unintegrated — see
+`docs/ai/HANDOFF.md` for the recommended next provider phase.
 
 ## Known limitations
 
