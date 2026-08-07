@@ -2,8 +2,8 @@
     "schema_version":  1,
     "ticket":  "TNX-P8D-GREYNOISE-PROVIDER",
     "title":  "Phase 8D - GreyNoise live internet-noise/reputation provider integration",
-    "status":  "in_progress",
-    "owner":  "claude",
+    "status":  "complete",
+    "owner":  "unassigned",
     "reviewer":  "codex",
     "branch":  "feat/phase-8d-greynoise-provider",
     "worktree":  "C:\\Users\\LENOVO\\Desktop\\ThreatNeXus",
@@ -38,7 +38,9 @@
                       "Implemented the full backend surface: types/config/provider/execution-service/controller/routes/live-smoke, env.js wiring, Prisma model+migration, docker-compose env passthrough + offline blackhole, dashboard status section",
                       "Wrote 40 new/updated tests; all 16 provider tests and all 14 route-authorization tests passed on the first real run",
                       "Full backend suite run found 2 real regressions from adding the new `reputation` section to buildProvidersSection's output: operationalOverviewService.test.js's roll-up-total assertion didn't account for the new array (fixed: added + reputation.length), and riskFactorPressure.test.js's separate Prisma fake was missing a greyNoiseEnrichment.aggregate stub entirely, causing the whole providers section to fail (fixed: added the stub, mirroring the existing censysEnrichment one). Re-ran the full suite: 2990 passed / 177 skipped, zero regressions",
-                      "Updated README.md, docs/ai/SECURITY.md, backend/.env.example, docs/ai/HANDOFF.md, docs/ai/STATE.yaml, and CI's frozen migration-history list"
+                      "Updated README.md, docs/ai/SECURITY.md, backend/.env.example, docs/ai/HANDOFF.md, docs/ai/STATE.yaml, and CI's frozen migration-history list",
+                      "Ran frontend lint/build after the two one-line Settings.jsx/DashboardSections.jsx additions - clean, zero new warnings, build succeeds",
+                      "Committed (d3d7b8e), pushed, watched CI (run 31177362706): ALL jobs green on the first push - frontend lint/tests/build, secrets scan, schema/migration (including migrate-deploy-from-zero + no-drift), core evaluators, backend-vs-real-Postgres, Chromium browser suite. Released the writer lock."
                   ],
     "validation":  {
                        "backend":  "PASS - 2990 passed / 177 skipped, zero regressions (2 pre-existing test fixtures updated to include the new reputation section, not weakened)",
@@ -47,15 +49,16 @@
                        "secret_hygiene":  "PASS - no .env file read/printed/committed; no real GreyNoise credential ever introduced; GREYNOISE_API_KEY redaction proven in operationalOverviewService.test.js and greyNoiseEnrichmentRouteAuthorization.test.js",
                        "no_live_calls_in_tests":  "PASS - every test injects its own fetchImpl or fakes globalThis.fetch; phase8dGreyNoiseProviderEvidence.test.js proves the live-smoke script refuses to run without LIVE_GREYNOISE_SMOKE=1",
                        "live_smoke":  "NOT RUN - not authorized this session, per explicit instruction",
-                       "git_status":  "Clean diff, explicit paths staged only; docs/codex/ untouched throughout"
+                       "git_status":  "Clean diff, explicit paths staged only; docs/codex/ untouched throughout",
+                       "ci":  "PASS - https://github.com/haiderchattha99-ali/ThreatNeXus/actions/runs/31177362706 (all jobs green on the first push: frontend lint/tests/build, secrets scan, schema/migration, core evaluators, backend-vs-real-Postgres, Chromium browser suite; 'Mutation and concurrency gates' is manual-trigger-only, not required, not run)"
                    },
     "known_issues":  [
                          "Manual live GreyNoise smoke not run - awaiting explicit user authorization.",
                          "F-drive start-task.ps1 throws against this repo's STATE.yaml schema. Worked around, not fixed - same known gap as Phases 8C/8C.1.",
                          "docs/codex/ remains untracked and untouched, per the one-writer boundary."
                      ],
-    "next_action":  "Push feat/phase-8d-greynoise-provider and watch CI (its Postgres service is the first real migrate-from-zero + evaluator proof).",
-    "checkpoint_ref":  "HEAD",
-    "updated_at":  "2026-08-07T12:20:00.0000000Z",
-    "next_writer":  "claude"
+    "next_action":  "None required to close this ticket - CI is green. Recommended next: Shodan or Netlas as the next live provider, following this exact same pattern.",
+    "checkpoint_ref":  "d3d7b8e",
+    "updated_at":  "2026-08-07T12:30:00.0000000Z",
+    "next_writer":  "unassigned"
 }

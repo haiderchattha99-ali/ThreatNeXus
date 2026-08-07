@@ -67,6 +67,14 @@ Adding the `reputation` section to `buildProvidersSection`'s output broke two pr
 
 Both are exactly the kind of thing a full test-suite run before committing is for.
 
+## CI result
+
+Pushed as `d3d7b8e`. Run [31177362706](https://github.com/haiderchattha99-ali/ThreatNeXus/actions/runs/31177362706)
+— **all jobs green on the first push**: frontend lint/tests/build, secrets scan, schema/migration
+(including `migrate deploy from an empty database` and `No drift between schema and applied
+migrations`), core evaluators, backend tests against real PostgreSQL, and the Chromium browser suite.
+"Mutation and concurrency gates" is manual-trigger-only and was not run — not required for this ticket.
+
 ## Honest gaps
 
 - **Manual live GreyNoise smoke was not run** — awaiting explicit user authorization, per instruction.
