@@ -412,7 +412,7 @@ function providerFreshness(lastSuccessAt, asOf) {
 async function buildProvidersSection(client, asOf) {
   const iso = asOf.toISOString();
 
-  const [lastIocSuccess, vulnerabilityLastSuccess, lastCensysSuccess] = await Promise.all([
+  const [lastIocSuccess, vulnerabilityLastSuccess, lastCensysSuccess, lastGreyNoiseSuccess] = await Promise.all([
     client.iocEnrichment.aggregate({
       where: { status: "SUCCESS" },
       _max: { queriedAt: true },
@@ -423,6 +423,10 @@ async function buildProvidersSection(client, asOf) {
       _max: { queriedAt: true },
     }),
     client.censysEnrichment.aggregate({
+      where: { status: "SUCCESS" },
+      _max: { queriedAt: true },
+    }),
+    client.greyNoiseEnrichment.aggregate({
       where: { status: "SUCCESS" },
       _max: { queriedAt: true },
     }),
@@ -494,12 +498,29 @@ async function buildProvidersSection(client, asOf) {
     },
   ];
 
+  // Phase 8D — GreyNoise internet-noise/reputation context. A sibling array
+  // to exposureProviders, not an entry inside it: GreyNoise is neither
+  // "exposure" (open ports/services) nor the single selected ioc-reputation
+  // slot above (that slot is a config CHOICE between mock/abuseipdb, not an
+  // additive list) — it is its own provider domain, the same reasoning that
+  // already keeps exposureProviders distinct from vulnerabilityProviders.
+  const greyNoiseConfigured = Boolean(env.GREYNOISE_API_KEY);
+  const reputationProviders = [
+    {
+      id: "greynoise",
+      name: "GreyNoise (internet noise / scanning context)",
+      status: greyNoiseConfigured ? "CONFIGURED" : "NOT_CONFIGURED",
+      ...providerFreshness(lastGreyNoiseSuccess?._max?.queriedAt, asOf),
+      source: "GreyNoiseEnrichment.queriedAt WHERE status = SUCCESS",
+    },
+  ];
+
   // Phase 6.1 — a one-line freshness roll-up, so "can I trust the stored
   // intelligence context behind these scores?" is answerable at a glance
   // without reading four rows. Every figure is a count of the rows above; it
   // asserts nothing the individual entries do not already say, and in
   // particular it is NOT a health, uptime or availability score.
-  const allProviders = [iocProvider, ...vulnerabilityProviders, ...exposureProviders];
+  const allProviders = [iocProvider, ...vulnerabilityProviders, ...exposureProviders, ...reputationProviders];
   const countState = (state) => allProviders.filter((p) => p.state === state).length;
   const summary = {
     total: allProviders.length,
@@ -518,6 +539,7 @@ async function buildProvidersSection(client, asOf) {
     ioc: iocProvider,
     vulnerability: vulnerabilityProviders,
     exposure: exposureProviders,
+    reputation: reputationProviders,
     ai: {
       id: "ai-mapping-assistance",
       name: "AI mapping assistance",

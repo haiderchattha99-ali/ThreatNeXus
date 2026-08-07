@@ -93,6 +93,7 @@ services:
       NVD_API_KEY: ${NVD_API_KEY:-}
       CENSYS_PAT: ${CENSYS_PAT:-}
       CENSYS_ORG_ID: ${CENSYS_ORG_ID:-}
+      GREYNOISE_API_KEY: ${GREYNOISE_API_KEY:-}
       # AI is off by default and there is no live provider in this repository.
       AI_ENABLED: ${AI_ENABLED:-false}
       AI_PROVIDER: ${AI_PROVIDER:-null}

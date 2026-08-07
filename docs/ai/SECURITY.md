@@ -211,6 +211,63 @@ record of what exists and where.
   redaction extension. Backend suite: 2899 passed / 177 skipped (up from the 2858 baseline by exactly
   the 41 new tests this ticket adds).
 
+### GreyNoise — the third live provider (Phase 8D)
+
+- **Targets GreyNoise's Community API** (`api.greynoise.io/v3/community`, a `key` header — not Bearer,
+  not Basic), the free key-gated tier. `GREYNOISE_API_KEY` is optional at startup — a missing key only
+  disables the provider (`SKIPPED_DISABLED`), never blocks the app. Never logged, printed, or included
+  in any error message.
+- **New adapter, no change to any existing provider or registry.** `greyNoiseProvider.js` (self-
+  contained, mirrors `censysProvider.js`'s defensive shape: composed timeout+caller-signal, every
+  expected HTTP/transport outcome mapped to a normalized result, never throws for an expected outcome),
+  `greyNoiseTypes.js` (own closed status/error taxonomy, reusing the same
+  `PROVIDER_RATE_LIMITED`/`PROVIDER_INVALID_KEY`/`PROVIDER_TIMEOUT`/`PROVIDER_UNAVAILABLE`/
+  `PROVIDER_UNREACHABLE`/`PROVIDER_MALFORMED_RESPONSE`/`PROVIDER_REJECTED`/`UNSUPPORTED_INDICATOR`/
+  `ENRICHMENT_DISABLED` code vocabulary the rest of the app already speaks, plus GreyNoise's own closed
+  `classification` set — `benign`/`malicious`/`unknown`; anything else GreyNoise might ever send is
+  normalized to `null`, never passed through as an invented fourth value), `greyNoiseConfig.js`
+  (bounds/defaults, mirrors `censysConfig.js`). IPv4 only — this repository has no IPv6 indicator
+  validator anywhere to extend safely, so none was added speculatively for this one provider.
+- **Its own Prisma table (`GreyNoiseEnrichment`), not a bolt-on to `IocEnrichment`.** GreyNoise returns
+  noise/classification/actor context — a materially different shape from AbuseIPDB's reputation score,
+  the same reasoning that already keeps `CensysEnrichment` separate. Additive-only migration
+  (`20260807110000_add_phase8d_greynoise_reputation_enrichment`), one enum + one table, no existing
+  column touched.
+- **No queue.** Deliberately NOT modelled on `IocEnrichment`'s PENDING/lease/retry/dead-letter
+  lifecycle — every row is written once, already terminal, by a synchronous, human-triggered lookup
+  (`greyNoiseExecutionService.js`, `POST /api/findings/:id/enrichment/greynoise`). This phase's explicit
+  scope excludes queues/schedulers.
+- **Same authorization and quota as every other provider route.** `GET .../enrichment/greynoise` reuses
+  `read:findings`; `POST .../enrichment/greynoise` reuses `trigger:finding-enrichment` (ADMIN/ANALYST
+  only) and the SAME `providerRateLimiter` budget IOC/CVE/Censys enrichment already share — proven in
+  `phase7RateLimiting.test.js` ("Phase 8D — counts the GreyNoise route in the SAME budget, not a fresh
+  one").
+- **Audit events**: `greynoise.lookup.attempted`, `.succeeded`, `.failed`, `.unavailable`,
+  `.rate_limited` — actor/role, provider id, terminal status, and the closed `errorCode` only, never a
+  raw upstream body or the API key.
+- **Dashboard/Settings.** A new sibling array, `sections.providers.reputation` (parallel to
+  `.ioc`/`.vulnerability`/`.exposure` — not folded into `.exposure`, because GreyNoise is neither
+  exposure/attack-surface data nor the single selected ioc-reputation slot), reports
+  `CONFIGURED`/`NOT_CONFIGURED` plus freshness from `GreyNoiseEnrichment`, zero live calls. Rendered by
+  the SAME existing `Settings.jsx`/`DashboardSections.jsx` flattened provider list (`ProviderFreshness`)
+  — a one-line addition (`...(providers.reputation || [])`) in each, no new UI component, no new status
+  vocabulary.
+- **Manual live smoke**: `backend/src/scripts/greyNoiseLiveSmoke.js` (`npm run smoke:greynoise`), opt-in
+  via `LIVE_GREYNOISE_SMOKE=1`, one lookup against `1.1.1.1` (Cloudflare's public DNS resolver —
+  permanent public infrastructure, never a customer/victim asset), never prints credentials, never runs
+  in CI. Not executed against the real GreyNoise API this session (not authorized).
+- Tests: `greyNoiseProvider.test.js` (16 — construction with no credentials, unsupported indicator, key
+  header construction, success normalization for a noisy/malicious IP, a RIOT/benign IP, and a
+  not-observed IP without fabricating a classification, an out-of-vocabulary classification discarded,
+  401/403/404/429/5xx/timeout/malformed/unreachable, credential redaction),
+  `greyNoiseEnrichmentRouteAuthorization.test.js` (14 — full route→controller→service→provider chain
+  with a faked `globalThis.fetch`, capability matrix, 404/401 handling, audit pair, redaction),
+  `phase8dGreyNoiseProviderEvidence.test.js` (6 — startup safety, registry isolation, error-contract
+  closure, closed classification vocabulary, shared-quota assertion, smoke-script guard), plus 2 new
+  cases in `phase7RateLimiting.test.js` for the shared/own-budget proof and extensions to
+  `operationalOverviewService.test.js`/`riskFactorPressure.test.js` for the new `reputation` section.
+  Backend suite: 2990 passed / 177 skipped, zero regressions.
+
 ### Finding-level AI assistance (Phase 8C)
 
 - **A second, independent AI suggestion domain, alongside Phase 5's ATT&CK mapping suggestions.**

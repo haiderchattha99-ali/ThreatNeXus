@@ -1011,6 +1011,64 @@ model CensysEnrichment {
   @@index([indicator, queriedAt])
 }
 
+// ---------------------------------------------------------------------------
+// Phase 8D — GreyNoise internet-noise/reputation context for an IP.
+//
+// Its own table, not a bolt-on to IocEnrichment: GreyNoise's data
+// (noise/classification/actor context) does not fit AbuseIPDB's
+// reputation-score shape, the same reasoning that already keeps
+// CensysEnrichment separate. Deliberately NOT modelled on IocEnrichment's
+// queue either (no PENDING status, no lease columns) — every row here is
+// written once, already terminal, by a synchronous human-triggered lookup
+// (see greyNoiseExecutionService.js). Keyed by indicator only, mirroring
+// CensysEnrichment.
+// ---------------------------------------------------------------------------
+enum GreyNoiseEnrichmentStatus {
+  SUCCESS
+  NOT_FOUND
+  RATE_LIMITED
+  INVALID_KEY
+  TIMEOUT
+  FAILED
+  UNSUPPORTED_INDICATOR
+  SKIPPED_DISABLED
+}
+
+model GreyNoiseEnrichment {
+  id Int @id @default(autoincrement())
+
+  // Canonical indicator this attempt was for (strict dotted-quad IPv4, same
+  // rule IocEnrichment.indicator/CensysEnrichment.indicator use).
+  indicator String
+  status    GreyNoiseEnrichmentStatus
+
+  // Always the caller's explicit evaluation time — no wall-clock default,
+  // same rule every other provider result table in this schema follows.
+  queriedAt DateTime
+
+  // Transport/diagnostic context. errorCode is a closed vocabulary value;
+  // there is no raw-body column, so an upstream payload has nowhere to land.
+  httpStatus        Int?
+  errorCode         String?
+  retryAfterSeconds Int?
+
+  // --- Normalized SUCCESS payload only (null for every other status) ------
+  // Only the allow-listed fields greyNoiseProvider.js extracts land here —
+  // never the raw GreyNoise response body.
+  noise          Boolean?
+  riot           Boolean?
+  classification String?
+  actorName      String?
+  link           String?
+  lastSeen       String?
+  message        String?
+
+  createdAt DateTime @default(now())
+
+  // Freshest-lookup-for-this-indicator reads, and history in queriedAt order.
+  @@index([indicator, queriedAt])
+}
+
 // ===========================================================================
 // Phase 2 (P2-T3) — Deterministic, explainable, append-only risk scoring.
 //
