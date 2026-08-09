@@ -1,8 +1,11 @@
 # ThreatNeXus — PKCERT Presentation Deck (Source)
 
-Slide-by-slide content, kept short by design — full delivery language lives in
-`SPEAKER_NOTES.md`, one section per slide number below. This file is the source for
-`ThreatNeXus-PKCERT-Deck.pptx`; edit here first. Visual/design rules are in `STYLE_GUIDE.md`.
+**Phase 9B.1 — premium redesign.** Slide-by-slide content, kept deliberately short — one idea per
+slide, full delivery language lives in `SPEAKER_NOTES.md`, one section per slide number below. This
+file is the source for `ThreatNeXus-PKCERT-Deck.pptx`; edit here first. Visual/design rules are in
+`STYLE_GUIDE.md`; slide-build animation instructions are in `ANIMATION_CUE_SHEET.md`.
+
+17 slides. No appendix — every required topic fits inside the core deck without padding.
 
 ---
 
@@ -11,37 +14,34 @@ Slide-by-slide content, kept short by design — full delivery language lives in
 **ThreatNeXus**
 Connecting Intelligence with Action
 
-*A defensive threat-intelligence orchestration and incident-response workflow*
-
+*A defensive CERT triage and constituent-notification workflow*
 Research prototype — built during a PKCERT/NCERT internship
 
 ---
 
-## 2. The problem
+## 2. A report comes back. Nobody can say if it's new.
 
-**A CERT gets the same exposure report twice, and has no way to know it.**
-
-- Recurring exposure reports arrive as flat files
-- Handled by hand, the same host gets re-reported, re-triaged, re-notified
-- Nobody can say: was it fixed? Did it come back? Who owns it?
+- An analyst re-triages the same exposure by hand, from memory, under time pressure
+- Evidence lives across six provider tabs, never in one record
+- Nothing ties today's report to the one from three months ago
 
 ---
 
-## 3. Why current workflows break down
+## 3. Why fragmented CTI slows response
 
-- Analysts move between separate provider portals, one tab per source
-- Evidence is judged from memory, under time pressure, with no consistent record
-- Notifications leave without a required second reviewer
-- The accountability trail doesn't survive the process
+- One provider, one portal, one login — repeated six times over
+- Judgment happens from memory, not from a durable evidence trail
+- A notification can leave without a second reviewer ever seeing it
+- When it's over, there's no record of who decided what, or why
 
 ---
 
-## 4. ThreatNeXus in one sentence
+## 4. What ThreatNeXus solves
 
-**One analyst flow — ingest, triage, enrich, map, draft, review, act — with every step audited.**
+**One workflow. One record. One accountable analyst per decision.**
 
-A Shadowserver-style report becomes a persistent, deduplicated Finding with a real identity, not a
-fresh row every time it's re-reported.
+A flat exposure report becomes a persistent, deduplicated Finding — enriched, scored, triaged, and
+closed with a named human attached to every step that matters.
 
 ---
 
@@ -51,20 +51,15 @@ fresh row every time it's re-reported.
 Upload  →  Triage  →  Enrich  →  Map (ATT&CK/CSF/CIS)  →  AI draft (optional)  →  Review  →  Act
 ```
 
-Every arrow in this chain writes its own audit event. Nothing skips a step.
+Every arrow writes its own audit event. Nothing skips a step.
 
 ---
 
-## 6. Role model
+## 6. Live product surface
 
-| Role | Does |
-|---|---|
-| **Admin** | Every capability, including the closure/notification override grants |
-| **Analyst** | Ingests, triages, builds cases, drafts notifications, requests enrichment/AI |
-| **Reviewer** | Approves — case closures, notification content, AI-suggestion decisions |
-| **Viewer** | Read-only oversight — deliberately excluded from notification visibility |
+[Screenshot placeholder — Dashboard overview, `SCREENSHOT_PLAN.md` slot P-01]
 
-No role inherits another's authority.
+Value, availability, source, and as-of timestamp on every tile. Unknown is never rendered as zero.
 
 ---
 
@@ -78,10 +73,10 @@ All optional. All fail safe. One shared, rate-limited execution path.
 
 ## 8. Evidence, not proof
 
-Every provider result is supporting context for an analyst decision — never automatic proof.
+Provider data supports an analyst's decision. It never replaces the analyst who makes it.
 
-- **Unknown is never zero.**
-- A risk factor is `Applied`, `Not available`, or `Not applicable` — never collapsed into a false "clean."
+- Unknown is never zero
+- A risk factor is `Applied`, `Not available`, or `Not applicable` — never collapsed into a false "clean"
 
 ---
 
@@ -90,15 +85,15 @@ Every provider result is supporting context for an analyst decision — never au
 - Disabled by default. No live AI provider ships in this codebase.
 - Drafts a mapping suggestion or a finding summary — nothing more
 - A provider gets one method and a stripped snapshot: no database access, no capability token
-- Every draft needs a human accept before it counts as anything
+- Every draft needs a named human's accept before it counts as anything
 
 ---
 
 ## 10. ATT&CK mapping and evidence integrity
 
-An ATT&CK mapping requires **observed adversary behaviour** as evidence. Exposure, a CVE, a risk score —
-each is individually insufficient, and the rule is enforced server-side, whether the mapping came from
-an analyst or an AI suggestion.
+An ATT&CK mapping requires **observed adversary behaviour** as evidence. Exposure, a CVE, a risk
+score — each is individually insufficient, and the rule is enforced server-side, whether the mapping
+came from an analyst or an accepted AI suggestion.
 
 ---
 
@@ -113,13 +108,13 @@ an analyst or an AI suggestion.
 
 ## 12. Architecture
 
-React frontend → Express REST API → domain services → PostgreSQL (via Prisma), with provider adapters
-reaching out only on a human-triggered lookup. Every provider: its own table, its own closed error
-vocabulary, one shared quota.
+React frontend → Express REST API → domain services → PostgreSQL (via Prisma), with provider
+adapters reaching out only on a human-triggered lookup. Every provider: its own table, its own
+closed error vocabulary, one shared quota.
 
 ---
 
-## 13. What a reviewer will see in the demo
+## 13. What a PKCERT reviewer will see in the demo
 
 Dashboard integrity model → a Finding's risk explanation → a case closure refused to its own
 requester, approved by a reviewer → a weak ATT&CK justification refused → notification export vs.
@@ -127,7 +122,18 @@ delivery, tracked separately.
 
 ---
 
-## 14. Validation proof
+## 14. Meet the team
+
+| | |
+|---|---|
+| **M. Ismail** | Threat Intelligence and System Coordination |
+| **Ali Haider** | Software Engineering and Backend Systems |
+| **Aun Zulfiqar** | Frontend and UX |
+| **Eshaal Khan** | Security Workflow and QA |
+
+---
+
+## 15. Validation proof
 
 - **23** additive-only migrations
 - **145** backend test files, a **9**-spec browser suite against the real stack
@@ -136,20 +142,20 @@ delivery, tracked separately.
 
 ---
 
-## 15. Honest limits
+## 16. Honest limits and roadmap
 
 - No in-app user management yet
 - No production deployment — Docker Compose only
 - Finding closure has no UI write path yet (the recurrence engine is tested and correct regardless)
 - No live AI provider, no live Shadowserver feed — deliberate scope boundaries
 
+**Next**: a seventh provider, in-app user management, a production write path for Finding closure.
+
 ---
 
-## 16. Close
+## 17. Close
 
 **ThreatNeXus is ready for technical review: a working, tested, audited analyst workflow — with its
 gaps stated as plainly as its guarantees.**
-
-Next: a seventh provider, in-app user management, a production write path for Finding closure.
 
 Questions.

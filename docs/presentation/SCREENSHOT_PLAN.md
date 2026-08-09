@@ -1,11 +1,11 @@
 # Screenshot Plan
 
-**No screenshots were captured this phase.** Docker was not running in this environment (the daemon
-was unreachable and Docker Desktop was not found at its standard install path), so no local stack could
-be brought up to capture from — starting a debug session to force one up was out of scope for this
-documentation-only phase per instruction. Every slot below is a placeholder with exact capture
-instructions; capture them the next time the stack is run and drop the files in
-`docs/presentation/assets/` at the paths given.
+**No screenshots were captured this phase either.** Phase 9B.1 redesigned the deck's structure and
+visual system but, same as Phase 9B, ran in an environment with no reachable Docker daemon — capture
+still hasn't happened. The slot list and "Used in" slide references below are updated for the
+redesigned 17-slide deck (`ThreatNeXus-PKCERT-Deck.md`); the capture instructions are unchanged. Every
+slot below is a placeholder with exact capture instructions; capture them the next time the stack is
+run and drop the files in `docs/presentation/assets/` at the paths given.
 
 ## How to capture
 
@@ -23,15 +23,18 @@ instructions; capture them the next time the stack is run and drop the files in
 
 | ID | Screen | Role | Filename | Used in |
 |---|---|---|---|---|
-| **P-01** | Dashboard / operations overview, full page, scrolled to show at least the provider-freshness and framework panels | Analyst | `p01-dashboard-overview.png` | Deck Slide 4/13, README visual tour |
+| **P-01** | Dashboard / operations overview, full page, scrolled to show at least the provider-freshness and framework panels | Analyst | `p01-dashboard-overview.png` | Deck Slide 6/13, README visual tour |
 | **P-02** | Findings list, with the filter bar visible | Analyst | `p02-findings-list.png` | README visual tour |
 | **P-03** | Finding detail page, scrolled to show the Risk v1 explanation table with all three applicability states visible if the seeded data has them | Analyst | `p03-finding-detail-risk.png` | Deck Slide 8/13, README visual tour |
 | **P-04** | Finding detail, provider-evidence panel section (whichever provider has a result, live or `NOT_CONFIGURED`) | Analyst | `p04-provider-evidence.png` | Deck Slide 7 |
 | **P-05** | Settings page, full provider status matrix (all six providers' configured/not-configured state) | Admin | `p05-provider-matrix.png` | Deck Slide 7, README visual tour |
 | **P-06** | Finding detail, AI assistance panel — capture BOTH the disabled state (default) and, if AI is enabled in that session, a populated draft with its status badge | Analyst / Reviewer | `p06-ai-panel-disabled.png`, `p06-ai-panel-draft.png` | Deck Slide 9 |
 | **P-07** | Framework mapping workspace on a case, showing an ATT&CK mapping attempt refused server-side (the validation error message visible) | Analyst | `p07-attack-refusal.png` | Deck Slide 10 |
-| **P-08** | GitHub Actions run page for a green `ci.yml` run, all jobs visible and passed | — (browser, not the app) | `p08-ci-green.png` | Deck Slide 14, README visual tour |
+| **P-08** | GitHub Actions run page for a green `ci.yml` run, all jobs visible and passed | — (browser, not the app) | `p08-ci-green.png` | Deck Slide 15, README visual tour |
 | **P-09** | The architecture diagram from `docs/ARCHITECTURE.md`, rendered (GitHub renders the Mermaid block automatically — screenshot that rendered view, or export via a Mermaid CLI/live-editor for a cleaner crop) | — | `p09-architecture-diagram.png` | Deck Slide 12 |
+
+**No new slot for Slide 14 (Meet the team)** — that slide is built from `README.md`'s existing Team
+table, not a screenshot.
 
 ## Notes
 

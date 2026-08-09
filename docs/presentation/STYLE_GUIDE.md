@@ -4,6 +4,84 @@ Rules for anyone editing the deck, speaker notes, or demo materials in this fold
 PKCERT-facing technical presentation that reads as credible because it's precise, not because it's
 polished — precision is the actual credibility signal for this audience.
 
+## Phase 9B.1 — premium redesign (read this section first)
+
+Phase 9B shipped a correct but plain deck — a documentation export in slide form. Phase 9B.1 keeps
+every fact and every wording rule below (nothing here was loosened) and rebuilds the deck's visual
+system and slide structure around them: a 17-slide structure matching the required PKCERT-review
+topic list exactly (added a "Live product surface" slide and a "Meet the team" slide; folded the old
+standalone "Role model" slide's one load-bearing point — no role inherits another's authority — into
+the Security Controls slide, since the deck no longer needs a dedicated slide to make that point).
+
+### Research pass (structure only — nothing copied)
+
+A second short, real research pass ran before touching slide content, on top of Phase 9B's original
+one (Falco README structure, general pitch-deck framing — both still recorded below, unchanged):
+
+- **WebSearch — cybersecurity/SOC product pitch-deck structure (2025 conventions)**: confirmed the
+  dark, clean, low-clutter visual direction already chosen in Phase 9B, and the pattern of a
+  product/workflow slide using a diagram instead of a paragraph. **Not applied**: TAM/SAM/SOM market
+  sizing, a competitive 2×2 matrix, social proof/testimonials, and a fundraising close — all standard
+  for an *investor* deck, none of it fits a PKCERT technical-review audience, and Phase 9B's own style
+  guide already ruled this out explicitly.
+- **WebSearch — pitch-deck typography and visual-hierarchy conventions**: the concrete, reusable rule
+  taken from this pass is a **locked three-tier type system** (one typeface family, at most two
+  weights, three size tiers used consistently across every slide) so a reader's eye never has to
+  re-learn what a headline vs. a supporting line looks like slide to slide. Applied directly in
+  "Typography v2" below.
+- **`pptx` skill's own design guidance** (consulted as a legitimate internal reference, not an external
+  source to cite): "one color should dominate, 1–2 supporting tones, one sharp accent" and "commit to
+  one repeated visual motif" — both applied in "Visual system v2" below. Its explicit **don'ts** are
+  now hard rules for this deck: no accent line/stripe under any title, no decorative color bar or
+  vertical sidebar stripe anywhere, no cream/beige background.
+- Nothing — no wording, layout, asset, or diagram — was copied from any source consulted in either
+  research pass.
+
+### Visual system v2
+
+- **Dark throughout, not a light/dark sandwich.** Phase 9B alternated dark title/close slides with
+  light body slides. Phase 9B.1 commits to the near-black canvas (`0A1210`) on **every** slide,
+  including body content — this is a deliberate premium-feel choice (per the `pptx` skill's own
+  "commit to dark throughout" option) and it makes the deck look like it belongs to the product itself,
+  which is already a near-black interface end to end. Card surfaces use a slightly lighter panel tone
+  (`0F1A16`) for depth, never a hard color change.
+- **One dominant color, one sharp accent** — the near-black canvas is ~70% of every slide's visual
+  weight; government-green (`35C477`) is used sparingly and only where it does real work: the small
+  kicker label above each title, stat-callout numbers, and status/accent icons. It never fills a
+  background or a large shape.
+- **One repeated motif**: a small uppercase kicker line ("PROBLEM", "WORKFLOW", "EVIDENCE", …) in
+  green, directly above every content slide's title — this is text, not a colored bar or stripe, and
+  it is the one element every slide shares. Rounded-rectangle cards (provider grid, security controls,
+  team) share one consistent corner radius and shadow treatment as the deck's second consistent
+  element.
+- **No accent line under any title, no color bar, no sidebar stripe, no cream/beige background** —
+  carried over from Phase 9B's existing "no decorative accent stripes" rule and reinforced by the
+  `pptx` skill's own explicit anti-pattern list; this is now a hard rule with no ambiguity about what
+  counts.
+
+### Typography v2
+
+Locked three-tier system, one family, at most two weights:
+
+| Tier | Use | Size | Weight |
+|---|---|---|---|
+| Kicker | Small label above a title | 12–13pt, letter-spaced | Bold, green |
+| Title | Slide headline | 34–40pt | Bold, light text |
+| Body | Bullets, captions, card text | 15–18pt (12pt for captions) | Regular, light or muted text |
+
+**Font: Calibri**, not the product's own IBM Plex — a deliberate, documented trade-off. Brand
+consistency with the running application comes from reusing its exact color tokens (below), which
+carries the visual identity; the typeface choice instead optimizes for **portability**, since this
+deck may be opened on a PKCERT reviewer's own machine, which cannot be assumed to have IBM Plex
+installed. Calibri ships with every current Office install and renders identically wherever it's
+opened, so the deck looks the same as authored rather than silently substituting.
+
+### Team slide sourcing
+
+The "Meet the team" slide (Slide 14) uses the four names and roles already documented in this
+repository's `README.md` Team section (M. Ismail, Ali Haider, Aun Zulfiqar, Eshaal Khan) — real,
+already-public information, not invented for this deck. No placeholder names were needed.
+
 ## Audience
 
 Security reviewers at PKCERT/NCERT and similar CERT-operations stakeholders — people who will ask "how
@@ -72,16 +150,19 @@ a funding pitch — extracted narrative pacing only):
   (`#9DAFC2`), severity scale (critical `#F2617A`, high `#E8A33D`, medium `#65ADD0`, low `#35C477`).
   Reusing the product's actual palette rather than inventing a deck-only one is deliberate — the deck
   should feel like it belongs to the same product the audience is about to see live.
-- Dark backgrounds for the title/section/close slides, white/light for body content — the same
-  sandwich structure the product's own frontend design system uses.
+- **Superseded by "Visual system v2" above (Phase 9B.1)**: the deck is now dark-throughout rather than
+  alternating dark/light — see that section for the current rule and its reasoning.
 - One visual idea per slide — a diagram, a stat callout, a table, or a labeled screenshot placeholder.
   No slide is bullets on a blank background.
 - No emoji anywhere in slide content. No gradients, no loud color transitions, no decorative accent
-  stripes or underlines beneath titles.
-- No animation beyond what PowerPoint/Slides applies by default on advance — nothing gimmicky.
+  stripes, color bars, sidebar stripes, or underlines beneath titles — see "Visual system v2" for the
+  full, now-explicit list.
+- Slide-build and transition animation is optional polish, documented separately in
+  `ANIMATION_CUE_SHEET.md`, and never a content dependency — the generated `.pptx` carries none of it
+  by default (`pptxgenjs` has no reliable API for it; see that document's own note).
 - Screenshot-first where a real screenshot exists; a clearly labeled placeholder box where it doesn't
-  (see `SCREENSHOT_PLAN.md` — none were captured this phase, so every screenshot slot in this deck is a
-  labeled placeholder with exact capture instructions, not a fabricated image).
+  (see `SCREENSHOT_PLAN.md` — still none captured as of Phase 9B.1, so every screenshot slot in this
+  deck is a labeled placeholder with exact capture instructions, not a fabricated image).
 
 ## Typography
 

@@ -49,7 +49,7 @@ that leaves the system:
 - **AI decides nothing.** It is off by default, and when on it only drafts and
   suggests — see [AI assistance](#ai-assistance-optional-off-by-default).
 
-## Current status: Phase 9B — PKCERT presentation and demo assets
+## Current status: Phase 9B.1 — premium PKCERT presentation redesign
 
 | Phase | Delivered |
 |---|---|
@@ -63,7 +63,7 @@ that leaves the system:
 | **7 — Release candidate** | Request rate limiting on authentication, upload and provider execution; a structural route census requiring every mounted route to authenticate and enforce a capability; release security assertions; a runnable offline release evaluator; clean-stack and network-unavailable rehearsals. |
 | **8 / 8B–8F — Live provider stack** | Six live intelligence providers wired behind the existing abstraction: AbuseIPDB and NVD (Phase 2), then Censys (8B), Finding-level AI assistance (8C/8C.1), GreyNoise (8D), Shodan (8E), Netlas (8F) — see [External providers](#external-providers). |
 | **9A — Professional delivery documentation** | This README polish plus a full documentation package in `docs/` — see [Documentation](#documentation) below. |
-| **9B — PKCERT presentation and demo assets** | A 16-slide deck with full speaker notes, a detailed demo walkthrough, and a screenshot/landing-page plan — see [Documentation](#documentation) below and `docs/presentation/`. |
+| **9B / 9B.1 — PKCERT presentation and demo assets** | A 17-slide deck (redesigned in 9B.1 with a dark, grid-based visual system, real diagrams, and an animation cue sheet) with full speaker notes, a detailed demo walkthrough, and a screenshot/landing-page plan — see [Documentation](#documentation) below and `docs/presentation/`. |
 
 ## Documentation
 
@@ -607,7 +607,7 @@ recommended next provider phase.
 
 ## Roadmap
 
-Phases 0 through 9B are delivered — see [Current status](#current-status-phase-9b--pkcert-presentation-and-demo-assets).
+Phases 0 through 9B.1 are delivered — see [Current status](#current-status-phase-9b1--premium-pkcert-presentation-redesign).
 What remains is deliberately *not* in this release:
 
 - **A landing/showcase page** — deliberately optional; see
