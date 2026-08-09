@@ -1140,6 +1140,85 @@ model ShodanEnrichment {
   @@index([indicator, queriedAt])
 }
 
+// ---------------------------------------------------------------------------
+// Phase 8F — Netlas cross-source attack-surface/DNS/certificate/service
+// intelligence for an IP.
+//
+// Its own table, not a bolt-on to CensysEnrichment or ShodanEnrichment:
+// Netlas's payload combines reverse-DNS/associated-domain names, WHOIS/ASN
+// ownership, open ports, per-service software banners, AND certificate
+// subject/issuer/SAN data in one response — a materially different shape
+// from either existing exposure table, the same reasoning that already
+// keeps CensysEnrichment, GreyNoiseEnrichment and ShodanEnrichment separate
+// from each other. Deliberately NOT modelled on IocEnrichment's queue either
+// (no PENDING status, no lease columns) — every row here is written once,
+// already terminal, by a synchronous human-triggered lookup (see
+// netlasExecutionService.js). Keyed by indicator only, mirroring
+// CensysEnrichment/GreyNoiseEnrichment/ShodanEnrichment.
+//
+// Netlas is placed alongside Censys and Shodan in the SAME dashboard
+// "exposure" provider domain (see operationalOverviewService.js) rather
+// than getting its own sibling array, unlike GreyNoise: Netlas's data —
+// open ports, DNS/certificate context, ASN ownership — is exactly the
+// "internet exposure / attack surface" domain Censys already defined, not a
+// new one.
+// ---------------------------------------------------------------------------
+enum NetlasEnrichmentStatus {
+  SUCCESS
+  NOT_FOUND
+  RATE_LIMITED
+  INVALID_KEY
+  TIMEOUT
+  FAILED
+  UNSUPPORTED_INDICATOR
+  SKIPPED_DISABLED
+}
+
+model NetlasEnrichment {
+  id Int @id @default(autoincrement())
+
+  // Canonical indicator this attempt was for (strict dotted-quad IPv4, same
+  // rule IocEnrichment.indicator/CensysEnrichment.indicator/
+  // GreyNoiseEnrichment.indicator/ShodanEnrichment.indicator use).
+  indicator String
+  status    NetlasEnrichmentStatus
+
+  // Always the caller's explicit evaluation time — no wall-clock default,
+  // same rule every other provider result table in this schema follows.
+  queriedAt DateTime
+
+  // Transport/diagnostic context. errorCode is a closed vocabulary value;
+  // there is no raw-body column, so an upstream payload (and the API key
+  // Netlas's own Bearer-header auth would otherwise risk exposing) has
+  // nowhere to land.
+  httpStatus        Int?
+  errorCode         String?
+  retryAfterSeconds Int?
+
+  // --- Normalized SUCCESS payload only (null for every other status) ------
+  // Only the allow-listed fields netlasProvider.js extracts land here —
+  // never the raw Netlas response body (including WHOIS raw text).
+  services           Json?
+  products           Json?
+  hostnames          Json?
+  dnsNames           Json?
+  organization       String?
+  asn                Int?
+  asnOrg             String?
+  country            String?
+  certificateSubject String?
+  certificateIssuer  String?
+  certificateSan     Json?
+  lastSeen           String?
+  firstSeen          String?
+  link               String?
+
+  createdAt DateTime @default(now())
+
+  // Freshest-lookup-for-this-indicator reads, and history in queriedAt order.
+  @@index([indicator, queriedAt])
+}
+
 // ===========================================================================
 // Phase 2 (P2-T3) — Deterministic, explainable, append-only risk scoring.
 //
