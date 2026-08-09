@@ -109,9 +109,12 @@ copied forward from an earlier phase's documentation without re-checking. Specif
 
 ## CI result
 
-See `docs/ai/STATE.yaml` `validation.ci` for current status — update this section once the push has been
-watched to a terminal result. (A documentation-only change should pass CI trivially — no schema,
-backend, or frontend code changed — but the push is still watched to confirm, not assumed.)
+Committed `1dea00f`, pushed. Run [31319182036](https://github.com/haiderchattha99-ali/ThreatNeXus/actions/runs/31319182036)
+— **all required jobs green on the first push**: frontend lint/tests/build, secrets scan,
+schema/migration, core evaluators, backend tests against real PostgreSQL, and the Chromium browser
+suite. Expected for a docs-only change — no schema, backend, or frontend code was modified this phase —
+but the push was still watched to confirm rather than assumed. "Mutation and concurrency gates" is
+manual-trigger-only and was not run — not required for this ticket.
 
 ## Honest gaps
 

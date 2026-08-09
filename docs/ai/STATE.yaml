@@ -53,7 +53,7 @@
                        "link_check":  "PASS - every relative markdown link added in this phase resolves to a real file",
                        "fact_verification":  "PASS - every command, env var, route, capability name, and count cited was checked against the actual codebase this session, not recalled from memory alone",
                        "code_changes":  "NONE - this is a documentation-only phase; no backend/frontend test run was needed or performed",
-                       "ci":  "PENDING - see next_action"
+                       "ci":  "PASS - https://github.com/haiderchattha99-ali/ThreatNeXus/actions/runs/31319182036 (all required jobs green on the first push: frontend lint/tests/build, secrets scan, schema/migration, core evaluators, backend-vs-real-Postgres, Chromium browser suite. Expected for a docs-only change - no schema/backend/frontend code was modified this phase. 'Mutation and concurrency gates' is manual-trigger-only, not required, not run)"
                    },
     "known_issues":  [
                          "F-drive start-task.ps1 throws against this repo's STATE.yaml schema; no working .ai-team/WRITER_LOCK.json mechanism exists for this repo. Worked around, not fixed - same known gap as every phase since 8B.",
@@ -62,8 +62,8 @@
                          "No independent reviewer (Codex or otherwise) has looked at this documentation package yet - per CLAUDE.md 'do not review your own final work as the only reviewer', an independent pass is recommended before treating this delivery as final.",
                          "No screenshot, GIF, or visual tour was added to README.md - left as an explicit Phase 9B placeholder per instruction, not an oversight."
                      ],
-    "next_action":  "Commit the diff (explicit paths only), push feat/phase-9a-professional-docs, and watch CI to green before releasing the writer lock. Recommended next phase after that: Phase 9B - presentation assets (slide deck, optional showcase/landing page).",
-    "checkpoint_ref":  "pending-commit",
-    "updated_at":  "2026-08-09T20:00:00.0000000Z",
+    "next_action":  "None required to close this ticket - CI is green. An independent reviewer pass (Codex or otherwise) is recommended before treating this documentation package as final. Recommended next phase after that: Phase 9B - presentation assets (slide deck, optional showcase/landing page).",
+    "checkpoint_ref":  "1dea00f",
+    "updated_at":  "2026-08-09T20:05:00.0000000Z",
     "next_writer":  "unassigned"
 }
