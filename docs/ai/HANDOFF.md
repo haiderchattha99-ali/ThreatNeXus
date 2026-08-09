@@ -83,8 +83,12 @@ a fabricated join, not real evidence.
 
 ## CI result
 
-See `docs/ai/STATE.yaml` `validation.ci` for the current status — update this section once the push has
-been watched to a terminal result.
+Committed `2d9886f`, pushed. Run [31317791814](https://github.com/haiderchattha99-ali/ThreatNeXus/actions/runs/31317791814)
+— **all required jobs green on the first push, no rerun needed**: frontend lint/tests/build, secrets
+scan, schema/migration (including `migrate deploy from an empty database` and `No drift between schema
+and applied migrations`), core evaluators, backend tests against real PostgreSQL, and the Chromium
+browser suite. "Mutation and concurrency gates" is manual-trigger-only and was not run — not required for
+this ticket.
 
 ## Honest gaps
 

@@ -58,7 +58,7 @@
                        "no_live_calls_in_tests":  "PASS - every Netlas test injects its own fetchImpl or fakes globalThis.fetch; phase8fNetlasProviderEvidence.test.js proves the live-smoke script refuses to run without LIVE_NETLAS_SMOKE=1",
                        "live_smoke":  "NOT RUN - not authorized this session, per explicit instruction",
                        "git_status":  "Explicit paths staged only (git add -A never used, per instruction); docs/codex/ untouched throughout",
-                       "ci":  "PENDING - see next_action"
+                       "ci":  "PASS - https://github.com/haiderchattha99-ali/ThreatNeXus/actions/runs/31317791814 (all required jobs green on the FIRST push, no rerun needed: frontend lint/tests/build, secrets scan, schema/migration (including migrate deploy from an empty database + no-drift), core evaluators, backend-vs-real-Postgres, Chromium browser suite. 'Mutation and concurrency gates' is manual-trigger-only, not required, not run)"
                    },
     "known_issues":  [
                          "Manual live Netlas smoke not run - awaiting explicit user authorization.",
@@ -67,8 +67,8 @@
                          "Netlas's exact response schema was verified against public documentation (docs.netlas.io) rather than a live API call (none authorized this session) - if Netlas's actual response differs from its documented shape in some edge case, the adapter's allow-listed extraction will simply return null/empty for that field rather than fail (same fail-safe posture as every other provider here), but this is worth confirming on the first authorized live smoke.",
                          "No independent reviewer (Codex or otherwise) has looked at this ticket yet - per CLAUDE.md 'do not review your own final work as the only reviewer', an independent pass is recommended before merge."
                      ],
-    "next_action":  "Commit the diff (explicit paths only), push feat/phase-8f-netlas-provider, and watch CI to green before releasing the writer lock. Recommended next phase after that: Phase 9 professional delivery package.",
-    "checkpoint_ref":  "pending-commit",
-    "updated_at":  "2026-08-09T19:10:00.0000000Z",
+    "next_action":  "None required to close this ticket - CI is green. An independent reviewer pass (Codex or otherwise) is recommended before merge, per this project's own 'do not review your own work alone' rule. Recommended next phase after that: Phase 9 professional delivery package.",
+    "checkpoint_ref":  "2d9886f",
+    "updated_at":  "2026-08-09T19:15:00.0000000Z",
     "next_writer":  "unassigned"
 }
