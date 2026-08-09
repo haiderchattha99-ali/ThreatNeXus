@@ -328,6 +328,71 @@ record of what exists and where.
   and extensions to `operationalOverviewService.test.js`/`riskFactorPressure.test.js` for the new Shodan
   `shodanEnrichment.aggregate` stub.
 
+### Netlas — the fifth live provider (Phase 8F)
+
+- **Targets Netlas's Host Info endpoint** (`app.netlas.io`, `GET /api/host/{ip}/`), authenticated via an
+  `Authorization: Bearer <key>` header — RFC 6750, Netlas's current documented scheme (its older `X-Api-Key`
+  header is documented as deprecated, so this provider does not use it). `NETLAS_API_KEY` is optional at
+  startup — a missing key only disables the provider (`SKIPPED_DISABLED`), never blocks the app. The
+  Authorization header (which carries the key once a lookup fires) is never logged, printed, or included in
+  any error, audit row, or test assertion anywhere in this codebase — `netlasProvider.test.js` and
+  `netlasEnrichmentRouteAuthorization.test.js` both prove this directly.
+- **New adapter, no change to any existing provider or registry.** `netlasProvider.js` (self-contained,
+  mirrors `censysProvider.js`'s/`shodanProvider.js`'s exact defensive shape: composed timeout+caller-signal,
+  every expected HTTP/transport outcome mapped to a normalized result, never throwing for an expected
+  outcome — including Netlas's own `402` "out of subscription plan limits" response, mapped to
+  `RATE_LIMITED` alongside `429` since this closed vocabulary has no separate quota status and "try again
+  later" is the closer fit of the two), `netlasTypes.js` (own closed status/error taxonomy, reusing the same
+  `PROVIDER_RATE_LIMITED`/`PROVIDER_INVALID_KEY`/`PROVIDER_TIMEOUT`/`PROVIDER_UNAVAILABLE`/
+  `PROVIDER_UNREACHABLE`/`PROVIDER_MALFORMED_RESPONSE`/`PROVIDER_REJECTED`/`UNSUPPORTED_INDICATOR`/
+  `ENRICHMENT_DISABLED` code vocabulary the rest of the app already speaks), `netlasConfig.js`
+  (bounds/defaults, mirrors `censysConfig.js`/`shodanConfig.js`). IPv4 only — Netlas's Host Info endpoint
+  also accepts a domain name, but this repository has no domain/hostname indicator validator or model
+  anywhere to extend safely, the same reasoning that already keeps every exposure provider here IPv4-only
+  rather than speculatively adding one (also no IPv6 validator, same as Censys/GreyNoise/Shodan).
+- **Its own Prisma table (`NetlasEnrichment`), not a bolt-on to `CensysEnrichment` or `ShodanEnrichment`.**
+  Netlas's response combines reverse-DNS/associated-domain names, WHOIS/ASN ownership, open ports,
+  per-service software banners, AND certificate subject/issuer/SAN data in one payload — a materially
+  different shape from either existing exposure table, the same reasoning that already keeps
+  `CensysEnrichment`, `GreyNoiseEnrichment` and `ShodanEnrichment` separate from each other. `services[]`
+  (ports) and `products[]` (software) are stored as two separate arrays rather than merged into one, because
+  Netlas's documented response carries no positional/key correlation between them — merging would be a
+  fabricated join, not real evidence. Additive-only migration
+  (`20260807130000_add_phase8f_netlas_exposure_enrichment`), one enum + one table, no existing column
+  touched.
+- **No queue.** Deliberately NOT modelled on `IocEnrichment`'s PENDING/lease/retry/dead-letter lifecycle —
+  every row is written once, already terminal, by a synchronous, human-triggered lookup
+  (`netlasExecutionService.js`, `POST /api/findings/:id/enrichment/netlas`). This phase's explicit scope
+  excludes queues/schedulers.
+- **Same authorization and quota as every other provider route.** `GET .../enrichment/netlas` reuses
+  `read:findings`; `POST .../enrichment/netlas` reuses `trigger:finding-enrichment` (ADMIN/ANALYST only) and
+  the SAME `providerRateLimiter` budget IOC/CVE/Censys/GreyNoise/Shodan enrichment already share — proven in
+  `phase7RateLimiting.test.js` ("Phase 8F — counts the Netlas route in the SAME budget, not a fresh one").
+  `phase7RouteCensus.test.js` (the structural route-authorization walk) covers both new routes automatically.
+- **Audit events**: `netlas.lookup.attempted`, `.succeeded`, `.failed`, `.unavailable`, `.rate_limited` —
+  actor/role (from `buildAuditContext`), provider id, terminal status, and the closed `errorCode` only, never
+  a raw upstream body, the API key, or the Authorization header.
+- **Dashboard/Settings.** Netlas joins `sections.providers.exposure` as a THIRD entry alongside Censys and
+  Shodan, for the same reason Shodan joined in Phase 8E: open ports, DNS/certificate context, and ASN
+  ownership ARE the "internet exposure / attack surface" domain that array already represents, not a new
+  one. This needed **zero frontend changes**: `Settings.jsx` and `DashboardSections.jsx`'s
+  `ProviderFreshness` already spread `...(providers.exposure || [])` generically, so Netlas appears the
+  moment the backend adds it.
+- **Manual live smoke**: `backend/src/scripts/netlasLiveSmoke.js` (`npm run smoke:netlas`), opt-in via
+  `LIVE_NETLAS_SMOKE=1`, one lookup against `8.8.8.8` (Google Public DNS — permanent public infrastructure,
+  never a customer/victim asset), never prints credentials or the Authorization header, never runs in CI.
+  Not executed against the real Netlas API this session (not authorized).
+- Tests: `netlasProvider.test.js` (17 — construction with no credentials, unsupported indicator, Bearer-header
+  construction, success normalization including hostnames/domains/org/asn/country/services/products/
+  certificate fields, empty-host normalization without fabrication, 400/401/403/404/429/402/5xx/504/timeout/
+  malformed/unreachable, credential redaction), `netlasEnrichmentRouteAuthorization.test.js` (14 — full
+  route→controller→service→provider chain with a faked `globalThis.fetch`, capability matrix, 404/401
+  handling, audit pair, redaction), `phase8fNetlasProviderEvidence.test.js` (8 — startup safety, registry
+  isolation, error-contract closure, shared-quota assertion, Bearer-header auth design pin, smoke-script
+  guard), plus 2 new cases in `phase7RateLimiting.test.js` for the shared/own-budget proof and extensions to
+  `operationalOverviewService.test.js`/`riskFactorPressure.test.js` for the new Netlas
+  `netlasEnrichment.aggregate` stub.
+
 ### Finding-level AI assistance (Phase 8C)
 
 - **A second, independent AI suggestion domain, alongside Phase 5's ATT&CK mapping suggestions.**

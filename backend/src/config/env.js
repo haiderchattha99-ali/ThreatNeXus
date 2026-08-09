@@ -32,6 +32,13 @@ const {
   validateTimeoutMs: validateShodanTimeoutMs,
 } = require("../services/exposure/shodanConfig");
 const {
+  NetlasConfigError,
+  DEFAULT_BASE_URL: NETLAS_DEFAULT_BASE_URL,
+  DEFAULT_TIMEOUT_MS: NETLAS_DEFAULT_TIMEOUT_MS,
+  validateBaseUrl: validateNetlasBaseUrl,
+  validateTimeoutMs: validateNetlasTimeoutMs,
+} = require("../services/exposure/netlasConfig");
+const {
   VulnerabilityConfigError,
   NVD_DEFAULT_BASE_URL,
   NVD_DEFAULT_TIMEOUT_MS,
@@ -406,6 +413,26 @@ function buildConfig() {
     );
   }
 
+  // Phase 8F — Netlas cross-source attack-surface/DNS/certificate provider.
+  // NETLAS_API_KEY stays optional at startup exactly like
+  // CENSYS_PAT/GREYNOISE_API_KEY/SHODAN_API_KEY: a missing credential only
+  // affects netlasProvider.js's lookup() (SKIPPED_DISABLED), never whether
+  // the app starts.
+  let netlasBaseUrl;
+  let netlasTimeoutMs;
+  try {
+    netlasBaseUrl = validateNetlasBaseUrl(requireString(process.env.NETLAS_BASE_URL) || NETLAS_DEFAULT_BASE_URL);
+    netlasTimeoutMs = validateNetlasTimeoutMs(
+      parseOptionalInt("NETLAS_TIMEOUT_MS", process.env.NETLAS_TIMEOUT_MS, NETLAS_DEFAULT_TIMEOUT_MS, {
+        strict: true,
+      })
+    );
+  } catch (err) {
+    throw new ConfigError(
+      err instanceof NetlasConfigError ? err.message : `Invalid Netlas configuration: ${err.message}`
+    );
+  }
+
   // Declared, not consumed by anything: no code reads this value — the TTL
   // policy (enrichmentTtlPolicy.js) is a pure module configured through
   // explicit policy input, never through the environment.
@@ -487,6 +514,13 @@ function buildConfig() {
     SHODAN_API_KEY: process.env.SHODAN_API_KEY || "",
     SHODAN_BASE_URL: shodanBaseUrl,
     SHODAN_TIMEOUT_MS: shodanTimeoutMs,
+
+    // Phase 8F — Netlas configuration. Optional and never required to start
+    // the app; never logged or included in any error message this module
+    // throws.
+    NETLAS_API_KEY: process.env.NETLAS_API_KEY || "",
+    NETLAS_BASE_URL: netlasBaseUrl,
+    NETLAS_TIMEOUT_MS: netlasTimeoutMs,
 
     // Phase 5 — declared, not consumed by anything in Phase 0. Off by default.
     AI_ENABLED: (process.env.AI_ENABLED || "false").trim().toLowerCase() === "true",

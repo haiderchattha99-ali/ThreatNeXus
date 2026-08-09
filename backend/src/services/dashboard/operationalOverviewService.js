@@ -412,30 +412,40 @@ function providerFreshness(lastSuccessAt, asOf) {
 async function buildProvidersSection(client, asOf) {
   const iso = asOf.toISOString();
 
-  const [lastIocSuccess, vulnerabilityLastSuccess, lastCensysSuccess, lastGreyNoiseSuccess, lastShodanSuccess] =
-    await Promise.all([
-      client.iocEnrichment.aggregate({
-        where: { status: "SUCCESS" },
-        _max: { queriedAt: true },
-      }),
-      client.vulnerabilityProviderResult.groupBy({
-        by: ["provider"],
-        where: { status: "SUCCESS" },
-        _max: { queriedAt: true },
-      }),
-      client.censysEnrichment.aggregate({
-        where: { status: "SUCCESS" },
-        _max: { queriedAt: true },
-      }),
-      client.greyNoiseEnrichment.aggregate({
-        where: { status: "SUCCESS" },
-        _max: { queriedAt: true },
-      }),
-      client.shodanEnrichment.aggregate({
-        where: { status: "SUCCESS" },
-        _max: { queriedAt: true },
-      }),
-    ]);
+  const [
+    lastIocSuccess,
+    vulnerabilityLastSuccess,
+    lastCensysSuccess,
+    lastGreyNoiseSuccess,
+    lastShodanSuccess,
+    lastNetlasSuccess,
+  ] = await Promise.all([
+    client.iocEnrichment.aggregate({
+      where: { status: "SUCCESS" },
+      _max: { queriedAt: true },
+    }),
+    client.vulnerabilityProviderResult.groupBy({
+      by: ["provider"],
+      where: { status: "SUCCESS" },
+      _max: { queriedAt: true },
+    }),
+    client.censysEnrichment.aggregate({
+      where: { status: "SUCCESS" },
+      _max: { queriedAt: true },
+    }),
+    client.greyNoiseEnrichment.aggregate({
+      where: { status: "SUCCESS" },
+      _max: { queriedAt: true },
+    }),
+    client.shodanEnrichment.aggregate({
+      where: { status: "SUCCESS" },
+      _max: { queriedAt: true },
+    }),
+    client.netlasEnrichment.aggregate({
+      where: { status: "SUCCESS" },
+      _max: { queriedAt: true },
+    }),
+  ]);
 
   const selectedIocProvider = String(env.IOC_ENRICHMENT_PROVIDER || "mock").toLowerCase();
   const abuseIpdbKeyPresent = Boolean(env.ABUSEIPDB_API_KEY);
@@ -501,6 +511,11 @@ async function buildProvidersSection(client, asOf) {
   // list (unlike `.ioc`, a config CHOICE between mock/abuseipdb), so a
   // second provider in the same domain belongs here, not in a new array.
   const shodanConfigured = Boolean(env.SHODAN_API_KEY);
+  // Phase 8F — Netlas joins the same exposure array as a third entry, for
+  // the same reason Shodan did in 8E: open ports, DNS/certificate context,
+  // and ASN ownership are exactly the "internet exposure / attack surface"
+  // domain this array already represents, not a new one.
+  const netlasConfigured = Boolean(env.NETLAS_API_KEY);
   const exposureProviders = [
     {
       id: "censys",
@@ -515,6 +530,13 @@ async function buildProvidersSection(client, asOf) {
       status: shodanConfigured ? "CONFIGURED" : "NOT_CONFIGURED",
       ...providerFreshness(lastShodanSuccess?._max?.queriedAt, asOf),
       source: "ShodanEnrichment.queriedAt WHERE status = SUCCESS",
+    },
+    {
+      id: "netlas",
+      name: "Netlas (cross-source attack surface / DNS / certificate intelligence)",
+      status: netlasConfigured ? "CONFIGURED" : "NOT_CONFIGURED",
+      ...providerFreshness(lastNetlasSuccess?._max?.queriedAt, asOf),
+      source: "NetlasEnrichment.queriedAt WHERE status = SUCCESS",
     },
   ];
 

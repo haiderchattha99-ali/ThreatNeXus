@@ -73,6 +73,7 @@ function makeClient(overrides = {}) {
     censysEnrichment: { aggregate: vi.fn(async () => ({ _max: { queriedAt: null } })) },
     greyNoiseEnrichment: { aggregate: vi.fn(async () => ({ _max: { queriedAt: null } })) },
     shodanEnrichment: { aggregate: vi.fn(async () => ({ _max: { queriedAt: null } })) },
+    netlasEnrichment: { aggregate: vi.fn(async () => ({ _max: { queriedAt: null } })) },
   };
 
   return { ...base, ...overrides };
