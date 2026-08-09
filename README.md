@@ -1,5 +1,7 @@
 # ThreatNeXus
 
+[![CI](https://github.com/haiderchattha99-ali/ThreatNeXus/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/haiderchattha99-ali/ThreatNeXus/actions/workflows/ci.yml)
+
 **Connecting Intelligence with Action**
 
 A defensible CERT triage and constituent-notification workflow: ingest a
@@ -47,7 +49,7 @@ that leaves the system:
 - **AI decides nothing.** It is off by default, and when on it only drafts and
   suggests — see [AI assistance](#ai-assistance-optional-off-by-default).
 
-## Current status: Phase 7 — release candidate
+## Current status: Phase 9A — professional delivery documentation
 
 | Phase | Delivered |
 |---|---|
@@ -57,9 +59,31 @@ that leaves the system:
 | **3 — Analyst workflow** | Triage, organization-bound cases, `CaseFinding` evidence links, organization responses, reviewer-approved closure with separation of duties, recurrence-driven reopening. |
 | **4 — Notifications** | Drafting from case evidence, immutable revisions, reviewer approval bound to an exact revision, approved-only manual `.eml` / `.txt` export, delivery tracking. |
 | **5 — Framework mapping + AI assistance** | Append-only MITRE ATT&CK / NIST CSF 2.0 / CIS Controls v8 mappings on cases, with a server-enforced ATT&CK evidence rule; optional AI mapping suggestions, disabled by default, promoted only by a named human through the manual mapping service. |
-
 | **6 — Analyst frontend, truthful dashboards, Docker, CI** | A single design system and primitive set; a provenance-carrying dashboard snapshot where unknown is never rendered as zero; a Chromium browser suite against the real stack; pinned MITRE Enterprise ATT&CK 19.1 with a SHA-256 integrity manifest, verbatim evidence gates, explicit "no reference applies" determinations, and a navigator that reports raw counts and **no coverage percentage**. |
 | **7 — Release candidate** | Request rate limiting on authentication, upload and provider execution; a structural route census requiring every mounted route to authenticate and enforce a capability; release security assertions; a runnable offline release evaluator; clean-stack and network-unavailable rehearsals. |
+| **8 / 8B–8F — Live provider stack** | Six live intelligence providers wired behind the existing abstraction: AbuseIPDB and NVD (Phase 2), then Censys (8B), Finding-level AI assistance (8C/8C.1), GreyNoise (8D), Shodan (8E), Netlas (8F) — see [External providers](#external-providers). |
+| **9A — Professional delivery documentation** | This README polish plus a full documentation package in `docs/` — see [Documentation](#documentation) below. |
+
+## Documentation
+
+This README is the entry point. The full delivery package lives in `docs/`:
+
+| Document | For |
+|---|---|
+| [`docs/PROJECT_PLAYBOOK.md`](docs/PROJECT_PLAYBOOK.md) | The single-document overview — read this first if you're new |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Technical architecture, data flow, provider adapter pattern |
+| [`docs/PROVIDER_GUIDE.md`](docs/PROVIDER_GUIDE.md) | Every live provider: config, failure behavior, evidence semantics |
+| [`docs/AI_GOVERNANCE.md`](docs/AI_GOVERNANCE.md) | How AI assistance is governed, and what it structurally cannot do |
+| [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) | How to run it — Docker Compose, env vars, migrations, backup/restore |
+| [`docs/OPERATIONS_RUNBOOK.md`](docs/OPERATIONS_RUNBOOK.md) | Day-to-day commands, rate limits, recovery |
+| [`docs/TESTING_AND_CI.md`](docs/TESTING_AND_CI.md) | Test suites, evaluators, CI pipeline |
+| [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md) | Role-specific usage |
+| [`docs/ADMIN_GUIDE.md`](docs/ADMIN_GUIDE.md) | Role/capability matrix, admin limitations |
+| [`docs/DEMO_SCRIPT.md`](docs/DEMO_SCRIPT.md) / [`docs/DEMO_RUNBOOK.md`](docs/DEMO_RUNBOOK.md) | Presentation script and full walkthrough |
+| [`docs/DELIVERY.md`](docs/DELIVERY.md) | The delivery-package index and validation record |
+
+> A screenshot/visual tour of the frontend is a planned **Phase 9B** addition, not included here — this
+> README stays text-only by design until then.
 
 ## Phase 6 — analyst frontend, truthful dashboards, Docker and CI
 
@@ -126,7 +150,8 @@ table, nothing hijacks scrolling, and the ambient pulse pauses when the tab is
 hidden or the element leaves the viewport.
 
 **Docker, CI and a demonstration dataset.** `docker compose up` now runs
-PostgreSQL, the backend and the frontend, applying all 17 migrations from zero
+PostgreSQL, the backend and the frontend, applying every migration from zero
+(23 as of Phase 8F; 17 when Phase 6 shipped this)
 and refusing to start without a `JWT_SECRET`. A GitHub Actions pipeline
 (`.github/workflows/ci.yml`) checks for committed secrets and build output,
 validates the Prisma schema, applies migrations to an empty database, asserts the
@@ -295,10 +320,14 @@ it. A third invariant is enforced in Phase 5 — approving an AI suggestion
 creates a mapping, so **approval authority never exceeds the authority to write
 that same mapping by hand**.
 
+See `docs/ADMIN_GUIDE.md` for the complete, current capability table including
+the provider-enrichment and Finding-level AI-assistance grants added in
+Phases 8B–8F.
+
 ## Architecture and stack
 
 - **Backend:** Node.js, Express 5
-- **Database:** PostgreSQL 16 via Prisma (17 migrations, all additive)
+- **Database:** PostgreSQL 16 via Prisma (23 migrations, all additive)
 - **Frontend:** React 19, Vite, MUI
 - **Tests:** Vitest + Supertest (backend), Vitest + Testing Library (frontend),
   oxlint
@@ -466,7 +495,7 @@ export IOC_ENRICHMENT_PROVIDER=mock ABUSEIPDB_API_KEY='' NVD_API_KEY='' \
 
 # 1. Migrations from zero, schema validity, and drift.
 cd backend
-npx prisma migrate deploy      # expect 18 migrations applied
+npx prisma migrate deploy      # expect 23 migrations applied
 npx prisma validate
 npx prisma migrate diff --from-schema-datamodel prisma/schema.prisma \
   --to-schema-datasource prisma/schema.prisma --exit-code   # expect "No difference"
@@ -568,18 +597,27 @@ recommended next provider phase.
   horizontally scaled deployment, which would need a shared store.
 - **Synthetic data only.** No real constituent or victim data has ever been
   processed, and none may be committed.
+- **No in-app user management.** Accounts come only from `npm run seed:users`
+  or a direct database change; there is no admin console for creating or
+  promoting a user. See `docs/ADMIN_GUIDE.md`.
 
 ## Roadmap
 
-Phases 0–7 are delivered. What remains is deliberately *not* in this release:
+Phases 0 through 9A are delivered — see [Current status](#current-status-phase-9a--professional-delivery-documentation).
+What remains is deliberately *not* in this release:
 
+- **Phase 9B — presentation assets.** A slide deck and, if wanted, a
+  documentation-only placeholder for a showcase/landing page.
 - **A production write path for Finding closure**, so recurrence and reopening
   become reachable through the interface rather than only through the evaluator.
 - **A second report type** carried all the way to closure.
+- **A seventh live provider** (VirusTotal, OTX or MISP), following the same
+  adapter pattern the six existing providers use.
+- **In-app user management**, closing the gap documented in `docs/ADMIN_GUIDE.md`.
 - **Catalogue verification for NIST CSF and CIS**, matching what ATT&CK already
   has.
 - **A live AI provider** behind the existing contract — if and only if it is
-  approved in the decision record first.
+  approved in the decision record first. See `docs/AI_GOVERNANCE.md`.
 - **The gold-standard answer key.** `eval/lib/goldStandardLoader.js` defines the
   schema and computes accept/edit/reject rates and inter-rater agreement, but the
   labels themselves are an outstanding *human* deliverable: two named team members
