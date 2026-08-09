@@ -4,6 +4,12 @@ A presentation-ready script for demonstrating ThreatNeXus live. This is the cond
 `docs/DEMO_RUNBOOK.md` has the full twelve-minute walkthrough with every talking point spelled out in
 detail; read that once before presenting, and use this page as the on-stage reference.
 
+**Presenting alongside the Phase 9B slide deck?** Use
+[`docs/presentation/DEMO_WALKTHROUGH.md`](presentation/DEMO_WALKTHROUGH.md) instead — it adds
+provider-enrichment, AI-assistance, and ATT&CK-mapping walkthrough sections and mid-demo provider-outage
+recovery steps that this page doesn't cover, and it's written to slot in right after Slide 13 of
+[`docs/presentation/ThreatNeXus-PKCERT-Deck.md`](presentation/ThreatNeXus-PKCERT-Deck.md).
+
 ## Before the demo
 
 **Do this the night before, not five minutes before:**

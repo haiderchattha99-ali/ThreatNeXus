@@ -1,138 +1,150 @@
-# Handoff: TNX-P9A-PROFESSIONAL-DOCS
+# Handoff: TNX-P9B-PRESENTATION-ASSETS
 
 - From: claude
 - Suggested next writer: claude (in progress)
-- Branch: feat/phase-9a-professional-docs
-- Updated: 2026-08-09T20:00:00Z
+- Branch: feat/phase-9b-presentation-assets
+- Updated: 2026-08-09T21:30:00Z
 
-## Phase 8F closure note
+## Start-gate discrepancy — read this first
 
-`feat/phase-8f-netlas-provider` is merged into `main` via PR #16 (`3491cb0`, containing final commit
-`b8389dd`). This ticket branches from that updated tip. All six planned live providers (NVD, AbuseIPDB,
-Censys, GreyNoise, Shodan, Netlas) are now integrated and green in CI.
+The mandatory start gate for this ticket assumed **PR #17 (Phase 9A) was already merged into main**.
+It was not: `gh pr list` showed it `OPEN` at the start of this session. Rather than block entirely or
+proceed as if a merge had happened, this ticket branched `feat/phase-9b-presentation-assets` from the
+tip of `feat/phase-9a-professional-docs` (`f220351`) — the exact same commit content PR #17 will merge,
+just not yet on `main`. **This branch needs a rebase onto `main` once PR #17 actually merges**, before
+its own PR is opened. Nothing about the actual deliverable content depends on which branch it's based
+on; only the eventual PR's base commit does.
 
 ## Goal
 
-Produce a software-house style professional delivery documentation package: production/deployment
-guide, operations runbook, user/admin manual, technical architecture, provider/API guide, AI governance
-guide, testing/CI guide, project playbook, README polish, demo script, and delivery index. Documentation,
-packaging, verification and small correction only — **no new product features**.
+Create a professional PKCERT-ready presentation package: a 16-slide deck with speaker notes, a detailed
+demo walkthrough, a screenshot capture plan, a style guide (including a real research pass and an
+internal deck strategy), and a landing-page plan (planning only, not built). Presentation and demo
+assets only — no product features, no code changes beyond two small documentation cross-links.
 
 ## What this ticket added
 
-11 new documents under `docs/`, plus a README polish:
+`docs/presentation/`:
 
-1. **`docs/DELIVERY.md`** — package index, feature-status summary, validation record.
-2. **`docs/DEPLOYMENT.md`** — prerequisites, env vars, Docker Compose, migrations, seed/demo, offline
-   mode, backup/restore, troubleshooting, what not to commit.
-3. **`docs/OPERATIONS_RUNBOOK.md`** — start/stop/logs/tests/evaluators/provider-status/rate-limits/
-   offline rehearsal/recovery/stale-lock handling/CI flake note.
-4. **`docs/USER_GUIDE.md`** — role-specific usage: dashboard, findings, upload, triage, cases, ATT&CK
-   mapping, notifications, AI panel, denied/restricted states.
-5. **`docs/ADMIN_GUIDE.md`** — the full current role/capability matrix (sourced directly from
-   `backend/src/lib/roles.js`), provider config, key handling, audit logs, rate limits, demo seed,
-   honest admin limitations (no in-app user management, no audit-log viewer, no token revocation).
-6. **`docs/ARCHITECTURE.md`** — the authoritative external-facing technical architecture: component map,
-   data flow, provider adapter pattern, AI assistance flow, evidence semantics, trust boundaries, data
-   model, frontend architecture, known limitations. Explicitly supersedes `docs/ai/ARCHITECTURE.md` (the
-   shorter internal AI-team orientation note) for this audience rather than duplicating it.
-7. **`docs/PROVIDER_GUIDE.md`** — all six live providers (purpose, env vars, auth scheme, storage table,
-   route, live-smoke command) plus an honest "providers not integrated" section (Shadowserver pending
-   API access, VirusTotal/OTX/MISP not built).
-8. **`docs/AI_GOVERNANCE.md`** — both AI surfaces, the shared `AI_ENABLED`/`AI_PROVIDER` switch, "no
-   live provider ships", the structural inability to write beyond a suggestion's own row, "AI output is
-   untrusted input", prompt-injection handling, audit logging, stated limitations.
-9. **`docs/TESTING_AND_CI.md`** — every test/evaluator/CI layer, migration-history guard, secrets scan,
-   provider no-live-call rule at all three enforcement layers, flake classes and rerun policy.
-10. **`docs/PROJECT_PLAYBOOK.md`** — the single stand-alone overview: identity, scope, is/is-not table,
-    roles, workflows, data semantics, security principles, an accurate phase-history table sourced from
-    actual git branch names, roadmap, consolidated known-gaps list, decision rules.
-11. **`docs/DEMO_SCRIPT.md`** — a condensed presentation cue-card (setup checklist, timed role sequence,
-    talking points, offline backup path) that cross-links `docs/DEMO_RUNBOOK.md` for the full detailed
-    walkthrough rather than duplicating it.
+1. **`ThreatNeXus-PKCERT-Deck.md`** — 16-slide deck source, short slide text by design (detailed
+   language lives in the notes file).
+2. **`ThreatNeXus-PKCERT-Deck.pptx`** — the generated deck. Built with `pptxgenjs`, using the product's
+   own real design tokens (`frontend/src/theme/tokens.js`: near-black canvas `#0A1210`, government-green
+   accent `#35C477`) as the palette rather than an invented one. Speaker notes embedded on every slide.
+   Passed the pptx skill's schema/relationship/content-type validator clean.
+3. **`SPEAKER_NOTES.md`** — one section per slide: what to say, what visual/screenshot to show, what
+   not to overclaim, a demo cue where relevant, and the fallback if a provider API or the network is
+   unavailable during the talk.
+4. **`DEMO_WALKTHROUGH.md`** — the detailed PKCERT-facing version of the demo, adding what
+   `docs/DEMO_SCRIPT.md` doesn't cover: a pre-demo checklist, dedicated provider-enrichment /
+   AI-assistance / ATT&CK-mapping walkthrough sections, and explicit recovery steps if a provider API
+   goes down mid-demo.
+5. **`SCREENSHOT_PLAN.md`** — 9 exact screenshot slots (dashboard, findings list, finding detail,
+   provider evidence, provider matrix, AI panel ×2 states, ATT&CK refusal, CI-green proof, architecture
+   diagram), each with an exact filename, the role to sign in as, and capture instructions. **None were
+   captured this phase** — see "Screenshots were not captured" below.
+6. **`STYLE_GUIDE.md`** — the internal deck strategy (audience/hook/pain/promise/proof-points/demo
+   sequence/what-must-not-be-overclaimed), a real inspiration-notes section from an actual research
+   pass, visual rules, the full banned-overclaim-word list, and phrasing guardrails for AI governance,
+   provider evidence, security claims, demo wording, and PKCERT-only audience framing.
+7. **`LANDING_PAGE_PLAN.md`** — planning only, explicitly not built: whether it's worth building, what
+   problem it solves, where it would live, what sections/screenshots it needs, and the specific trigger
+   condition to revisit building it.
 
-**README.md**: status table extended through Phase 9A; new "Documentation" section linking the full
-package; three stale migration-count references fixed (17/18 → 23, the actual current count); Roadmap
-section updated (Phases 0–7 → 0–9A delivered, added Phase 9B / seventh-provider / user-management
-items); a CI status badge added; a cross-link to `docs/ADMIN_GUIDE.md`'s complete capability table added
-under the existing (slightly less complete) RBAC table; one known-limitations bullet added for the
-no-in-app-user-management gap. No screenshot/GIF/visual tour was added — left as an explicit Phase 9B
-placeholder, stated in the README itself, per instruction.
+`docs/DEMO_SCRIPT.md` — one cross-link added to `DEMO_WALKTHROUGH.md`, nothing else changed.
 
-## How facts were verified, not assumed
+`README.md` — a Phase 9B status-table row, two new Documentation-table links (deck + walkthrough), the
+old vague "Phase 9B addition" screenshot placeholder replaced with a real link to `SCREENSHOT_PLAN.md`,
+the Roadmap section updated (landing page + real screenshots are now the stated next items), and the
+"Current status" heading (plus its self-referencing anchor) updated to Phase 9B.
 
-Every command, environment-variable name, file path, capability name, route, and count cited across all
-11 documents was checked directly against the codebase this session — not recalled from memory or
-copied forward from an earlier phase's documentation without re-checking. Specifically:
+## The research pass (real, not fabricated)
 
-- Migration count (23) — `ls backend/prisma/migrations`.
-- Backend test file count (145), e2e spec count (9) — `find`.
-- The full route table and page-capability mapping — `frontend/src/App.jsx`,
-  `frontend/src/utils/permissions.js`.
-- The complete role/capability grant table — read `backend/src/lib/roles.js` in full, including its own
-  extensive design-rationale comments, rather than reconstructing the matrix from the README's older,
-  slightly less complete version.
-- The CI job list, evaluator list, and exact env vars each job sets — read `.github/workflows/ci.yml`
-  in full (593 lines).
-- Netlas's real documented API shape (verified in Phase 8F via `docs.netlas.io`, reused here).
-- The AI provider registry's "no silent fallback to production mock" design — read directly from
-  `aiProviderRegistry.js`'s and `aiSuggestionRules.js`'s own extensive comments, which state the design
-  reasoning explicitly.
-- Seed script safety guarantees (refuses production, refuses without `DEMO_MODE=true`, never prints the
-  password, idempotent) — read `seedUsers.js` and `seedDemo.js` source directly.
+Per instruction, a short research pass ran before any slide content was written:
 
-## Deliberate non-duplication decisions
+- **WebSearch**: open-source security-tool README documentation structure and trust-building patterns;
+  cybersecurity product pitch-deck slide structure.
+- **WebFetch**: `github.com/falcosecurity/falco`, asking explicitly for structure only (section order
+  and purpose), not wording — the response is recorded in `STYLE_GUIDE.md`'s inspiration-notes section,
+  citing the real project by name. **No star counts are stated anywhere** — none were verified live, so
+  per instruction none were mentioned.
+- Extracted patterns only: trust-building before feature tour, a dedicated security/disclosure section,
+  an FAQ-style section that pre-empts skepticism, architecture shown as a map not prose (from the
+  README research); concrete-pain problem framing, outcome-before-mechanism solution framing, proof
+  placed to support an already-made claim rather than opening the deck (from the pitch-deck research,
+  explicitly noting funding/market/team slides don't fit this audience and were not adopted).
+- Nothing — no wording, branding, asset, screenshot, or diagram — was copied from any source inspected.
 
-- `docs/ARCHITECTURE.md` is new and supersedes `docs/ai/ARCHITECTURE.md` for an external reader; the
-  latter is left as-is (it explicitly labels itself an internal AI-team orientation note, a different
-  audience).
-- `docs/DEMO_SCRIPT.md` does not re-write `docs/DEMO_RUNBOOK.md`'s detailed walkthrough — it's a shorter
-  cue-card that cross-links it, adding only what the runbook doesn't have (setup checklist, offline
-  backup path).
-- `docs/API_CONTRACT_PHASE0.md` was left untouched. It remains accurate for what it documents (Phase 0's
-  API surface) but does not cover Phases 1–8F's routes. Rewriting it into a full current API reference
-  was out of this ticket's explicit deliverable list — the "Provider/API guide" deliverable specifically
-  meant the six provider endpoints, which `docs/PROVIDER_GUIDE.md` now covers. The gap (no single current
-  full-API-surface document) is stated honestly in `docs/PROJECT_PLAYBOOK.md`'s known-gaps list rather
-  than silently left undiscoverable.
+## Screenshots were not captured
+
+Docker's daemon was unreachable in this environment (`npipe` connection failed) and Docker Desktop's
+executable was not found at its standard install path — confirmed with two quick checks, not escalated
+into a longer debug session, per the explicit instruction not to do that without approval. Every
+screenshot slot in `SCREENSHOT_PLAN.md` is a real, exact, capturable placeholder with instructions —
+none of the deck's content depends on a screenshot existing; the deck's placeholder framing (in
+speaker notes) explicitly tells the presenter what to say if a slot is still unfilled.
+
+## PPTX generation and validation — what could and couldn't run here
+
+`pptxgenjs` was not actually preinstalled on this Windows machine, despite the pptx skill documenting it
+as preinstalled (that assumption evidently holds for a different, Linux-sandboxed execution context) —
+installed it locally in the session scratchpad per the skill's own documented fallback
+(`npm install pptxgenjs`), not inside this repository.
+
+- **Schema/relationship/content-type validation** (`scripts/office/validate.py`): ran clean —
+  `All validations PASSED!` — after working around a Windows console-encoding issue
+  (`PYTHONUTF8=1` was needed for two slides' unicode punctuation; this was the validator's own console
+  handling on Windows, not a defect in the generated file).
+- **Content QA**: performed via a direct `python-pptx` text-and-notes dump, cross-checked against the
+  deck source markdown — all 16 slides present, correct order, no placeholder/lorem/TODO text.
+- **Visual (rendered-image) QA — could NOT be performed.** No LibreOffice is installed on this machine
+  (`soffice` not found anywhere), no Microsoft Office/PowerPoint is installed either, and the pptx
+  skill's own `soffice.py` wrapper assumes a Linux sandbox (`socket.AF_UNIX`, which doesn't exist on
+  native Windows) so it could not run here even if LibreOffice were present. This is stated as an honest
+  tooling limitation, not silently skipped. In its place: every slide's shape coordinates were manually
+  checked against the 13.333"×7.5" canvas for overflow/overlap risk (documented reasoning kept in this
+  session's working notes, not repeated here) — but nobody has looked at an actual rendered image of
+  this deck yet.
+
+**Recommended before the first real presentation**: open the `.pptx` in real PowerPoint (or upload to
+Google Slides) once, specifically to catch anything the schema validator and manual math check can't —
+text overflow, spacing, and genuine visual polish.
 
 ## Validation this session ran
 
-- `git status` checked before (clean, main at `3491cb0`) and after (11 new `docs/*.md` files + modified
-  `README.md`, nothing else touched, `docs/codex/` untouched).
-- A git-grep secret-pattern sweep using the exact same patterns CI's `hygiene` job uses, across every
-  new/changed file — clean.
+- `git status` checked before (clean) and after (`docs/presentation/` new, `README.md` and
+  `docs/DEMO_SCRIPT.md` modified — nothing else touched, `docs/codex/` untouched).
+- A git-grep secret-pattern sweep using CI's own patterns, across every new/changed file including the
+  binary `.pptx` — clean.
 - A relative-link resolution check across every markdown cross-link added this phase — all resolve.
-- No backend or frontend code was changed, so no test/evaluator run was required or performed this
-  session — confirmed by the git status diff itself.
-- `backend/.env` was never read, printed, or referenced — only `backend/.env.example` was consulted.
+- No backend or frontend code was changed (only two documentation cross-link edits), so no test/evaluator
+  run was required or performed.
+- `backend/.env` (or any real `.env`) was never read, printed, or referenced.
 
 ## CI result
 
-Committed `1dea00f`, pushed. Run [31319182036](https://github.com/haiderchattha99-ali/ThreatNeXus/actions/runs/31319182036)
-— **all required jobs green on the first push**: frontend lint/tests/build, secrets scan,
-schema/migration, core evaluators, backend tests against real PostgreSQL, and the Chromium browser
-suite. Expected for a docs-only change — no schema, backend, or frontend code was modified this phase —
-but the push was still watched to confirm rather than assumed. "Mutation and concurrency gates" is
-manual-trigger-only and was not run — not required for this ticket.
+See `docs/ai/STATE.yaml` `validation.ci` for current status — update this section once the push has been
+watched to a terminal result.
 
 ## Honest gaps
 
+- **PR #17 (Phase 9A) is not yet merged** — this branch will need a rebase onto `main` once it is,
+  before this ticket's own PR is opened. See the discrepancy note at the top of this document.
+- **No screenshots captured** — `SCREENSHOT_PLAN.md` is ready for the next session that has a running
+  local stack.
+- **No visual (rendered-image) QA was possible in this environment** — the deck passed every automated
+  check available here, but a human should open it in real PowerPoint once before presenting.
 - **No independent review yet.** Per this project's own rule ("do not review your own final work as the
-  only reviewer"), an independent pass (Codex or otherwise) is recommended before treating this
-  documentation package as final.
-- `docs/API_CONTRACT_PHASE0.md` remains Phase-0-only — see "Deliberate non-duplication decisions" above.
-- No screenshot/visual tour in README — explicit Phase 9B placeholder.
-- `F-drive start-task.ps1` throws against this repo's `STATE.yaml` schema; no working
-  `.ai-team/WRITER_LOCK.json` mechanism exists for this repo — worked around, not fixed, same known gap
-  as every phase since 8B.
-- `docs/codex/` remains untracked and untouched, per the one-writer boundary.
+  only reviewer"), an independent pass is recommended before treating this deliverable as final — and is
+  especially valuable given the visual-QA gap above.
+- No landing/showcase page was built — `LANDING_PAGE_PLAN.md` explains why and what would trigger
+  building one.
 
 ## Recommended next phase
 
-Per the user's own instruction for this ticket: **Phase 9B** — presentation assets (slide deck, and, if
-wanted, a documentation-only placeholder for a showcase/landing page — no implementation without
-separate authorization).
+Per the user's own instruction for this ticket: merge Phase 9A (PR #17), then this ticket (once rebased),
+then a Codex/independent pass and a manual open-in-PowerPoint visual check, then a final rehearsal ahead
+of the actual PKCERT presentation.
 
 ## Protected boundaries
 
@@ -141,5 +153,4 @@ separate authorization).
 - Do not expose secrets or absorb unrelated changes.
 - `docs/codex/` is a foreign path this session did not touch — leave it alone unless its owner asks.
 - `backend/.env` (and any non-`.env.example` env file) must never be read, printed, or committed.
-- No product feature was added this phase — if a future session finds itself tempted to "fix" a gap
-  documented here by adding functionality, that is out of Phase 9A's scope; open it as its own ticket.
+- No product feature was added this phase.
