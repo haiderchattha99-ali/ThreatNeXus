@@ -135,6 +135,7 @@ function makeClient({ contributionRows = CONTRIBUTION_ROWS, currentScores = 2, f
     vulnerabilityProviderResult: { groupBy: emptyGroup },
     censysEnrichment: { aggregate: vi.fn(async () => ({ _max: { queriedAt: null } })) },
     greyNoiseEnrichment: { aggregate: vi.fn(async () => ({ _max: { queriedAt: null } })) },
+    shodanEnrichment: { aggregate: vi.fn(async () => ({ _max: { queriedAt: null } })) },
   };
 
   // Every delegate also gets every write method, recording any call. Nothing in

@@ -412,25 +412,30 @@ function providerFreshness(lastSuccessAt, asOf) {
 async function buildProvidersSection(client, asOf) {
   const iso = asOf.toISOString();
 
-  const [lastIocSuccess, vulnerabilityLastSuccess, lastCensysSuccess, lastGreyNoiseSuccess] = await Promise.all([
-    client.iocEnrichment.aggregate({
-      where: { status: "SUCCESS" },
-      _max: { queriedAt: true },
-    }),
-    client.vulnerabilityProviderResult.groupBy({
-      by: ["provider"],
-      where: { status: "SUCCESS" },
-      _max: { queriedAt: true },
-    }),
-    client.censysEnrichment.aggregate({
-      where: { status: "SUCCESS" },
-      _max: { queriedAt: true },
-    }),
-    client.greyNoiseEnrichment.aggregate({
-      where: { status: "SUCCESS" },
-      _max: { queriedAt: true },
-    }),
-  ]);
+  const [lastIocSuccess, vulnerabilityLastSuccess, lastCensysSuccess, lastGreyNoiseSuccess, lastShodanSuccess] =
+    await Promise.all([
+      client.iocEnrichment.aggregate({
+        where: { status: "SUCCESS" },
+        _max: { queriedAt: true },
+      }),
+      client.vulnerabilityProviderResult.groupBy({
+        by: ["provider"],
+        where: { status: "SUCCESS" },
+        _max: { queriedAt: true },
+      }),
+      client.censysEnrichment.aggregate({
+        where: { status: "SUCCESS" },
+        _max: { queriedAt: true },
+      }),
+      client.greyNoiseEnrichment.aggregate({
+        where: { status: "SUCCESS" },
+        _max: { queriedAt: true },
+      }),
+      client.shodanEnrichment.aggregate({
+        where: { status: "SUCCESS" },
+        _max: { queriedAt: true },
+      }),
+    ]);
 
   const selectedIocProvider = String(env.IOC_ENRICHMENT_PROVIDER || "mock").toLowerCase();
   const abuseIpdbKeyPresent = Boolean(env.ABUSEIPDB_API_KEY);
@@ -488,6 +493,14 @@ async function buildProvidersSection(client, asOf) {
   // API, Bearer PAT). CENSYS_ORG_ID is optional even when a PAT is present,
   // so configuration status depends on the PAT alone.
   const censysConfigured = Boolean(env.CENSYS_PAT);
+  // Phase 8E — Shodan joins the SAME exposure array as a second entry,
+  // rather than getting its own sibling array the way GreyNoise did:
+  // Shodan's data (exposed services, banners, open ports) IS "internet
+  // exposure / attack surface" — the exact domain this array already
+  // represents — not a new one. exposureProviders is already an additive
+  // list (unlike `.ioc`, a config CHOICE between mock/abuseipdb), so a
+  // second provider in the same domain belongs here, not in a new array.
+  const shodanConfigured = Boolean(env.SHODAN_API_KEY);
   const exposureProviders = [
     {
       id: "censys",
@@ -495,6 +508,13 @@ async function buildProvidersSection(client, asOf) {
       status: censysConfigured ? "CONFIGURED" : "NOT_CONFIGURED",
       ...providerFreshness(lastCensysSuccess?._max?.queriedAt, asOf),
       source: "CensysEnrichment.queriedAt WHERE status = SUCCESS",
+    },
+    {
+      id: "shodan",
+      name: "Shodan (exposed service / banner / port intelligence)",
+      status: shodanConfigured ? "CONFIGURED" : "NOT_CONFIGURED",
+      ...providerFreshness(lastShodanSuccess?._max?.queriedAt, asOf),
+      source: "ShodanEnrichment.queriedAt WHERE status = SUCCESS",
     },
   ];
 

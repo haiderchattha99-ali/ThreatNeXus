@@ -507,6 +507,7 @@ Shadowserver schema.
 | **NVD** | CVE metadata | Optional (`NVD_API_KEY`) | Public rate limit applies without a key. |
 | **Censys** | Internet-exposure / attack-surface context (open services, AS ownership) for an indicator | Optional (`CENSYS_PAT`, a Platform API Personal Access Token; `CENSYS_ORG_ID` optional) | Phase 8B — the second live provider after NVD, against Censys's current Platform API (`api.platform.censys.io`), not the legacy Search v2 API. Without a PAT the provider returns `SKIPPED_DISABLED`; nothing blocks. Triggered per Finding at `POST /api/findings/:id/enrichment/censys` (ADMIN/ANALYST), read at the `GET` counterpart (existing `read:findings` matrix). No queue — a synchronous, human-triggered, audited lookup. |
 | **GreyNoise** | Internet-noise / scanning-context and RIOT classification for an IPv4 indicator | Optional (`GREYNOISE_API_KEY`, a Community API key) | Phase 8D — the third live provider after NVD and Censys, against GreyNoise's Community API (`api.greynoise.io/v3/community`). Without a key the provider returns `SKIPPED_DISABLED`; nothing blocks. Triggered per Finding at `POST /api/findings/:id/enrichment/greynoise` (ADMIN/ANALYST), read at the `GET` counterpart (existing `read:findings` matrix). No queue — a synchronous, human-triggered, audited lookup. Classification (`benign`/`malicious`/`unknown`) is GreyNoise's own closed vocabulary; a value outside it is never passed through. |
+| **Shodan** | Exposed service / banner / port intelligence (hostnames, organization/ISP, geo, per-service product+version, CVE ids) for an IPv4 indicator | Optional (`SHODAN_API_KEY`) | Phase 8E — the fourth live provider, against Shodan's REST API (`api.shodan.io`). Without a key the provider returns `SKIPPED_DISABLED`; nothing blocks. Triggered per Finding at `POST /api/findings/:id/enrichment/shodan` (ADMIN/ANALYST), read at the `GET` counterpart (existing `read:findings` matrix). No queue — a synchronous, human-triggered, audited lookup. Auth is Shodan's own `key` query-parameter scheme (no header option); the key is never logged. Joins the SAME dashboard "exposure" provider domain as Censys, rather than a new sibling array — both describe internet exposure/attack-surface context for an indicator. |
 | **AI mapping assistance** | Framework mapping suggestions | **No live provider ships** | Disabled by default; offline mock for tests only. |
 | **AI finding assistance** | Phase 8C — Finding summary / explanation drafts, human-approved only | **No live provider ships** | Same `AI_ENABLED`/`AI_PROVIDER` switch as AI mapping assistance. Requested at `POST /api/findings/:id/ai-suggestions` (ADMIN/ANALYST), accepted/rejected at `.../accept` \| `.../reject` (ADMIN/REVIEWER). Disabled by default; offline mock for tests only. **Phase 8C.1** adds the frontend surface — an "AI assistance" panel on the Finding detail page — for this same backend; see the frontend section below. |
 
@@ -526,10 +527,12 @@ opt-in NVD live-smoke command exists for local verification and never runs in CI
 ```
 LIVE_NVD_SMOKE=1 npm run smoke:nvd --prefix backend
 LIVE_CENSYS_SMOKE=1 npm run smoke:censys --prefix backend
+LIVE_GREYNOISE_SMOKE=1 npm run smoke:greynoise --prefix backend
+LIVE_SHODAN_SMOKE=1 npm run smoke:shodan --prefix backend
 ```
 
-Shadowserver, Shodan, Netlas, GreyNoise, VirusTotal, OTX and MISP remain unintegrated — see
-`docs/ai/HANDOFF.md` for the recommended next provider phase.
+Shadowserver, Netlas, VirusTotal, OTX and MISP remain unintegrated — see `docs/ai/HANDOFF.md` for the
+recommended next provider phase.
 
 ## Known limitations
 
