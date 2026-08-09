@@ -49,7 +49,7 @@ that leaves the system:
 - **AI decides nothing.** It is off by default, and when on it only drafts and
   suggests — see [AI assistance](#ai-assistance-optional-off-by-default).
 
-## Current status: Phase 9A — professional delivery documentation
+## Current status: Phase 9B.1 — premium PKCERT presentation redesign
 
 | Phase | Delivered |
 |---|---|
@@ -63,6 +63,7 @@ that leaves the system:
 | **7 — Release candidate** | Request rate limiting on authentication, upload and provider execution; a structural route census requiring every mounted route to authenticate and enforce a capability; release security assertions; a runnable offline release evaluator; clean-stack and network-unavailable rehearsals. |
 | **8 / 8B–8F — Live provider stack** | Six live intelligence providers wired behind the existing abstraction: AbuseIPDB and NVD (Phase 2), then Censys (8B), Finding-level AI assistance (8C/8C.1), GreyNoise (8D), Shodan (8E), Netlas (8F) — see [External providers](#external-providers). |
 | **9A — Professional delivery documentation** | This README polish plus a full documentation package in `docs/` — see [Documentation](#documentation) below. |
+| **9B / 9B.1 — PKCERT presentation and demo assets** | A 17-slide deck (redesigned in 9B.1 with a dark, grid-based visual system, real diagrams, and an animation cue sheet) with full speaker notes, a detailed demo walkthrough, and a screenshot/landing-page plan — see [Documentation](#documentation) below and `docs/presentation/`. |
 
 ## Documentation
 
@@ -81,9 +82,12 @@ This README is the entry point. The full delivery package lives in `docs/`:
 | [`docs/ADMIN_GUIDE.md`](docs/ADMIN_GUIDE.md) | Role/capability matrix, admin limitations |
 | [`docs/DEMO_SCRIPT.md`](docs/DEMO_SCRIPT.md) / [`docs/DEMO_RUNBOOK.md`](docs/DEMO_RUNBOOK.md) | Presentation script and full walkthrough |
 | [`docs/DELIVERY.md`](docs/DELIVERY.md) | The delivery-package index and validation record |
+| [`docs/presentation/ThreatNeXus-PKCERT-Deck.md`](docs/presentation/ThreatNeXus-PKCERT-Deck.md) ([.pptx](docs/presentation/ThreatNeXus-PKCERT-Deck.pptx)) | The PKCERT presentation deck, with speaker notes in [`docs/presentation/SPEAKER_NOTES.md`](docs/presentation/SPEAKER_NOTES.md) |
+| [`docs/presentation/DEMO_WALKTHROUGH.md`](docs/presentation/DEMO_WALKTHROUGH.md) | The detailed live-demo walkthrough this deck hands off into |
 
-> A screenshot/visual tour of the frontend is a planned **Phase 9B** addition, not included here — this
-> README stays text-only by design until then.
+> A screenshot/visual tour of the frontend is planned but not yet captured — see
+> [`docs/presentation/SCREENSHOT_PLAN.md`](docs/presentation/SCREENSHOT_PLAN.md) for the exact shot list
+> and capture instructions. This README stays text-only until those are taken from a running stack.
 
 ## Phase 6 — analyst frontend, truthful dashboards, Docker and CI
 
@@ -603,11 +607,13 @@ recommended next provider phase.
 
 ## Roadmap
 
-Phases 0 through 9A are delivered — see [Current status](#current-status-phase-9a--professional-delivery-documentation).
+Phases 0 through 9B.1 are delivered — see [Current status](#current-status-phase-9b1--premium-pkcert-presentation-redesign).
 What remains is deliberately *not* in this release:
 
-- **Phase 9B — presentation assets.** A slide deck and, if wanted, a
-  documentation-only placeholder for a showcase/landing page.
+- **A landing/showcase page** — deliberately optional; see
+  `docs/presentation/LANDING_PAGE_PLAN.md` for why it's not built yet and what would trigger building it.
+- **Real screenshots** for the deck and README — see `docs/presentation/SCREENSHOT_PLAN.md` for the
+  exact shot list; none were captured this phase because no local stack was running to capture from.
 - **A production write path for Finding closure**, so recurrence and reopening
   become reachable through the interface rather than only through the evaluator.
 - **A second report type** carried all the way to closure.
