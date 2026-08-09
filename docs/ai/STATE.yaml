@@ -55,7 +55,7 @@
                        "no_real_env_read":  "PASS - no .env file of any kind was read, printed, or referenced this phase",
                        "link_check":  "PASS - every relative markdown link added or changed this phase resolves to a real file",
                        "code_changes":  "NONE beyond the two small documentation cross-link edits (README.md, docs/DEMO_SCRIPT.md) - no backend/frontend test run was needed or performed",
-                       "ci":  "PENDING - see next_action"
+                       "ci":  "PASS - https://github.com/haiderchattha99-ali/ThreatNeXus/actions/runs/31336812610 (all required jobs green on the first push: frontend lint/tests/build, secrets scan, schema/migration, core evaluators, backend-vs-real-Postgres, Chromium browser suite. Expected for a docs/assets-only change. 'Mutation and concurrency gates' is manual-trigger-only, not required, not run)"
                    },
     "known_issues":  [
                          "PR #17 (Phase 9A) is OPEN, not merged, as of this ticket's start - this branch is based on its tip (f220351) rather than an updated main. Rebase onto main once #17 merges, before opening this ticket's own PR.",
@@ -65,8 +65,8 @@
                          "docs/codex/ remains untracked and untouched, per the one-writer boundary.",
                          "No independent reviewer (Codex or otherwise) has looked at this deliverable yet - per CLAUDE.md 'do not review your own final work as the only reviewer', an independent pass is recommended, and is especially valuable here given the visual-QA gap above."
                      ],
-    "next_action":  "Commit the diff (explicit paths only), push feat/phase-9b-presentation-assets, and watch CI to green before releasing the writer lock. Once PR #17 merges, rebase this branch onto main before opening its own PR. Recommended: merge Phase 9A, then this ticket, then a Codex/independent pass and a manual open-in-PowerPoint visual check, then final rehearsal.",
-    "checkpoint_ref":  "pending-commit",
-    "updated_at":  "2026-08-09T21:30:00.0000000Z",
+    "next_action":  "None required to close this ticket - CI is green. Once PR #17 merges, rebase this branch onto main before opening its own PR. A manual open-in-PowerPoint visual check and an independent reviewer pass are recommended before the first real presentation. Recommended: merge Phase 9A, then this ticket, then final rehearsal.",
+    "checkpoint_ref":  "40a97c9",
+    "updated_at":  "2026-08-09T21:35:00.0000000Z",
     "next_writer":  "unassigned"
 }

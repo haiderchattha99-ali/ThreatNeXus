@@ -123,8 +123,11 @@ text overflow, spacing, and genuine visual polish.
 
 ## CI result
 
-See `docs/ai/STATE.yaml` `validation.ci` for current status — update this section once the push has been
-watched to a terminal result.
+Committed `40a97c9`, pushed. Run [31336812610](https://github.com/haiderchattha99-ali/ThreatNeXus/actions/runs/31336812610)
+— **all required jobs green on the first push**: frontend lint/tests/build, secrets scan,
+schema/migration, core evaluators, backend tests against real PostgreSQL, and the Chromium browser
+suite. Expected for a docs/assets-only change. "Mutation and concurrency gates" is manual-trigger-only
+and was not run — not required for this ticket.
 
 ## Honest gaps
 
