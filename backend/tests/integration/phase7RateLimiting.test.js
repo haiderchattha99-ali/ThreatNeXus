@@ -48,6 +48,7 @@ const prismaStub = {
   finding: { findUnique: async () => null, findFirst: async () => null },
   censysEnrichment: { create: async () => ({ id: 1 }) },
   greyNoiseEnrichment: { create: async () => ({ id: 1 }) },
+  shodanEnrichment: { create: async () => ({ id: 1 }) },
 };
 
 let app;
@@ -285,6 +286,28 @@ describe("Phase 7 — the provider-execution bucket", () => {
   it("Phase 8D — the GreyNoise route alone also bounds its own request rate", async () => {
     const send = () =>
       request(app).post("/api/findings/1/enrichment/greynoise").set(auth("ANALYST")).send({});
+
+    await send();
+    await send();
+    expect((await send()).status).toBe(429);
+  });
+
+  it("Phase 8E — counts the Shodan route in the SAME budget, not a fresh one", async () => {
+    // Same proof as Phase 8B's Censys case and Phase 8D's GreyNoise case,
+    // for the newer Shodan route.
+    await request(app).post("/api/findings/1/enrichment").set(auth("ADMIN")).send({});
+    await request(app).post("/api/findings/2/enrichment").set(auth("ADMIN")).send({});
+
+    const shodan = await request(app)
+      .post("/api/findings/1/enrichment/shodan")
+      .set(auth("ADMIN"))
+      .send({});
+    expect(shodan.status).toBe(429);
+  });
+
+  it("Phase 8E — the Shodan route alone also bounds its own request rate", async () => {
+    const send = () =>
+      request(app).post("/api/findings/1/enrichment/shodan").set(auth("ANALYST")).send({});
 
     await send();
     await send();

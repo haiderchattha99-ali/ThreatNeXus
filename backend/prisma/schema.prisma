@@ -1069,6 +1069,77 @@ model GreyNoiseEnrichment {
   @@index([indicator, queriedAt])
 }
 
+// ---------------------------------------------------------------------------
+// Phase 8E — Shodan exposed-service/banner/port intelligence for an IP.
+//
+// Its own table, not a bolt-on to CensysEnrichment: Shodan's payload
+// (hostnames, organization/ISP, geo, per-service product/version banners,
+// CVE identifiers) is a materially different shape from Censys's own
+// services/AS-ownership columns, the same reasoning that already keeps
+// GreyNoiseEnrichment separate from both. Deliberately NOT modelled on
+// IocEnrichment's queue either (no PENDING status, no lease columns) —
+// every row here is written once, already terminal, by a synchronous
+// human-triggered lookup (see shodanExecutionService.js). Keyed by
+// indicator only, mirroring CensysEnrichment/GreyNoiseEnrichment.
+//
+// Shodan is placed alongside Censys in the SAME dashboard "exposure"
+// provider domain (see operationalOverviewService.js) rather than getting
+// its own sibling array, unlike GreyNoise: Shodan's data — exposed
+// services, banners, open ports — is exactly the "internet exposure /
+// attack surface" domain Censys already defined, not a new one.
+// ---------------------------------------------------------------------------
+enum ShodanEnrichmentStatus {
+  SUCCESS
+  NOT_FOUND
+  RATE_LIMITED
+  INVALID_KEY
+  TIMEOUT
+  FAILED
+  UNSUPPORTED_INDICATOR
+  SKIPPED_DISABLED
+}
+
+model ShodanEnrichment {
+  id Int @id @default(autoincrement())
+
+  // Canonical indicator this attempt was for (strict dotted-quad IPv4, same
+  // rule IocEnrichment.indicator/CensysEnrichment.indicator/
+  // GreyNoiseEnrichment.indicator use).
+  indicator String
+  status    ShodanEnrichmentStatus
+
+  // Always the caller's explicit evaluation time — no wall-clock default,
+  // same rule every other provider result table in this schema follows.
+  queriedAt DateTime
+
+  // Transport/diagnostic context. errorCode is a closed vocabulary value;
+  // there is no raw-body column, so an upstream payload (and the API key
+  // Shodan's own query-string auth would otherwise risk exposing) has
+  // nowhere to land.
+  httpStatus        Int?
+  errorCode         String?
+  retryAfterSeconds Int?
+
+  // --- Normalized SUCCESS payload only (null for every other status) ------
+  // Only the allow-listed fields shodanProvider.js extracts land here —
+  // never the raw Shodan response body.
+  services        Json?
+  hostnames       Json?
+  organization    String?
+  isp             String?
+  country         String?
+  countryCode     String?
+  city            String?
+  vulnerabilities Json?
+  lastUpdate      String?
+  link            String?
+
+  createdAt DateTime @default(now())
+
+  // Freshest-lookup-for-this-indicator reads, and history in queriedAt order.
+  @@index([indicator, queriedAt])
+}
+
 // ===========================================================================
 // Phase 2 (P2-T3) — Deterministic, explainable, append-only risk scoring.
 //
@@ -2831,7 +2902,7 @@ model FindingAiSuggestion {
   // --- Decision projection --------------------------------------------------
   decidedAt       DateTime?
   decidedByUserId Int?
-  decidedBy       User?   @relation("FindingAiSuggestionDecidedBy", fields: [decidedByUserId], references: [id], onDelete: SetNull)
+  decidedBy       User?     @relation("FindingAiSuggestionDecidedBy", fields: [decidedByUserId], references: [id], onDelete: SetNull)
   // Bounded human text. Required by the service layer on REJECT, optional on
   // ACCEPT — same convention as AiFrameworkMappingSuggestion.decisionReason.
   decisionReason  String?

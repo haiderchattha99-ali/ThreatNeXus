@@ -72,6 +72,7 @@ function makeClient(overrides = {}) {
     vulnerabilityProviderResult: { groupBy: emptyGroup },
     censysEnrichment: { aggregate: vi.fn(async () => ({ _max: { queriedAt: null } })) },
     greyNoiseEnrichment: { aggregate: vi.fn(async () => ({ _max: { queriedAt: null } })) },
+    shodanEnrichment: { aggregate: vi.fn(async () => ({ _max: { queriedAt: null } })) },
   };
 
   return { ...base, ...overrides };
@@ -193,7 +194,7 @@ describe("operationalOverviewService — no live provider traffic", () => {
     // meaningful rather than vacuous — and it stays meaningful on a machine
     // with none, because a blank key is skipped rather than matched.
     const env = require("../../src/config/env");
-    for (const secret of [env.ABUSEIPDB_API_KEY, env.NVD_API_KEY, env.CENSYS_PAT, env.GREYNOISE_API_KEY]) {
+    for (const secret of [env.ABUSEIPDB_API_KEY, env.NVD_API_KEY, env.CENSYS_PAT, env.GREYNOISE_API_KEY, env.SHODAN_API_KEY]) {
       if (typeof secret === "string" && secret.length >= 8) {
         expect(serialized).not.toContain(secret);
         // Not even a leading fragment.

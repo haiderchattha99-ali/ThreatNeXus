@@ -268,6 +268,66 @@ record of what exists and where.
   `operationalOverviewService.test.js`/`riskFactorPressure.test.js` for the new `reputation` section.
   Backend suite: 2990 passed / 177 skipped, zero regressions.
 
+### Shodan — the fourth live provider (Phase 8E)
+
+- **Targets Shodan's REST API** (`api.shodan.io`, host-lookup endpoint `GET /shodan/host/{ip}`), authenticated
+  via a `key` query parameter — Shodan's own documented scheme, which has no header-based option (unlike
+  Censys's Bearer PAT or GreyNoise's `key` header). `SHODAN_API_KEY` is optional at startup — a missing key
+  only disables the provider (`SKIPPED_DISABLED`), never blocks the app. The request URL (which embeds the
+  key once a lookup fires) is never logged, printed, or included in any error, audit row, or test assertion
+  anywhere in this codebase — `shodanProvider.test.js` and `shodanEnrichmentRouteAuthorization.test.js` both
+  prove this directly.
+- **New adapter, no change to any existing provider or registry.** `shodanProvider.js` (self-contained,
+  mirrors `censysProvider.js`'s/`greyNoiseProvider.js`'s exact defensive shape: composed timeout+caller-signal,
+  every expected HTTP/transport outcome mapped to a normalized result, never throwing for an expected
+  outcome), `shodanTypes.js` (own closed status/error taxonomy, reusing the same
+  `PROVIDER_RATE_LIMITED`/`PROVIDER_INVALID_KEY`/`PROVIDER_TIMEOUT`/`PROVIDER_UNAVAILABLE`/
+  `PROVIDER_UNREACHABLE`/`PROVIDER_MALFORMED_RESPONSE`/`PROVIDER_REJECTED`/`UNSUPPORTED_INDICATOR`/
+  `ENRICHMENT_DISABLED` code vocabulary the rest of the app already speaks, plus a closed CVE-identifier
+  format guard — a `vulns` entry that doesn't match Shodan's own `CVE-YYYY-NNNN+` shape is dropped, never
+  passed through as an invented identifier), `shodanConfig.js` (bounds/defaults, mirrors
+  `censysConfig.js`/`greyNoiseConfig.js`). IPv4 only — this repository has no IPv6 indicator validator
+  anywhere to extend safely, so none was added speculatively for this one provider.
+- **Its own Prisma table (`ShodanEnrichment`), not a bolt-on to `CensysEnrichment`.** Shodan returns
+  hostnames, organization/ISP, geo, per-service product+version banners and CVE identifiers — a materially
+  different shape from Censys's services/AS-ownership columns, the same reasoning that already keeps
+  `GreyNoiseEnrichment` separate from both. Additive-only migration
+  (`20260807120000_add_phase8e_shodan_exposure_enrichment`), one enum + one table, no existing column
+  touched.
+- **No queue.** Deliberately NOT modelled on `IocEnrichment`'s PENDING/lease/retry/dead-letter lifecycle —
+  every row is written once, already terminal, by a synchronous, human-triggered lookup
+  (`shodanExecutionService.js`, `POST /api/findings/:id/enrichment/shodan`). This phase's explicit scope
+  excludes queues/schedulers.
+- **Same authorization and quota as every other provider route.** `GET .../enrichment/shodan` reuses
+  `read:findings`; `POST .../enrichment/shodan` reuses `trigger:finding-enrichment` (ADMIN/ANALYST only) and
+  the SAME `providerRateLimiter` budget IOC/CVE/Censys/GreyNoise enrichment already share — proven in
+  `phase7RateLimiting.test.js` ("Phase 8E — counts the Shodan route in the SAME budget, not a fresh one").
+  `phase7RouteCensus.test.js` (the structural route-authorization walk) covers both new routes automatically.
+- **Audit events**: `shodan.lookup.attempted`, `.succeeded`, `.failed`, `.unavailable`, `.rate_limited` —
+  actor/role (from `buildAuditContext`), provider id, terminal status, and the closed `errorCode` only, never
+  a raw upstream body, the API key, or the request URL.
+- **Dashboard/Settings.** Shodan joins `sections.providers.exposure` as a SECOND entry alongside Censys,
+  rather than getting its own sibling array the way GreyNoise did in Phase 8D: Shodan's data (exposed
+  services, banners, open ports) IS the "internet exposure / attack surface" domain that array already
+  represents, not a new one — `exposureProviders` was already an additive list (unlike `.ioc`, a config
+  CHOICE between mock/abuseipdb), so a second provider in the same domain belongs inside it. This needed
+  **zero frontend changes**: `Settings.jsx` and `DashboardSections.jsx`'s `ProviderFreshness` already spread
+  `...(providers.exposure || [])` generically, so Shodan appears the moment the backend adds it.
+- **Manual live smoke**: `backend/src/scripts/shodanLiveSmoke.js` (`npm run smoke:shodan`), opt-in via
+  `LIVE_SHODAN_SMOKE=1`, one lookup against `8.8.8.8` (Google Public DNS — permanent public infrastructure,
+  never a customer/victim asset), never prints credentials or the request URL, never runs in CI. Not executed
+  against the real Shodan API this session (not authorized).
+- Tests: `shodanProvider.test.js` (17 — construction with no credentials, unsupported indicator, query-param
+  key construction, success normalization including hostnames/org/isp/geo/services/CVEs, malformed-CVE
+  rejection, empty-host normalization without fabrication, 401/403/404/429/5xx/timeout/malformed/unreachable,
+  credential redaction), `shodanEnrichmentRouteAuthorization.test.js` (14 — full
+  route→controller→service→provider chain with a faked `globalThis.fetch`, capability matrix, 404/401
+  handling, audit pair, redaction), `phase8eShodanProviderEvidence.test.js` (8 — startup safety, registry
+  isolation, error-contract closure, CVE-format closure, shared-quota assertion, query-param auth design
+  pin, smoke-script guard), plus 2 new cases in `phase7RateLimiting.test.js` for the shared/own-budget proof
+  and extensions to `operationalOverviewService.test.js`/`riskFactorPressure.test.js` for the new Shodan
+  `shodanEnrichment.aggregate` stub.
+
 ### Finding-level AI assistance (Phase 8C)
 
 - **A second, independent AI suggestion domain, alongside Phase 5's ATT&CK mapping suggestions.**

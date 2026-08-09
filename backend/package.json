@@ -22,7 +22,8 @@
     "seed:demo": "node src/scripts/seedDemo.js",
     "smoke:nvd": "node src/scripts/nvdLiveSmoke.js",
     "smoke:censys": "node src/scripts/censysLiveSmoke.js",
-    "smoke:greynoise": "node src/scripts/greyNoiseLiveSmoke.js"
+    "smoke:greynoise": "node src/scripts/greyNoiseLiveSmoke.js",
+    "smoke:shodan": "node src/scripts/shodanLiveSmoke.js"
   },
   "keywords": [],
   "author": "",
