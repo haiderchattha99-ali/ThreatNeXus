@@ -52,7 +52,7 @@
                        "no_live_calls_in_tests":  "PASS - every Shodan test injects its own fetchImpl or fakes globalThis.fetch; phase8eShodanProviderEvidence.test.js proves the live-smoke script refuses to run without LIVE_SHODAN_SMOKE=1",
                        "live_smoke":  "NOT RUN - not authorized this session, per standing instruction",
                        "git_status":  "Diff is now debug-cruft-free; docs/codex/ untouched throughout",
-                       "ci":  "NOT YET PUSHED - see next_action"
+                       "ci":  "PASS - https://github.com/haiderchattha99-ali/ThreatNeXus/actions/runs/31314283404 (all required jobs green after one rerun: frontend lint/tests/build, secrets scan, schema/migration, core evaluators, backend-vs-real-Postgres, Chromium browser suite. The first attempt had one unrelated flake - tests/integration/reportIngestionConcurrency.test.js, a pre-existing real-Postgres timing-sensitive concurrency test this ticket never touched - confirmed by diff and by a clean pass on rerun with zero code changes. 'Mutation and concurrency gates' is manual-trigger-only, not required, not run)"
                    },
     "known_issues":  [
                          "Manual live Shodan smoke not run - awaiting explicit user authorization.",
@@ -60,8 +60,8 @@
                          "docs/codex/ remains untracked and untouched, per the one-writer boundary.",
                          "Local dev Postgres now has the 8D+8E migrations applied (was 2 migrations behind at session start) - this only affects this machine's dev DB, not CI or any shared environment."
                      ],
-    "next_action":  "Commit the cleaned-up diff, push feat/phase-8e-shodan-provider, and watch CI to green before releasing the writer lock. Recommended next phase after that: Netlas, following this exact same pattern.",
-    "checkpoint_ref":  "pending-commit",
-    "updated_at":  "2026-08-09T12:50:00.0000000Z",
+    "next_action":  "None required to close this ticket - CI is green. Recommended next: Netlas as the next live provider, following this exact same pattern.",
+    "checkpoint_ref":  "d4d85a9",
+    "updated_at":  "2026-08-09T12:56:00.0000000Z",
     "next_writer":  "unassigned"
 }

@@ -84,8 +84,19 @@ both.
 
 ## CI result
 
-Not yet pushed as of this checkpoint — see `docs/ai/STATE.yaml` `next_action`. The prior session never
-committed; this session cleaned the diff and verified it locally but has not yet pushed/watched CI.
+Committed `d4d85a9`, pushed. Run [31314283404](https://github.com/haiderchattha99-ali/ThreatNeXus/actions/runs/31314283404)
+— **all required jobs green after one rerun**: frontend lint/tests/build, secrets scan, schema/migration
+(including `migrate deploy from an empty database` and `No drift between schema and applied
+migrations`), core evaluators, backend tests against real PostgreSQL, and the Chromium browser suite.
+
+The first attempt had one failure: `tests/integration/reportIngestionConcurrency.test.js` — "6.
+concurrent overlapping reports observing the same Finding retain correct projections" — expected
+`PROCESSED`, got `FAILED`. This file was untouched by this commit (verified via `git diff HEAD~1 HEAD`
+before rerunning). Reran the failed job with zero code changes — clean pass. A real-Postgres
+timing-sensitive concurrency test flaking under CI's shared runner load, not a regression from this
+ticket.
+
+"Mutation and concurrency gates" is manual-trigger-only and was not run — not required for this ticket.
 
 ## Honest gaps
 
@@ -93,7 +104,8 @@ committed; this session cleaned the diff and verified it locally but has not yet
 - `F-drive start-task.ps1` throws against this repo's `STATE.yaml` schema — worked around, not fixed,
   same known gap as Phases 8B/8C/8C.1/8D.
 - `docs/codex/` remains untracked and untouched, per the one-writer boundary.
-- CI has not yet been run against this push — do not treat this ticket as closed until it's green.
+- `reportIngestionConcurrency.test.js` flaked once under CI load (see CI result above) — worth watching
+  if it recurs on a future ticket; not something this ticket introduced or fixed.
 
 ## Recommended next phase
 
