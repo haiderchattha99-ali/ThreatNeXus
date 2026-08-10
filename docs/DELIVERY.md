@@ -62,3 +62,16 @@ documentation.
 
 **Phase 9B** — presentation assets: a slide deck and, if wanted, a documentation-only placeholder for a
 showcase/landing page (no implementation in that scope unless separately authorized).
+
+## Phase 9C addendum — consolidated technical dossier
+
+Phase 9C (`docs/delivery/`) produced one synthesized, print-ready dossier —
+`ThreatNeXus-PKCERT-Technical-Dossier.md`/`.pdf` — reconciling this entire package plus the running
+codebase into a single document for a PKCERT technical reviewer: document control, an SRS with stable
+requirement IDs, architecture diagrams, a data model, the provider guide, AI governance, an installation
+manual, a proposed-production gap matrix, operations SOPs, testing/CI/security assurance, a user/admin
+guide, and appendices including the current API route catalogue (reconciled directly from
+`backend/src/routes/`, not from `docs/API_CONTRACT_PHASE0.md` alone). It is a consolidation, not a
+replacement — every individual document in the table above remains the deeper reference for its topic.
+See `docs/delivery/DOSSIER_BUILD_NOTES.md` for source reconciliation, design decisions, validation
+performed, and regeneration instructions.

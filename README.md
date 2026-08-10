@@ -84,6 +84,7 @@ This README is the entry point. The full delivery package lives in `docs/`:
 | [`docs/DELIVERY.md`](docs/DELIVERY.md) | The delivery-package index and validation record |
 | [`docs/presentation/ThreatNeXus-PKCERT-Deck.md`](docs/presentation/ThreatNeXus-PKCERT-Deck.md) ([.pptx](docs/presentation/ThreatNeXus-PKCERT-Deck.pptx)) | The PKCERT presentation deck, with speaker notes in [`docs/presentation/SPEAKER_NOTES.md`](docs/presentation/SPEAKER_NOTES.md) |
 | [`docs/presentation/DEMO_WALKTHROUGH.md`](docs/presentation/DEMO_WALKTHROUGH.md) | The detailed live-demo walkthrough this deck hands off into |
+| [`docs/delivery/ThreatNeXus-PKCERT-Technical-Dossier.md`](docs/delivery/ThreatNeXus-PKCERT-Technical-Dossier.md) ([PDF](docs/delivery/ThreatNeXus-PKCERT-Technical-Dossier.pdf)) | One consolidated, print-ready technical dossier for a PKCERT reviewer — reconciles all of the above into a single document with diagrams, an SRS, a production-readiness gap matrix, and an API/capability appendix |
 
 > A screenshot/visual tour of the frontend is planned but not yet captured — see
 > [`docs/presentation/SCREENSHOT_PLAN.md`](docs/presentation/SCREENSHOT_PLAN.md) for the exact shot list
