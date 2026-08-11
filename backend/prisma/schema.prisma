@@ -105,6 +105,11 @@ model User {
   // User nulls the attribution instead of destroying the suggestion history.
   findingAiSuggestionsRequested FindingAiSuggestion[] @relation("FindingAiSuggestionRequestedBy")
   findingAiSuggestionsDecided   FindingAiSuggestion[] @relation("FindingAiSuggestionDecidedBy")
+
+  // Phase 10A-1 — same SetNull-actor convention. Only a MANUAL run carries an
+  // actor; an INGESTION run leaves actorUserId null rather than attributing
+  // system work to a real person.
+  enrichmentRunsRequested FindingEnrichmentRun[] @relation("EnrichmentRunActor")
 }
 
 model Threat {
@@ -443,6 +448,9 @@ model RawReport {
   rows        RawReportRow[]
   occurrences FindingOccurrence[]
 
+  // Phase 10A-1 — provenance for an INGESTION-triggered enrichment run.
+  enrichmentRuns FindingEnrichmentRun[]
+
   @@index([reportType, ingestedAt])
   @@index([status])
 }
@@ -535,6 +543,12 @@ model Finding {
   // history table hanging off Finding: a suggestion record must never be
   // orphaned by deleting the Finding it was drafted about.
   aiSuggestions FindingAiSuggestion[]
+
+  // Phase 10A-1 — virtual back-relations only, no column on Finding. Both use
+  // onDelete: Restrict on their own side: an orchestration record must never be
+  // orphaned by deleting the Finding it was created for.
+  enrichmentRuns     FindingEnrichmentRun[]
+  enrichmentRunItems FindingEnrichmentRunItem[]
 
   // The locked identity key. Its index also covers indicatorValue-prefixed
   // lookups, so no separate indicatorValue index is added.
@@ -935,6 +949,11 @@ model IocEnrichment {
   deadLetteredAt     DateTime?
   terminalReasonCode String?
 
+  // Phase 10A-1 — virtual back-relation only. A Phase-10 lookup job may DELEGATE
+  // AbuseIPDB work to a row in this table; this table's own state machine,
+  // semantics and ADMIN batch behaviour are completely unchanged by that.
+  phase10LookupJobs ProviderLookupJob[]
+
   // Fresh-cache lookup: newest unexpired terminal row for one cacheKey.
   @@index([cacheKey, status, expiresAt])
   // Pending-work lookup, in deterministic requestedAt order.
@@ -1008,6 +1027,13 @@ model CensysEnrichment {
   createdAt DateTime @default(now())
 
   // Freshest-lookup-for-this-indicator reads, and history in queriedAt order.
+
+  // Phase 10A-1 — virtual back-relation only. A Phase-10 lookup job that
+  // executes this provider itself (Phase 10A-2) links the evidence row it
+  // wrote. This table is otherwise unchanged, including for rows written by
+  // the preserved synchronous expert endpoint.
+  phase10LookupJobs ProviderLookupJob[]
+
   @@index([indicator, queriedAt])
 }
 
@@ -1066,6 +1092,13 @@ model GreyNoiseEnrichment {
   createdAt DateTime @default(now())
 
   // Freshest-lookup-for-this-indicator reads, and history in queriedAt order.
+
+  // Phase 10A-1 — virtual back-relation only. A Phase-10 lookup job that
+  // executes this provider itself (Phase 10A-2) links the evidence row it
+  // wrote. This table is otherwise unchanged, including for rows written by
+  // the preserved synchronous expert endpoint.
+  phase10LookupJobs ProviderLookupJob[]
+
   @@index([indicator, queriedAt])
 }
 
@@ -1137,6 +1170,13 @@ model ShodanEnrichment {
   createdAt DateTime @default(now())
 
   // Freshest-lookup-for-this-indicator reads, and history in queriedAt order.
+
+  // Phase 10A-1 — virtual back-relation only. A Phase-10 lookup job that
+  // executes this provider itself (Phase 10A-2) links the evidence row it
+  // wrote. This table is otherwise unchanged, including for rows written by
+  // the preserved synchronous expert endpoint.
+  phase10LookupJobs ProviderLookupJob[]
+
   @@index([indicator, queriedAt])
 }
 
@@ -1216,6 +1256,13 @@ model NetlasEnrichment {
   createdAt DateTime @default(now())
 
   // Freshest-lookup-for-this-indicator reads, and history in queriedAt order.
+
+  // Phase 10A-1 — virtual back-relation only. A Phase-10 lookup job that
+  // executes this provider itself (Phase 10A-2) links the evidence row it
+  // wrote. This table is otherwise unchanged, including for rows written by
+  // the preserved synchronous expert endpoint.
+  phase10LookupJobs ProviderLookupJob[]
+
   @@index([indicator, queriedAt])
 }
 
@@ -1586,6 +1633,14 @@ model VulnerabilityEnrichmentJob {
   updatedAt DateTime @updatedAt
 
   providerResults VulnerabilityProviderResult[]
+
+  // Phase 10A-1 — virtual back-relation only. A Phase-10 lookup job may DELEGATE
+  // NVD work to a row here, and only when an ACTIVE, ANALYST_VERIFIED
+  // FindingVulnerability association already exists. This table's own state
+  // machine and ADMIN batch behaviour are unchanged; Phase 10A-2 deliberately
+  // does NOT make these jobs worker-eligible (the runner calls three providers
+  // per job plus a per-batch KEV catalogue fetch, which needs its own hook).
+  phase10LookupJobs ProviderLookupJob[]
 
   // Retry-eligible pending work, in deterministic requestedAt order.
   @@index([status, nextAttemptAt, requestedAt])
@@ -2991,4 +3046,460 @@ model FindingAiSuggestion {
   @@index([findingId, status])
   @@index([findingId, suggestionType])
   @@index([findingId, createdAt])
+}
+
+// ===========================================================================
+// Phase 10A-1 — inert enrichment-orchestration foundation.
+//
+// Additive only: five new models, nine new enums, and virtual back-relations
+// on Finding, User, RawReport, IocEnrichment, VulnerabilityEnrichmentJob and
+// the four Phase-8 evidence models. No existing column is altered.
+//
+// ---------------------------------------------------------------------------
+// What this milestone does and does NOT do
+// ---------------------------------------------------------------------------
+// It records ORCHESTRATION INTENT durably. It executes nothing. There is no
+// worker, no provider call and no quota reservation, and no
+// ProviderLookupAttempt or ProviderDailyUsage row is written anywhere in
+// Phase 10A-1 — those two models exist so the schema is complete and their
+// constraints are provable before any code can spend provider quota (10A-2).
+//
+// ---------------------------------------------------------------------------
+// The separation this design exists to express
+// ---------------------------------------------------------------------------
+//   FindingEnrichmentRun      one Finding's ASK
+//   FindingEnrichmentRunItem  that Finding's per-(provider, subject) DECISION
+//   ProviderLookupJob         the outbound WORK, which several run items —
+//                             from several runs, for several Findings — may
+//                             share when provider + subject + query identity
+//                             are equal
+//
+// Ten Findings on one IP therefore produce ten run items and ONE lookup job.
+// Request deduplication (idempotencyKey) and work deduplication
+// (activeLookupKey) are deliberately separate mechanisms: collapsing them is
+// what made an AbuseIPDB run silently suppress a later Censys request.
+//
+// ---------------------------------------------------------------------------
+// CHECK constraints live in the migration SQL, not in this file
+// ---------------------------------------------------------------------------
+// Prisma does not model CHECK constraints. SEVEN of them are hand-written into
+// 20260811162611_add_phase10a1_enrichment_orchestration/migration.sql and are
+// proven by real-PostgreSQL tests — eight independent rejection proofs across
+// the seven, because the result-link constraint rejects both "two typed links
+// at once" and "a typed link that disagrees with provider". `prisma migrate
+// diff --exit-code` stays clean because Prisma cannot see them — so a future
+// `prisma format` or a regenerated migration MUST re-add them. Do not remove
+// them silently.
+// ===========================================================================
+
+// What a lookup is ABOUT. Deliberately not called an "indicator": NVD's
+// subject is a CVE identifier, which is not an indicator of compromise.
+// IocIndicatorType is left untouched — it means what it has always meant.
+enum EnrichmentSubjectType {
+  IPV4
+  CVE
+}
+
+enum EnrichmentRunTrigger {
+  INGESTION
+  MANUAL
+}
+
+// Recomputed from the run's items; never assigned directly. SKIPPED means no
+// item was ELIGIBLE.
+enum EnrichmentRunState {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  PARTIAL
+  FAILED
+  SKIPPED
+}
+
+// The applicability router's closed output for one (provider, subject) pair.
+// Every SKIPPED_* value here is a POLICY decision made before any work exists,
+// so it creates NO ProviderLookupJob at all.
+enum RunItemDecision {
+  ELIGIBLE
+  SKIPPED_CACHED
+  SKIPPED_DISABLED
+  SKIPPED_NOT_CONFIGURED
+  SKIPPED_NOT_APPLICABLE
+  SKIPPED_UNSUPPORTED_SUBJECT
+  // Routing-time budget refusal: the configured automatic budget is known to
+  // be 0, so no job is created and no reservation is ever attempted. This is
+  // structurally different from ProviderLookupJobState.SKIPPED_BUDGET, which
+  // means an already-created eligible job had its execution-time atomic
+  // reservation refused.
+  SKIPPED_BUDGET
+  // The provider's execution path does not exist yet (Phase 10A-1 executes
+  // nothing; NVD delegates additionally require the ADMIN vulnerability batch
+  // through Phase 10A-2). Honest, and never conflated with "disabled".
+  SKIPPED_EXECUTION_UNAVAILABLE
+}
+
+enum LookupJobTrigger {
+  // Created by a run for a provider whose work is delegated to an existing
+  // queue (abuseipdb -> IocEnrichment, nvd -> VulnerabilityEnrichmentJob).
+  RUN_DELEGATED
+  // Created by a run for a provider Phase 10 executes itself (Phase 10A-2).
+  RUN_DIRECT
+  // Created by a preserved synchronous expert endpoint (Phase 10A-2). Never
+  // holds an activeLookupKey, so it never coalesces with queued work and the
+  // existing "each POST performs its own lookup" contract is unchanged.
+  MANUAL_DIRECT
+}
+
+// Non-terminal: PENDING, LEASED, RETRY_WAIT, WAITING_ON_DELEGATE.
+// Everything else is terminal.
+//
+// RATE_LIMITED is deliberately ABSENT: being rate limited is an ATTEMPT
+// outcome, not a job state. A rate-limited attempt routes to RETRY_WAIT while
+// budget remains and to FAILED once it does not, so FAILED is terminal only
+// and never re-enters the queue.
+enum ProviderLookupJobState {
+  PENDING
+  LEASED
+  RETRY_WAIT
+  // The delegate queue owns execution; this job waits until the delegate
+  // reaches a terminal state. There is NO timeout that forces it terminal:
+  // "the delegate has not finished" is the truth, and inventing an outcome
+  // would be fabrication.
+  WAITING_ON_DELEGATE
+  SUCCEEDED
+  // The provider answered "no record". Evidence that no record exists — NOT
+  // evidence that a host, service or vulnerability is absent.
+  NO_RECORD
+  FAILED
+  DEAD_LETTER
+  // The three skip states below are NORMALIZED EXECUTOR OR DELEGATE RESULTS,
+  // never policy decisions. Policy skips live on FindingEnrichmentRunItem and
+  // create no job.
+  SKIPPED_DISABLED
+  SKIPPED_NOT_CONFIGURED
+  SKIPPED_UNSUPPORTED_SUBJECT
+  // Execution-time budget refusal: this job WAS created eligible, but its
+  // atomic ProviderDailyUsage reservation was refused at execution time. The
+  // eligible run item stays linked to it, which is how the run aggregate can
+  // tell "we never asked" (item decision) from "we asked and were refused"
+  // (job state).
+  SKIPPED_BUDGET
+}
+
+// Which budget an outbound call is charged against. Fixed at job creation from
+// the run's trigger and never changed.
+enum QuotaLane {
+  AUTOMATIC
+  MANUAL
+}
+
+// An attempt cannot know its outcome at reservation time. It is created
+// RESERVED inside the reservation transaction, becomes IN_FLIGHT immediately
+// before the provider call, and is FINISHED exactly once afterwards.
+enum AttemptState {
+  RESERVED
+  IN_FLIGHT
+  FINISHED
+}
+
+enum AttemptOutcome {
+  SUCCESS
+  NOT_FOUND
+  RATE_LIMITED
+  TIMEOUT
+  TRANSPORT_ERROR
+  SERVER_ERROR
+  INVALID_KEY
+  DISABLED
+  UNSUPPORTED_SUBJECT
+  // Failed local validation before any reservation was taken, so it consumed
+  // no quota and contactedProvider stays false.
+  LOCAL_VALIDATION_ERROR
+  // The ONLY outcome written by a sweep rather than by an observed result. Its
+  // name says so: the process died between reservation and finalization, and
+  // contactedProvider is preserved exactly as it was recorded.
+  ABANDONED
+}
+
+// One Finding-scoped enrichment ask.
+//
+// There is deliberately NO activeRunKey. Keying an "active run" on findingId
+// alone made an in-flight AbuseIPDB run suppress a later manual Censys request
+// for the same Finding. Several differently-scoped runs may coexist; duplicate
+// OUTBOUND WORK is prevented by ProviderLookupJob.activeLookupKey, which is a
+// separate concern with a separate mechanism.
+model FindingEnrichmentRun {
+  id Int @id @default(autoincrement())
+
+  findingId Int
+  finding   Finding @relation(fields: [findingId], references: [id], onDelete: Restrict)
+
+  trigger EnrichmentRunTrigger
+  state   EnrichmentRunState   @default(PENDING)
+
+  // Always the caller's explicit evaluation time — no wall-clock default, the
+  // same rule every other table in this schema follows.
+  requestedAt DateTime
+  completedAt DateTime?
+
+  // Whether this ask bypassed freshness. Part of requestScopeHash, so a forced
+  // ask never collapses into a non-forced one.
+  force Boolean @default(false)
+
+  // sha256 over (findingId, trigger, force, sorted unique (provider,
+  // subjectType, subjectValue) triples). Two asks with the same scope are the
+  // same ask.
+  requestScopeHash String
+
+  // INGESTION: "ing:<rawReportId>:<requestScopeHash>"
+  // MANUAL:    "man:<requestScopeHash>:<time bucket | hashed Idempotency-Key>"
+  // A caller-supplied Idempotency-Key is validated and hashed before it gets
+  // here; the raw header value is never persisted, logged, audited or returned.
+  idempotencyKey String @unique
+
+  rawReportId Int?
+  rawReport   RawReport? @relation(fields: [rawReportId], references: [id], onDelete: Restrict)
+
+  // null for INGESTION — attributing system work to a real user would be a
+  // false attribution, the same convention SYSTEM_ACTOR_CONTEXT already uses.
+  actorUserId Int?
+  actor       User? @relation("EnrichmentRunActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  items FindingEnrichmentRunItem[]
+
+  @@index([findingId, requestedAt])
+  @@index([state, requestedAt])
+  @@index([rawReportId])
+}
+
+// One run's decision about one (provider, subject) pair.
+//
+// The item carries NO status column. Its observed status is either its own
+// terminal `decision` (for a policy skip) or its linked job's state (for an
+// ELIGIBLE item). One copy of the truth, so nothing can drift.
+model FindingEnrichmentRunItem {
+  id Int @id @default(autoincrement())
+
+  runId Int
+  run   FindingEnrichmentRun @relation(fields: [runId], references: [id], onDelete: Restrict)
+
+  // Denormalized so the Finding-scoped read path never has to traverse a
+  // shared job to find out which Findings it belongs to.
+  findingId Int
+  finding   Finding @relation(fields: [findingId], references: [id], onDelete: Restrict)
+
+  // Lowercase provider identifier — a String, not an enum, for the same reason
+  // IocEnrichment.provider is one (D-007): adding a provider must not require
+  // a migration.
+  provider String
+
+  subjectType  EnrichmentSubjectType
+  // Canonical form: strict dotted-quad IPv4, or canonical uppercase CVE-Y-N.
+  // Canonicalized BEFORE any hashing or uniqueness decision.
+  subjectValue String
+
+  decision   RunItemDecision
+  // Closed vocabulary (enrichmentDecisionCodes.js). Null when ELIGIBLE, and
+  // never free text, an exception message or a provider string.
+  skipReason String?
+
+  // Null for every skipped decision; required for ELIGIBLE. Enforced by a
+  // CHECK constraint, not only by the service.
+  lookupJobId Int?
+  lookupJob   ProviderLookupJob? @relation(fields: [lookupJobId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+
+  // One decision per (run, provider, subject). A Finding with three verified
+  // CVEs therefore produces three distinct NVD items rather than collapsing
+  // them into one.
+  @@unique([runId, provider, subjectType, subjectValue])
+  @@index([lookupJobId])
+  @@index([findingId, provider])
+}
+
+// The shared unit of outbound work. Created only when a run item is ELIGIBLE.
+model ProviderLookupJob {
+  id Int @id @default(autoincrement())
+
+  provider     String
+  subjectType  EnrichmentSubjectType
+  subjectValue String
+
+  // sha256 over (provider, subjectType, canonical subjectValue, allow-listed
+  // normalized queryParams). subjectType is INSIDE the hash, so an IPv4 and a
+  // CVE can never collide.
+  queryIdentityHash String
+
+  state   ProviderLookupJobState
+  lane    QuotaLane
+  trigger LookupJobTrigger
+
+  requestedAt DateTime
+  completedAt DateTime?
+
+  // Carries queryIdentityHash while the job is non-terminal, null once
+  // terminal. PostgreSQL treats multiple NULLs in a unique index as distinct,
+  // so unlimited terminal history rows coexist while at most one job per
+  // identity is active. Same mechanism as IocEnrichment.activeCacheKey (D-007)
+  // and FindingOwnership.currentForFindingId (D-006). No raw SQL, no partial
+  // index. THIS SINGLE COLUMN IS THE WHOLE CROSS-FINDING DEDUP GUARANTEE.
+  activeLookupKey String? @unique
+
+  // --- Lease (unused in Phase 10A-1; no worker exists) ---------------------
+  // claimToken is the ONLY completion credential; updatedAt is never used as a
+  // concurrency version token.
+  claimedAt      DateTime?
+  leaseExpiresAt DateTime?
+  claimToken     String?
+
+  attemptCount  Int       @default(0)
+  maxAttempts   Int       @default(3)
+  nextAttemptAt DateTime?
+  lastAttemptAt DateTime?
+
+  deadLetteredAt     DateTime?
+  terminalReasonCode String?
+
+  // Last attempt's transport context. There is deliberately NO errorMessage
+  // column and NO raw-body column, so a provider payload or an exception
+  // string has nowhere to land.
+  httpStatus        Int?
+  errorCode         String?
+  retryAfterSeconds Int?
+
+  queriedAt  DateTime?
+  // Gives the four Phase-8 providers TTL semantics without altering their
+  // tables, which carry no expiresAt column.
+  freshUntil DateTime?
+
+  // --- Typed result links --------------------------------------------------
+  // Six nullable typed foreign keys rather than one polymorphic
+  // (table, rowId) string pair: an unvalidated string pointer has no
+  // referential integrity, and two CHECK constraints keep at most one set and
+  // force it to match `provider`.
+  //
+  // The first two are DELEGATE links (an existing queue owns execution); the
+  // last four are EVIDENCE links (Phase 10 writes the row itself, in 10A-2).
+  iocEnrichmentId Int?
+  iocEnrichment   IocEnrichment? @relation(fields: [iocEnrichmentId], references: [id], onDelete: Restrict)
+
+  vulnerabilityEnrichmentJobId Int?
+  vulnerabilityEnrichmentJob   VulnerabilityEnrichmentJob? @relation(fields: [vulnerabilityEnrichmentJobId], references: [id], onDelete: Restrict)
+
+  censysEnrichmentId Int?
+  censysEnrichment   CensysEnrichment? @relation(fields: [censysEnrichmentId], references: [id], onDelete: Restrict)
+
+  greyNoiseEnrichmentId Int?
+  greyNoiseEnrichment   GreyNoiseEnrichment? @relation(fields: [greyNoiseEnrichmentId], references: [id], onDelete: Restrict)
+
+  shodanEnrichmentId Int?
+  shodanEnrichment   ShodanEnrichment? @relation(fields: [shodanEnrichmentId], references: [id], onDelete: Restrict)
+
+  netlasEnrichmentId Int?
+  netlasEnrichment   NetlasEnrichment? @relation(fields: [netlasEnrichmentId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  runItems FindingEnrichmentRunItem[]
+  attempts ProviderLookupAttempt[]
+
+  // Retry-eligible pending work, in deterministic requestedAt order.
+  @@index([state, nextAttemptAt, requestedAt])
+  // Expired-lease recovery.
+  @@index([state, leaseExpiresAt])
+  // Delegate reconciliation scan.
+  @@index([state, provider])
+  // Freshness lookup for one subject.
+  @@index([provider, subjectType, subjectValue, queriedAt])
+}
+
+// Immutable-after-finalization ledger: ONE ROW PER OUTBOUND ATTEMPT.
+//
+// This is what makes "retries consume quota once per outbound call" provable.
+// Counting jobs by claimedAt could not: claimedAt is overwritten on every
+// claim, so three retries would look like one call while spending three units
+// of real quota.
+//
+// Phase 10A-1 writes NO row here. The model and its constraints exist so the
+// accounting contract is provable before any code can spend quota.
+model ProviderLookupAttempt {
+  id Int @id @default(autoincrement())
+
+  // Always non-null. A synchronous expert call creates its own MANUAL_DIRECT
+  // job (Phase 10A-2) precisely so this stays referentially valid rather than
+  // being weakened to a nullable column for one caller class.
+  lookupJobId Int
+  lookupJob   ProviderLookupJob @relation(fields: [lookupJobId], references: [id], onDelete: Restrict)
+
+  // Denormalized so a usage query never has to join.
+  provider String
+  lane     QuotaLane
+
+  // Equals the job's attemptCount after the claim that authorized this
+  // attempt. A job is claimed by exactly one worker, so this is naturally
+  // unique; the composite unique below is the backstop, not the mechanism.
+  attemptNumber Int
+
+  // The UTC day this attempt reserved against — the day the call actually
+  // happens, which is the only day a provider could attribute it to.
+  usageDate DateTime @db.Date
+
+  state AttemptState @default(RESERVED)
+
+  // False at insert. Becomes true immediately BEFORE the provider call, so a
+  // crash between reservation and fetch is distinguishable from a crash during
+  // one. A local validation failure never reserves and stays false forever.
+  contactedProvider Boolean @default(false)
+
+  startedAt      DateTime
+  fetchStartedAt DateTime?
+  finishedAt     DateTime?
+
+  // Null until finalization. A CHECK constraint keeps outcome/finishedAt and
+  // state = FINISHED consistent in both directions.
+  outcome AttemptOutcome?
+
+  httpStatus        Int?
+  errorCode         String?
+  retryAfterSeconds Int?
+
+  createdAt DateTime @default(now())
+
+  @@unique([lookupJobId, attemptNumber])
+  @@index([provider, usageDate, lane])
+  @@index([state, startedAt])
+}
+
+// Atomic per-(provider, day, lane) reservation bucket.
+//
+// Reservation is a single INSERT ... SELECT ... WHERE ... ON CONFLICT DO
+// UPDATE ... WHERE statement, so concurrent workers cannot both take the last
+// unit. There is NO decrement and NO refund path, which is why there is no
+// refund race to defend against.
+//
+// Phase 10A-1 writes NO row here.
+model ProviderDailyUsage {
+  provider  String
+  usageDate DateTime  @db.Date
+  lane      QuotaLane
+
+  reservedCount Int @default(0)
+
+  // INFORMATIONAL ONLY. The reservation statement enforces the LIVE configured
+  // limit, never this column, so a mid-day configuration change takes effect
+  // immediately and the usage API can report the same policy the query
+  // enforces. Recording it separately keeps the history honest without letting
+  // it become a second, divergent source of truth.
+  limitAtLastReservation Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@id([provider, usageDate, lane])
+  @@index([usageDate, lane])
 }

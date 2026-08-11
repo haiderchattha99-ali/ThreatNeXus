@@ -154,6 +154,7 @@ jobs:
             20260807110000_add_phase8d_greynoise_reputation_enrichment
             20260807120000_add_phase8e_shodan_exposure_enrichment
             20260807130000_add_phase8f_netlas_exposure_enrichment
+            20260811162611_add_phase10a1_enrichment_orchestration
           )
           expected="$(printf '%s\n' "${expected_migrations[@]}")"
           actual="$(find prisma/migrations -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort)"

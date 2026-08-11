@@ -59,6 +59,10 @@ const {
   DEFAULT_MAX_ATTEMPTS: VULNERABILITY_DEFAULT_MAX_ATTEMPTS,
   validateMaxAttempts: validateVulnerabilityMaxAttempts,
 } = require("../services/vulnerability/vulnerabilityConfig");
+const {
+  EnrichmentOrchestrationConfigError,
+  resolveOrchestrationConfig,
+} = require("../services/enrichmentOrchestration/enrichmentOrchestrationConfig");
 
 // Loading a developer's .env is right for running the app and wrong for running
 // the tests. The automated suite constructs its own environment explicitly (see
@@ -433,6 +437,25 @@ function buildConfig() {
     );
   }
 
+  // Phase 10A-1 — enrichment orchestration. Two independent default-OFF
+  // switches plus per-provider daily budgets, all resolved and validated
+  // through enrichmentOrchestrationConfig.js so the bounds live in one place.
+  //
+  // Every AUTOMATIC budget defaults to 0 and every MANUAL budget defaults to
+  // null (unlimited). That is deliberate belt-and-braces: even an operator who
+  // turns AUTO_ENRICHMENT_ENABLED on cannot spend a single unit of automatic
+  // third-party quota without also raising a budget on purpose.
+  let orchestrationConfig;
+  try {
+    orchestrationConfig = resolveOrchestrationConfig(process.env);
+  } catch (err) {
+    throw new ConfigError(
+      err instanceof EnrichmentOrchestrationConfigError
+        ? err.message
+        : `Invalid enrichment orchestration configuration: ${err.message}`
+    );
+  }
+
   // Declared, not consumed by anything: no code reads this value — the TTL
   // policy (enrichmentTtlPolicy.js) is a pure module configured through
   // explicit policy input, never through the environment.
@@ -525,6 +548,17 @@ function buildConfig() {
     // Phase 5 — declared, not consumed by anything in Phase 0. Off by default.
     AI_ENABLED: (process.env.AI_ENABLED || "false").trim().toLowerCase() === "true",
     AI_PROVIDER: process.env.AI_PROVIDER || "null",
+
+    // Phase 10A-1 — enrichment orchestration. Both switches default to false.
+    // With AUTO_ENRICHMENT_ENABLED=false, report ingestion behaves exactly as
+    // it did before this milestone: the existing IocEnrichment row is still
+    // created and NO Phase-10 run, item, job, attempt or usage row exists.
+    // ENRICHMENT_WORKER_ENABLED is declared and validated but consumed by
+    // nothing in 10A-1 — there is no worker to enable.
+    AUTO_ENRICHMENT_ENABLED: orchestrationConfig.AUTO_ENRICHMENT_ENABLED,
+    ENRICHMENT_WORKER_ENABLED: orchestrationConfig.ENRICHMENT_WORKER_ENABLED,
+    ENRICHMENT_AUTOMATIC_DAILY_BUDGETS: orchestrationConfig.automaticDailyBudgets,
+    ENRICHMENT_MANUAL_DAILY_BUDGETS: orchestrationConfig.manualDailyBudgets,
   });
 }
 
