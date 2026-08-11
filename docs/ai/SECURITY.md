@@ -88,7 +88,7 @@ Three independent fixed-window buckets (`src/middleware/rateLimit.js`, wired in
 | Bucket | Covers | Default |
 |---|---|---|
 | `auth` | `POST /api/auth/login` and `/register`, counted together | 30 / 15 min |
-| `upload` | `POST /api/reports/accessible-rdp` | 20 / 15 min |
+| `upload` | `POST /api/reports/upload` | 20 / 15 min |
 | `provider` | IOC enrichment, CVE enrichment, both batch workers, and an AI suggestion generation run — one shared budget | 60 / 15 min |
 
 - Authenticated callers are counted per user id, so one busy analyst cannot deny service to the

@@ -103,6 +103,40 @@ export const findingService = {
   getFinding: (id) => apiClient.get(`/findings/${id}`),
 }
 
+// The canonical, evidence-backed report-ingestion contract.
+//
+// POST /api/reports/upload is the ONLY route that runs the real pipeline:
+// structural parsing, per-row validation, normalized file identity and
+// idempotency, immutable RawReport/RawReportRow evidence, Finding
+// dedup/persistence/recurrence, ownership resolution, enrichment scheduling,
+// risk recalculation and the audit trail. Everything an analyst later sees in
+// Findings, in a case, or in the operational overview exists because this
+// route created it.
+//
+// threatService.uploadCSV below posts to the LEGACY /threats/upload route,
+// which writes standalone Threat rows and creates no Finding, no RawReport,
+// no occurrence history and no ingestion audit event. The analyst ingestion
+// screen called it until this ticket, which is why an upload could report
+// "Report processed" while producing nothing the Findings workspace could
+// show. The legacy route is left mounted and untouched — this contract simply
+// no longer routes the analyst workflow through it.
+//
+// `source`, `reportType` and `schemaVersion` are server-decided in the
+// controller and read from no request field. Nothing is sent here beyond the
+// file itself, so the browser cannot claim a provider, report type or schema
+// version it was not given.
+export const reportIngestionService = {
+  uploadReport: (file) => {
+    const formData = new FormData()
+    formData.append('file', file)
+    return apiClient.post('/reports/upload', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    })
+  },
+}
+
 export const threatService = {
   getThreats: (params) => apiClient.get('/threats', { params }),
   searchThreats: (query) => apiClient.get('/threats/search', { params: { q: query } }),
