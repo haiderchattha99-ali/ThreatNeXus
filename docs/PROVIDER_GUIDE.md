@@ -171,12 +171,18 @@ is not an indicator of compromise.
 
 | Provider | Subject type | Execution in Phase 10 |
 |---|---|---|
-| `abuseipdb` | IPv4 only | **Delegated** — links the existing `IocEnrichment` row created by ingestion; the ADMIN IOC batch still executes it. |
+| `abuseipdb` | IPv4 only | **Delegated** — the `IocEnrichment` delegate is created-or-found through the existing `enrichmentQueueService` (never a second copy of its queue logic) and linked; the ADMIN IOC batch still executes it. |
 | `greynoise` | IPv4 only | Direct (Phase 10A-2). Job is created and left non-terminal in 10A-1. |
 | `censys` | IPv4 only | Direct (Phase 10A-2). |
 | `shodan` | IPv4 only | Direct (Phase 10A-2). |
 | `netlas` | IPv4 only | Direct (Phase 10A-2). |
-| `nvd` | CVE only | **Delegated** — links the existing `VulnerabilityEnrichmentJob`; NVD results still require the ADMIN vulnerability batch, which 10A-2 deliberately does not make worker-eligible. |
+| `nvd` | CVE only | **Delegated** — the `VulnerabilityEnrichmentJob` delegate is created-or-found through the existing `vulnerabilityQueueService` and linked; NVD results still require the ADMIN vulnerability batch, which 10A-2 deliberately does not make worker-eligible. |
+
+A `RUN_DELEGATED` `ProviderLookupJob` is **never** created without exactly one delegate FK. If the
+canonical queue service reports a fresh answer already on file, the run item records
+`SKIPPED_CACHED`; if it refuses or fails, the item records `SKIPPED_EXECUTION_UNAVAILABLE`. In both
+cases no job is created — a delegated job with nothing to wait on could never reach a terminal state
+and would hold `activeLookupKey` against every future ask about that subject.
 
 Subject values are canonicalized **before** any hashing or uniqueness decision: strict dotted-quad
 IPv4 (leading zeros, CIDR suffixes, IPv6 and hostnames are rejected, never coerced) and canonical

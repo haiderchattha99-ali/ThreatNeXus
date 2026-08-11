@@ -5,9 +5,21 @@
 // input, delegate every decision to a service, map service errors onto a safe
 // response. No orchestration logic lives here.
 //
-// The run-creation endpoint answers 202 Accepted, not 200. That is the honest
-// status: the request has been RECORDED, and nothing has been executed — in
-// this milestone nothing ever will be, because no worker exists.
+// ---------------------------------------------------------------------------
+// Status codes follow the OUTCOME, not the verb
+// ---------------------------------------------------------------------------
+//   202 Accepted + CREATED          a new run was recorded AND it has eligible
+//                                   work. 202, not 200: recorded, not executed.
+//   200 OK       + ALREADY_RUNNING  an idempotent replay, or the loser of a
+//                                   concurrent race. The EXISTING run is
+//                                   returned; nothing new was accepted.
+//   200 OK       + SKIPPED          a new run was recorded and every target was
+//                                   refused by policy. There is no work to
+//                                   accept, so 202 would overstate it.
+//
+// The outcome is decided by the service (RUN_REQUEST_OUTCOMES) and only mapped
+// to a status here, so the HTTP contract and the durable record can never
+// disagree about what happened.
 //
 // ---------------------------------------------------------------------------
 // Idempotency-Key handling
@@ -28,6 +40,7 @@ const {
 const { EnrichmentSubjectError } = require("../services/enrichmentOrchestration/enrichmentSubject");
 const {
   RUN_TRIGGERS,
+  RUN_REQUEST_OUTCOMES,
 } = require("../services/enrichmentOrchestration/enrichmentDecisionCodes");
 const {
   EnrichmentRunValidationError,
@@ -89,11 +102,9 @@ exports.createFindingEnrichmentRun = async (req, res) => {
       auditContext: buildAuditContext(req),
     });
 
-    // 202: recorded, not executed. `created` distinguishes a new run from an
-    // idempotent replay so a client can tell the difference without guessing.
-    return res.status(202).json({
+    return res.status(outcome.outcome === RUN_REQUEST_OUTCOMES.CREATED ? 202 : 200).json({
       success: true,
-      created: outcome.created,
+      outcome: outcome.outcome,
       data: serializeRun(outcome.run, outcome.items, {
         unsubjectedProviders: outcome.unsubjectedProviders,
       }),

@@ -65,6 +65,9 @@ const {
   resolveOrchestrationConfig,
 } = require("../enrichmentOrchestration/enrichmentOrchestrationConfig");
 const {
+  INGESTION_ENRICHMENT_STATES,
+} = require("../enrichmentOrchestration/enrichmentDecisionCodes");
+const {
   processRecurrenceReopensSafely,
 } = require("../workflow/caseRecurrenceReopenService");
 const { AUDIT_OUTCOMES, safeLogAuditEvent } = require("../auditService");
@@ -76,13 +79,18 @@ const env = require("../../config/env");
 // the trusted-source note above).
 const ENRICHMENT_PROVIDER = "abuseipdb";
 
-// Phase 10A-1 — the additive upload-response block when orchestration is off.
-// Truthful and complete: nothing was recorded, and nothing was executed. The
-// four pre-existing response fields (outcome, report, findingCounts,
-// enrichmentCounts) are untouched, so every existing consumer is unaffected.
-const AUTO_ENRICHMENT_DISABLED_RESULT = Object.freeze({
+// Phase 10A-1 — the additive `enrichment` upload-response block when
+// orchestration is off. Truthful and complete: nothing was recorded, and
+// nothing was executed. The four pre-existing response fields (outcome, report,
+// findingCounts, enrichmentCounts) are untouched, so every existing consumer is
+// unaffected.
+//
+// `state` is a closed INGESTION_ENRICHMENT_STATES code, never a free string, so
+// a consumer can branch on it exhaustively. AUTOMATIC_DISABLED is the default
+// deployment's answer.
+const ENRICHMENT_DISABLED_RESULT = Object.freeze({
   enabled: false,
-  result: "DISABLED",
+  state: INGESTION_ENRICHMENT_STATES.AUTOMATIC_DISABLED,
   runsCreated: 0,
   runsDeduplicated: 0,
   itemsCreated: 0,
@@ -428,7 +436,10 @@ async function createEnrichmentRunsSafely(client, auditContext, findingIds, rawR
       });
       if (outcome.created) counts.runsCreated += 1;
       else counts.runsDeduplicated += 1;
-      counts.itemsCreated += outcome.items.length;
+      // Items this call actually WROTE, not the run's total. On a replay that
+      // converged onto an existing run the two differ, and reporting the total
+      // would claim work that a previous upload had already recorded.
+      counts.itemsCreated += outcome.itemsCreated;
     } catch (error) {
       counts.failed += 1;
       console.error("Enrichment orchestration failed during ingestion", {
@@ -892,10 +903,15 @@ async function ingestAccessibleRdpReport(input, options = {}) {
   //     let the two disagree after a configuration change;
   //   * env.js still validates both switches at startup, so a malformed value
   //     is caught there and this read cannot be the first to see a bad one.
-  let autoEnrichment = AUTO_ENRICHMENT_DISABLED_RESULT;
+  let enrichment = ENRICHMENT_DISABLED_RESULT;
   const autoEnrichmentEnabled =
     resolveOrchestrationConfig(process.env).AUTO_ENRICHMENT_ENABLED;
-  if (autoEnrichmentEnabled && touchedFindingIds.size > 0) {
+  if (autoEnrichmentEnabled && touchedFindingIds.size === 0) {
+    // Enabled, but this report touched no Finding. Reporting AUTOMATIC_DISABLED
+    // here would misstate the deployment's configuration, so it gets its own
+    // state rather than borrowing the disabled one.
+    enrichment = { ...ENRICHMENT_DISABLED_RESULT, enabled: true, state: INGESTION_ENRICHMENT_STATES.NO_FINDINGS };
+  } else if (autoEnrichmentEnabled) {
     const counts = await createEnrichmentRunsSafely(
       client,
       auditContext,
@@ -903,9 +919,12 @@ async function ingestAccessibleRdpReport(input, options = {}) {
       finishedReport.id,
       enrichmentAsOf
     );
-    autoEnrichment = {
+    enrichment = {
       enabled: true,
-      result: counts.failed > 0 ? "PARTIAL" : "RECORDED",
+      state:
+        counts.failed > 0
+          ? INGESTION_ENRICHMENT_STATES.PARTIAL
+          : INGESTION_ENRICHMENT_STATES.RECORDED,
       runsCreated: counts.runsCreated,
       runsDeduplicated: counts.runsDeduplicated,
       itemsCreated: counts.itemsCreated,
@@ -921,7 +940,7 @@ async function ingestAccessibleRdpReport(input, options = {}) {
       outcome: AUDIT_OUTCOMES.SUCCESS,
       entityType: "RawReport",
       entityId: finishedReport.id,
-      after: { ...autoEnrichment, distinctFindingCount: touchedFindingIds.size },
+      after: { ...enrichment, distinctFindingCount: touchedFindingIds.size },
       reason: "Enrichment orchestration recorded for report findings (no provider contacted)",
     });
   }
@@ -973,7 +992,7 @@ async function ingestAccessibleRdpReport(input, options = {}) {
     findingCounts,
     enrichmentCounts,
     // Phase 10A-1 — additive only. Every field above is unchanged.
-    autoEnrichment,
+    enrichment,
   };
 }
 
@@ -982,7 +1001,7 @@ module.exports = {
   NO_VALID_ROWS_REASON,
   ENRICHMENT_PROVIDER,
   ENRICHMENT_SCHEDULE_RESULT,
-  AUTO_ENRICHMENT_DISABLED_RESULT,
+  ENRICHMENT_DISABLED_RESULT,
   RowEvidenceIntegrityError,
   resolveOwnershipSafely,
   scheduleEnrichmentSafely,

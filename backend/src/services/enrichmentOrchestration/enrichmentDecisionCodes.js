@@ -87,6 +87,46 @@ const QUOTA_LANES = Object.freeze({
   MANUAL: "MANUAL",
 });
 
+// The closed outcome vocabulary of ONE run-creation request. It is the API's
+// contract, not an internal detail, so it lives here beside the other closed
+// vocabularies rather than being spelled out in the controller:
+//
+//   CREATED         a new run was recorded AND it has at least one ELIGIBLE
+//                   item. Answered 202 Accepted — recorded, not executed.
+//   ALREADY_RUNNING this exact ask already had a run (idempotent replay, or the
+//                   loser of a concurrent race). Answered 200 with the EXISTING
+//                   run; nothing new was recorded.
+//   SKIPPED         a new run was recorded, and every target was refused by
+//                   policy, so no outbound work exists. Answered 200: there is
+//                   nothing to accept.
+//
+// A boolean `created` cannot express this — it collapses "recorded work" and
+// "recorded that there is nothing to do" into the same answer.
+const RUN_REQUEST_OUTCOMES = Object.freeze({
+  CREATED: "CREATED",
+  ALREADY_RUNNING: "ALREADY_RUNNING",
+  SKIPPED: "SKIPPED",
+});
+
+// The closed state vocabulary of the report-upload response's `enrichment`
+// block. Distinct from RUN_REQUEST_OUTCOMES: one upload can touch many
+// Findings, so this describes the WHOLE orchestration attempt for one report.
+//
+//   AUTOMATIC_DISABLED  AUTO_ENRICHMENT_ENABLED is false. The default.
+//   NO_FINDINGS         enabled, but the report touched no Finding, so there
+//                       was nothing to orchestrate. Never reported as disabled,
+//                       which would misstate the deployment's configuration.
+//   RECORDED            enabled, and every touched Finding was recorded.
+//   PARTIAL             enabled, and at least one Finding failed to record.
+//                       Ingestion still succeeded — orchestration never blocks
+//                       it, exactly as enrichment never blocks it.
+const INGESTION_ENRICHMENT_STATES = Object.freeze({
+  AUTOMATIC_DISABLED: "AUTOMATIC_DISABLED",
+  NO_FINDINGS: "NO_FINDINGS",
+  RECORDED: "RECORDED",
+  PARTIAL: "PARTIAL",
+});
+
 // The closed skipReason vocabulary. One code per REASON, not per provider: a
 // provider name in a skip reason would be redundant (the item already carries
 // `provider`) and would turn a bounded enum into an open string.
@@ -118,6 +158,11 @@ const SKIP_REASONS = Object.freeze({
   // nvd work is delegated to the existing ADMIN vulnerability batch, which
   // Phase 10A-2 deliberately does not make worker-eligible.
   DELEGATE_BATCH_REQUIRED: "DELEGATE_BATCH_REQUIRED",
+  // The canonical queue service that owns this provider's execution refused or
+  // failed to produce a schedulable delegate row. The item is recorded as
+  // SKIPPED_EXECUTION_UNAVAILABLE and NO ProviderLookupJob is created — a
+  // RUN_DELEGATED job with no delegate would be a job nothing can ever finish.
+  DELEGATE_UNAVAILABLE: "DELEGATE_UNAVAILABLE",
 });
 
 const SKIP_REASON_VALUES = Object.freeze(Object.values(SKIP_REASONS));
@@ -144,6 +189,8 @@ module.exports = {
   FAILED_JOB_STATES,
   SKIPPED_JOB_STATES,
   QUOTA_LANES,
+  RUN_REQUEST_OUTCOMES,
+  INGESTION_ENRICHMENT_STATES,
   SKIP_REASONS,
   SKIP_REASON_VALUES,
   isKnownSkipReason,

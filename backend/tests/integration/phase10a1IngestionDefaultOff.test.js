@@ -27,8 +27,12 @@ const { PrismaClient } = require("@prisma/client");
 const { REPORT_SOURCES } = require("../../src/services/ingestion/reportSourceRegistry");
 
 const MARKER = "p10a1-default-off";
-// TEST-NET-1 (RFC 5737) — not used by any other real-DB suite in this repo.
-const IP = "192.0.2.181";
+// TEST-NET-2 (RFC 5737). Deliberately NOT in 192.0.2.*: ownershipConcurrency
+// blanket-deletes every Finding whose indicator starts with "192.0.2." during
+// its own cleanup, which reached this suite's Finding and then failed on its
+// FindingOccurrence foreign key whenever the two files ran concurrently.
+// No suite prefix-deletes 198.51.100.*, and .181 is used by nothing else.
+const IP = "198.51.100.181";
 const OBSERVED_AT = "2026-08-11T09:00:00.000Z";
 
 let prisma;
@@ -176,9 +180,12 @@ describeOrSkip("Phase 10A-1 default-off contract (real PostgreSQL)", () => {
     expect(result.enrichmentCounts).toBeTruthy();
 
     // ...and the additive block is truthful about having done nothing.
-    expect(result.autoEnrichment).toEqual({
+    // The whole block is pinned, not just one field: the name (`enrichment`,
+    // not `autoEnrichment`) and the closed `state` code are the contract.
+    expect(result.autoEnrichment).toBeUndefined();
+    expect(result.enrichment).toEqual({
       enabled: false,
-      result: "DISABLED",
+      state: "AUTOMATIC_DISABLED",
       runsCreated: 0,
       runsDeduplicated: 0,
       itemsCreated: 0,
@@ -218,13 +225,13 @@ describeOrSkip("Phase 10A-1 default-off contract (real PostgreSQL)", () => {
     );
 
     expect(result.outcome).toBe("PROCESSED");
-    expect(result.autoEnrichment.enabled).toBe(true);
-    expect(result.autoEnrichment.result).toBe("RECORDED");
-    expect(result.autoEnrichment.runsCreated).toBe(1);
-    expect(result.autoEnrichment.itemsCreated).toBeGreaterThan(0);
-    expect(result.autoEnrichment.failedCount).toBe(0);
+    expect(result.enrichment.enabled).toBe(true);
+    expect(result.enrichment.state).toBe("RECORDED");
+    expect(result.enrichment.runsCreated).toBe(1);
+    expect(result.enrichment.itemsCreated).toBeGreaterThan(0);
+    expect(result.enrichment.failedCount).toBe(0);
     // The claim that matters on the response.
-    expect(result.autoEnrichment.executed).toBe(false);
+    expect(result.enrichment.executed).toBe(false);
 
     // Durable records exist.
     const runs = await prisma.findingEnrichmentRun.findMany({

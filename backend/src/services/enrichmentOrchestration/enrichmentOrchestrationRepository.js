@@ -191,35 +191,14 @@ async function updateJob(client, jobId, data) {
   return client.providerLookupJob.update({ where: { id: jobId }, data });
 }
 
-// --- Delegate rows (READ ONLY in Phase 10A-1) ------------------------------
-
-/**
- * The existing active IOC enrichment row for one cache identity, if any.
- *
- * Phase 10A-1 only LINKS to a delegate that already exists — it never creates
- * one, never claims one, and never changes one. The row it finds was created
- * by ingestion's own scheduleEnrichment, whose behaviour is untouched.
- */
-async function findActiveIocEnrichment(client, activeCacheKey) {
-  return client.iocEnrichment.findUnique({ where: { activeCacheKey } });
-}
-
-/**
- * The existing active vulnerability enrichment job for one CVE, if any.
- *
- * Same read-only rule. NVD work continues to be executed by the ADMIN
- * vulnerability batch; Phase 10 links to it so the orchestration record can
- * report the delegate's progress truthfully, and does not take it over.
- */
-async function findActiveVulnerabilityJobForCve(client, cveId) {
-  return client.vulnerabilityEnrichmentJob.findFirst({
-    where: {
-      vulnerability: { cveId },
-      activeJobKey: { not: null },
-    },
-    orderBy: { requestedAt: "desc" },
-  });
-}
+// --- Delegate rows ---------------------------------------------------------
+//
+// There is deliberately NO delegate lookup here. Finding-or-creating a delegate
+// is the canonical queue services' job (enrichmentQueueService for AbuseIPDB,
+// vulnerabilityQueueService for NVD), and a second implementation of "is there
+// an active row for this subject?" in this file would be a second definition of
+// active-job uniqueness — the exact duplication that lets two answers drift
+// apart. enrichmentRunService calls those services directly.
 
 // --- Usage accounting ------------------------------------------------------
 
@@ -252,7 +231,5 @@ module.exports = {
   findFreshJobForSubject,
   listJobsInState,
   updateJob,
-  findActiveIocEnrichment,
-  findActiveVulnerabilityJobForCve,
   listDailyUsage,
 };

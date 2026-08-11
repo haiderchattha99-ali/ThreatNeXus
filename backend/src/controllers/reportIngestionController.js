@@ -85,6 +85,13 @@ async function uploadAccessibleRdpReport(req, res) {
 
   if (result.outcome === INGESTION_OUTCOMES.PROCESSED) {
     body.findingCounts = result.findingCounts;
+    // Phase 10A-1 — additive, surfaced on the SAME outcome as findingCounts
+    // because both describe what this processing run did. `state` is a closed
+    // code (AUTOMATIC_DISABLED / NO_FINDINGS / RECORDED / PARTIAL) and
+    // `executed` is false throughout this milestone, so an uploader is told
+    // plainly that orchestration was recorded and nobody was contacted.
+    // enrichmentCounts stays unexposed, exactly as it was before Phase 10.
+    body.enrichment = result.enrichment;
   }
   if (REASON_OUTCOMES.has(result.outcome)) {
     body.reason = result.reason;

@@ -596,18 +596,23 @@ third-party quota without an operator also raising a budget deliberately. Manual
 Subjects are typed: `abuseipdb`, `greynoise`, `censys`, `shodan` and `netlas` accept **IPv4 only**;
 `nvd` accepts **CVE only**. A Finding's CVE subjects come only from `ACTIVE`, `ANALYST_VERIFIED`
 associations — a CVE named in Shodan's provider text is **never** promoted into one. Three verified
-CVEs remain three separate NVD subjects. AbuseIPDB and NVD work is **delegated**: the Phase-10 job
-links the existing `IocEnrichment` / `VulnerabilityEnrichmentJob` row rather than taking execution
-over, so NVD results still require the existing ADMIN vulnerability batch.
+CVEs remain three separate NVD subjects. AbuseIPDB and NVD work is **delegated**: the delegate row is
+created or found through the **existing** canonical queue services (`enrichmentQueueService`,
+`vulnerabilityQueueService`) and the Phase-10 job links it, rather than taking execution over — so
+NVD results still require the existing ADMIN vulnerability batch, whose behaviour is unchanged. A
+`RUN_DELEGATED` job is never created without exactly one delegate FK; if a delegate cannot be
+established the run item records `SKIPPED_EXECUTION_UNAVAILABLE` and no job is created at all.
 
 | Endpoint | Capability | Notes |
 |---|---|---|
-| `POST /api/findings/:id/enrichment-runs` | `trigger:finding-enrichment` | **202 Accepted** — the ask is *recorded*, not executed. Optional `Idempotency-Key` header (≤128 UTF-8 bytes, no control characters); only its SHA-256 digest is ever persisted, and the raw value is never logged, audited or returned. |
-| `GET /api/findings/:id/enrichment-runs[/:runId]` | `read:findings` | Summaries never expose a shared job identifier, any identity hash, or another Finding's subject. |
+| `POST /api/findings/:id/enrichment/runs` | `trigger:finding-enrichment` | **202 Accepted + `outcome: CREATED`** when a new run has eligible work — the ask is *recorded*, not executed. **200 + `ALREADY_RUNNING`** for an idempotent replay or the loser of a concurrent race (the existing run is returned). **200 + `SKIPPED`** when a new run's every target was refused by policy. Optional `Idempotency-Key` header (≤128 UTF-8 bytes, no control characters); only its SHA-256 digest is ever persisted, and the raw value is never logged, audited or returned. |
+| `GET /api/findings/:id/enrichment/runs[/:runId]` | `read:findings` | Summaries never expose a shared job identifier, any identity hash, or another Finding's subject. A run belonging to a different Finding answers 404, never 403. |
 | `GET /api/enrichment/usage` | `execute:enrichment-batch` | Reports **`accountingScope: PHASE_10_RESERVATIONS`, `coverage: PARTIAL`, `reservationsActive: false`** and names its excluded paths. Its zeros mean "no Phase-10 reservations", **not** "no provider calls happened" — the legacy ADMIN IOC batch, the ADMIN vulnerability batch and the pre-10A2 synchronous provider routes are not accounted for here, and no total call count is fabricated. |
 
-The report upload response gains one additive `autoEnrichment` block; all pre-existing fields
-(`outcome`, `report`, `findingCounts`, `enrichmentCounts`) are unchanged.
+The report upload response gains one additive `enrichment` block; all pre-existing fields
+(`outcome`, `report`, `findingCounts`, `enrichmentCounts`) are unchanged. Its `state` is a closed
+code — `AUTOMATIC_DISABLED` (the default), `NO_FINDINGS`, `RECORDED` or `PARTIAL` — and `executed` is
+`false` throughout Phase 10A-1.
 
 ## Known limitations
 

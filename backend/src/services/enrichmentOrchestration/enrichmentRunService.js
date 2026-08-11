@@ -13,6 +13,13 @@
 // party is contacted. A static inertness test asserts that no module in this
 // package imports a provider factory, a runner or a fetch implementation.
 //
+// The two DELEGATED providers (abuseipdb, nvd) are scheduled through the
+// canonical queue services that already own their execution. Those services are
+// database-only by construction — they create or find a PENDING row and return
+// it — so scheduling a delegate contacts nobody either. Execution stays exactly
+// where it already was: the IOC batch runner and the ADMIN vulnerability batch,
+// neither of which this milestone changes.
+//
 // ---------------------------------------------------------------------------
 // Two deduplication mechanisms that must never be conflated
 // ---------------------------------------------------------------------------
@@ -38,9 +45,11 @@ const {
   RUN_ITEM_DECISIONS,
   RUN_STATES,
   RUN_TRIGGERS,
+  RUN_REQUEST_OUTCOMES,
   JOB_TRIGGERS,
   JOB_STATES,
   QUOTA_LANES,
+  SKIP_REASONS,
   NON_TERMINAL_JOB_STATES,
   SUCCESSFUL_JOB_STATES,
 } = require("./enrichmentDecisionCodes");
@@ -63,8 +72,23 @@ const {
   isProviderCredentialConfigured,
 } = require("./enrichmentOrchestrationConfig");
 const repository = require("./enrichmentOrchestrationRepository");
-const { buildEnrichmentCacheIdentity } = require("../enrichment/enrichmentCacheKey");
 const { INDICATOR_TYPES } = require("../enrichment/iocEnrichmentTypes");
+// The CANONICAL scheduling services for the two delegated providers. Phase 10
+// never duplicates their queue logic and never bypasses them: it asks them for
+// a delegate exactly the way the analyst-facing and ingestion paths already do,
+// and links whatever row they return. Neither module performs I/O beyond the
+// database, which is why importing them keeps this package inert.
+const {
+  SCHEDULE_OUTCOME,
+  scheduleEnrichment,
+  scheduleEnrichmentForced,
+} = require("../enrichment/enrichmentQueueService");
+const {
+  VULNERABILITY_SCHEDULE_OUTCOME,
+  scheduleVulnerabilityEnrichment,
+  scheduleVulnerabilityEnrichmentForced,
+} = require("../vulnerability/vulnerabilityQueueService");
+const { VULNERABILITY_JOB_TRIGGER } = require("../vulnerability/vulnerabilityQueueRules");
 const { AUDIT_OUTCOMES, safeLogAuditEvent } = require("../auditService");
 
 // Loaded lazily, the same way resolveClient defers config/prisma. env.js
@@ -269,131 +293,242 @@ async function refreshRunState(client, runId, now) {
 }
 
 /**
- * The AbuseIPDB delegate's cache identity — computed with the SAME inputs
- * ingestion and manual scheduling already use, so a Phase-10 job finds the row
- * they created instead of fragmenting into a second identity.
- */
-function abuseIpdbActiveCacheKey(subjectValue) {
-  return buildEnrichmentCacheIdentity({
-    provider: "abuseipdb",
-    indicatorType: INDICATOR_TYPES.IPV4,
-    indicator: subjectValue,
-    queryParams: { maxAgeInDays: appEnv().ABUSEIPDB_MAX_AGE_DAYS },
-  }).cacheKey;
-}
-
-/**
- * Finds the existing delegate row for a delegated provider, if one exists.
+ * Establishes the delegate a RUN_DELEGATED job will link, through the CANONICAL
+ * queue service that owns that provider's execution.
  *
- * READ ONLY. Phase 10A-1 never creates, claims or mutates a delegate — it
- * links what ingestion or the ADMIN batch already created, so the delegate's
- * behaviour is provably unchanged.
+ * ===========================================================================
+ * Why this schedules rather than merely reads
+ * ===========================================================================
+ * A ProviderLookupJob with trigger=RUN_DELEGATED and no delegate FK is a job
+ * nothing can ever finish: no Phase-10 worker executes it (there is none), and
+ * reconciliation has no delegate row to copy a verdict from. It would sit
+ * non-terminal forever, holding activeLookupKey and blocking every future ask
+ * about that subject. So the delegate is established FIRST, and a job is
+ * created only once there is a real row to point at.
  *
- * @returns {Promise<{field: string, id: number}|null>} the typed FK to set
+ * Nothing here executes anything. Both queue services are database-only by
+ * construction (see their module headers) — they create or find a PENDING row
+ * and return it. Execution stays with the pipelines that already own it: the
+ * IOC batch runner and the ADMIN vulnerability batch, neither of which is
+ * changed by this milestone.
+ *
+ * `force` is passed through to the queue service's own forced variant rather
+ * than reinterpreted here, so "force means ignore the cache, never ignore the
+ * queue" keeps exactly one definition in the codebase.
+ *
+ * @returns {Promise<{status: "LINKED", field: string, id: number}
+ *   | {status: "FRESH"} | {status: "NONE"}>}
+ *   LINKED — a delegate row exists and its typed FK should be set.
+ *   FRESH  — the canonical service reports a fresh answer already on file, so
+ *            no outbound work is warranted and no job should be created.
+ *   NONE   — this provider is not delegated.
+ * @throws whatever the canonical service throws; the caller turns that into
+ *   SKIPPED_EXECUTION_UNAVAILABLE and creates no job.
  */
-async function findDelegateLink(client, provider, subjectValue) {
+async function establishDelegate(client, { provider, subjectValue, force, now }) {
   if (provider === "abuseipdb") {
-    const row = await repository.findActiveIocEnrichment(
-      client,
-      abuseIpdbActiveCacheKey(subjectValue)
-    );
-    return row ? { field: "iocEnrichmentId", id: row.id } : null;
+    // The SAME identity inputs ingestion and manual scheduling already use, so
+    // this converges onto the row they created instead of fragmenting into a
+    // second cache identity.
+    const identity = {
+      provider: "abuseipdb",
+      indicatorType: INDICATOR_TYPES.IPV4,
+      indicator: subjectValue,
+      queryParams: { maxAgeInDays: appEnv().ABUSEIPDB_MAX_AGE_DAYS },
+    };
+    const result = force
+      ? await scheduleEnrichmentForced(identity, { client, asOf: now })
+      : await scheduleEnrichment(identity, { client, asOf: now });
+
+    // CACHE_HIT is a terminal row, not schedulable work. Linking it would
+    // create a job "waiting" on something that already finished.
+    if (result.outcome === SCHEDULE_OUTCOME.CACHE_HIT) return { status: "FRESH" };
+    if (!result.record) return { status: "FRESH" };
+    return { status: "LINKED", field: "iocEnrichmentId", id: result.record.id };
   }
+
   if (provider === "nvd") {
-    const row = await repository.findActiveVulnerabilityJobForCve(client, subjectValue);
-    return row ? { field: "vulnerabilityEnrichmentJobId", id: row.id } : null;
+    // The canonical Vulnerability row already exists — the only way a CVE
+    // becomes a subject here is an ACTIVE, ANALYST_VERIFIED FindingVulnerability
+    // association, which cannot exist without it. So this path never creates an
+    // unattached Vulnerability row.
+    const request = { cveId: subjectValue, trigger: VULNERABILITY_JOB_TRIGGER.MANUAL };
+    const result = force
+      ? await scheduleVulnerabilityEnrichmentForced({ cveId: subjectValue }, { client, asOf: now })
+      : await scheduleVulnerabilityEnrichment(request, { client, asOf: now });
+
+    // The vulnerability queue returns record: null on CACHE_HIT, so both
+    // conditions are checked rather than one being inferred from the other.
+    if (result.outcome === VULNERABILITY_SCHEDULE_OUTCOME.CACHE_HIT) return { status: "FRESH" };
+    if (!result.record) return { status: "FRESH" };
+    return { status: "LINKED", field: "vulnerabilityEnrichmentJobId", id: result.record.id };
   }
-  return null;
+
+  return { status: "NONE" };
 }
 
 /**
- * Gets the one active job for a work identity, or creates it.
+ * Resolves ONE routed target the router marked ELIGIBLE into the item that
+ * should be written for it.
  *
- * The get-or-create races against every other run doing the same thing. The
- * loser of that race sees P2002 on activeLookupKey and re-reads — which is
- * precisely the behaviour that makes two Findings on one IP share one job.
+ * The decision can still change here, and that is deliberate: routing decides
+ * whether work is WARRANTED, this decides whether work is POSSIBLE. A delegate
+ * that reports a fresh answer downgrades the item to SKIPPED_CACHED; a delegate
+ * that cannot be established downgrades it to SKIPPED_EXECUTION_UNAVAILABLE. In
+ * both cases NO ProviderLookupJob is created, so a stranded delegated job
+ * cannot exist.
+ *
+ * @returns {Promise<{decision: string, skipReason: string|null,
+ *   lookupJobId: number|null}>}
  */
-async function getOrCreateLookupJob(client, { provider, subjectType, subjectValue, lane, now }) {
+async function resolveEligibleTarget(client, routed, { force, now }) {
+  const { provider, subjectType, subjectValue, lane } = routed;
   const queryIdentityHash = computeQueryIdentityHash({ provider, subjectType, subjectValue });
 
+  // THE cross-Finding dedup point: ten Findings on one IP find the same row.
+  // An existing active job already carries whatever delegate link it needs, so
+  // nothing is scheduled a second time.
   const existing = await repository.findActiveJobByLookupKey(client, queryIdentityHash);
-  if (existing) return { job: existing, created: false };
+  if (existing) {
+    return { decision: RUN_ITEM_DECISIONS.ELIGIBLE, skipReason: null, lookupJobId: existing.id };
+  }
 
   const delegated = DELEGATED_PROVIDERS.includes(provider);
-  const delegateLink = delegated ? await findDelegateLink(client, provider, subjectValue) : null;
+  let delegate = { status: "NONE" };
+  if (delegated) {
+    try {
+      delegate = await establishDelegate(client, { provider, subjectValue, force, now });
+    } catch (error) {
+      // A refusal or failure from the canonical service is a DECISION about
+      // this one target, not a reason to abort the whole run. The name is
+      // logged; the message is not, so a third-party or validation string can
+      // never reach the database through skipReason.
+      console.error("Enrichment orchestration delegate scheduling failed", {
+        provider,
+        name: error && error.name,
+      });
+      return {
+        decision: RUN_ITEM_DECISIONS.SKIPPED_EXECUTION_UNAVAILABLE,
+        skipReason: SKIP_REASONS.DELEGATE_UNAVAILABLE,
+        lookupJobId: null,
+      };
+    }
+
+    if (delegate.status === "FRESH") {
+      return {
+        decision: RUN_ITEM_DECISIONS.SKIPPED_CACHED,
+        skipReason: SKIP_REASONS.FRESH_RESULT_EXISTS,
+        lookupJobId: null,
+      };
+    }
+    if (delegate.status !== "LINKED") {
+      return {
+        decision: RUN_ITEM_DECISIONS.SKIPPED_EXECUTION_UNAVAILABLE,
+        skipReason: SKIP_REASONS.DELEGATE_UNAVAILABLE,
+        lookupJobId: null,
+      };
+    }
+  }
 
   const data = {
     provider,
     subjectType,
     subjectValue,
     queryIdentityHash,
-    // A delegated job whose delegate already exists is genuinely waiting on
-    // that queue. Everything else is PENDING and — with no worker in this
+    // A delegated job is, by construction, waiting on the delegate established
+    // immediately above. A direct job is PENDING and — with no worker in this
     // milestone — stays PENDING. Neither state contacts a provider.
-    state: delegateLink ? JOB_STATES.WAITING_ON_DELEGATE : JOB_STATES.PENDING,
+    state: delegated ? JOB_STATES.WAITING_ON_DELEGATE : JOB_STATES.PENDING,
     lane,
     trigger: delegated ? JOB_TRIGGERS.RUN_DELEGATED : JOB_TRIGGERS.RUN_DIRECT,
     requestedAt: now,
     // Non-terminal, so it holds the identity and blocks a duplicate.
     activeLookupKey: queryIdentityHash,
   };
-  if (delegateLink) data[delegateLink.field] = delegateLink.id;
+  if (delegate.status === "LINKED") data[delegate.field] = delegate.id;
 
+  let job;
   try {
-    return { job: await repository.createLookupJob(client, data), created: true };
+    job = await repository.createLookupJob(client, data);
   } catch (error) {
     if (!repository.isUniqueViolation(error)) throw error;
-    // Lost the race — the winner's job is the shared one.
-    const winner = await repository.findActiveJobByLookupKey(client, queryIdentityHash);
-    if (!winner) throw error;
-    return { job: winner, created: false };
+    // Lost the race on activeLookupKey — the winner's job is the shared one.
+    // The delegate scheduling above was idempotent, so the loser created no
+    // duplicate delegate either.
+    job = await repository.findActiveJobByLookupKey(client, queryIdentityHash);
+    if (!job) throw error;
   }
+  return { decision: RUN_ITEM_DECISIONS.ELIGIBLE, skipReason: null, lookupJobId: job.id };
+}
+
+/** The identity that makes an item and a routed target the same thing. */
+function targetKey(target) {
+  return `${target.provider} ${target.subjectType} ${target.subjectValue}`;
 }
 
 /**
- * Builds every run item for a run, creating shared jobs for ELIGIBLE ones.
+ * Materializes every EXPECTED routed target that is not already written.
+ *
+ * ===========================================================================
+ * Convergent, not "only when empty"
+ * ===========================================================================
+ * A crash between two item INSERTs leaves a run holding some of its items. A
+ * guard of "materialize only when the run has none" would then never write the
+ * rest — the missing targets would be lost permanently, and the run would
+ * report a state derived from a partial truth.
+ *
+ * So every idempotent replay attempts the COMPLETE expected set, skipping what
+ * is already present and letting the (runId, provider, subjectType,
+ * subjectValue) unique absorb anything a concurrent replay wrote in between.
+ * Nothing is ever updated: an existing item keeps its identity and its
+ * decision, so a replay can add what is missing but can never silently rewrite
+ * what was already decided.
  *
  * Runs AFTER the run row is committed and outside any transaction, for the
- * P2002 reason in the module header. Item creation is itself idempotent
- * against the (runId, provider, subjectType, subjectValue) unique, so a retry
- * after a partial write converges instead of duplicating.
+ * P2002 reason in the module header.
+ *
+ * @param {Array<object>} existingItems the run's already-written items
+ * @returns {Promise<number>} how many items this call created
  */
-async function materializeItems(client, run, routedTargets, now) {
-  const items = [];
+async function materializeItems(client, run, routedTargets, existingItems, { force, now }) {
+  const present = new Set(existingItems.map(targetKey));
+  let created = 0;
+
   // eslint-disable-next-line no-restricted-syntax
   for (const routed of routedTargets) {
-    let lookupJobId = null;
+    // eslint-disable-next-line no-continue
+    if (present.has(targetKey(routed))) continue;
+
+    let resolved = {
+      decision: routed.decision,
+      skipReason: routed.skipReason,
+      lookupJobId: null,
+    };
     if (routed.decision === RUN_ITEM_DECISIONS.ELIGIBLE) {
       // eslint-disable-next-line no-await-in-loop
-      const { job } = await getOrCreateLookupJob(client, {
-        provider: routed.provider,
-        subjectType: routed.subjectType,
-        subjectValue: routed.subjectValue,
-        lane: routed.lane,
-        now,
-      });
-      lookupJobId = job.id;
+      resolved = await resolveEligibleTarget(client, routed, { force, now });
     }
 
     try {
       // eslint-disable-next-line no-await-in-loop
-      const item = await repository.createRunItem(client, {
+      await repository.createRunItem(client, {
         runId: run.id,
         findingId: run.findingId,
         provider: routed.provider,
         subjectType: routed.subjectType,
         subjectValue: routed.subjectValue,
-        decision: routed.decision,
-        skipReason: routed.skipReason,
-        lookupJobId,
+        decision: resolved.decision,
+        skipReason: resolved.skipReason,
+        lookupJobId: resolved.lookupJobId,
       });
-      items.push(item);
+      created += 1;
     } catch (error) {
-      // Already written by a concurrent retry of this same run — converge.
+      // Already written by a concurrent replay of this same run — converge on
+      // it rather than overwriting the decision it recorded.
       if (!repository.isUniqueViolation(error)) throw error;
     }
   }
-  return items;
+  return created;
 }
 
 async function audit(client, auditContext, event) {
@@ -432,7 +567,10 @@ function runAuditSummary(run, items) {
  * @param {{client?: object, trigger: string, providers?: Array<string>,
  *   force?: boolean, rawReportId?: number|null, actorUserId?: number|null,
  *   idempotencyKeyHash?: string|null, now: Date, auditContext?: object}} options
- * @returns {Promise<{run: object, items: Array, created: boolean}>}
+ * @returns {Promise<{run: object, items: Array, created: boolean,
+ *   itemsCreated: number, outcome: string,
+ *   unsubjectedProviders: Array<string>}>} `outcome` is a RUN_REQUEST_OUTCOMES
+ *   value — the API contract, decided here rather than in the controller.
  */
 async function createEnrichmentRun(findingId, options = {}) {
   const client = resolveClient(options.client);
@@ -554,18 +692,32 @@ async function createEnrichmentRun(findingId, options = {}) {
     );
   }
 
-  // Items are (re)materialized when the run has none. That covers both the
-  // fresh-create path and the rare crash-between-run-and-items case, without
-  // ever duplicating items for a run that already has them.
-  let items = await repository.listRunItemsWithJobs(client, run.id);
-  if (items.length === 0) {
-    await materializeItems(client, run, routedTargets, now);
-    items = await repository.listRunItemsWithJobs(client, run.id);
-  }
+  // Convergent materialization: EVERY call attempts the complete expected
+  // target set and writes only what is missing. That covers the fresh-create
+  // path, an idempotent replay, and a crash that committed some items but not
+  // all of them — see materializeItems for why "only when empty" loses targets.
+  const existingItems = await repository.listRunItemsWithJobs(client, run.id);
+  const itemsCreated = await materializeItems(client, run, routedTargets, existingItems, {
+    force,
+    now,
+  });
 
   const refreshed = await refreshRunState(client, run.id, now);
   run = refreshed.run;
-  items = refreshed.items;
+  const items = refreshed.items;
+
+  // The ask's outcome. `created` alone cannot express it: a brand-new run whose
+  // every target was refused by policy recorded no work, and answering that
+  // with the same "accepted" signal as a run that did would be untrue.
+  const hasEligibleWork = items.some((item) => item.decision === RUN_ITEM_DECISIONS.ELIGIBLE);
+  let outcome;
+  if (!created) {
+    outcome = RUN_REQUEST_OUTCOMES.ALREADY_RUNNING;
+  } else if (hasEligibleWork) {
+    outcome = RUN_REQUEST_OUTCOMES.CREATED;
+  } else {
+    outcome = RUN_REQUEST_OUTCOMES.SKIPPED;
+  }
 
   await audit(client, auditContext, {
     action: created ? AUDIT_ACTIONS.RUN_CREATED : AUDIT_ACTIONS.RUN_DEDUPLICATED,
@@ -578,7 +730,7 @@ async function createEnrichmentRun(findingId, options = {}) {
       : "Enrichment orchestration run deduplicated onto an existing run",
   });
 
-  return { run, items, created, unsubjectedProviders };
+  return { run, items, created, itemsCreated, outcome, unsubjectedProviders };
 }
 
 module.exports = {
@@ -594,6 +746,9 @@ module.exports = {
   assembleTargets,
   recomputeRunState,
   refreshRunState,
-  getOrCreateLookupJob,
+  targetKey,
+  establishDelegate,
+  resolveEligibleTarget,
+  materializeItems,
   createEnrichmentRun,
 };

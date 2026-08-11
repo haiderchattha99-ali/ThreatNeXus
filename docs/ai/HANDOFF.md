@@ -1,16 +1,36 @@
 # Handoff: TNX-P10A1-ENRICHMENT-ORCHESTRATION-FOUNDATION
 
 - From: claude
-- Suggested next writer: **codex (independent review)** — do not start 10A-2 before that review
+- Suggested next writer: **codex (SECOND independent review)** — do not start 10A-2 before that review
 - Branch: `feat/phase-10a1-enrichment-orchestration-foundation` (from `origin/main` @ `3638a39`, the PR #19 merge)
 - Worktree: `F:\AI-Worktrees\ThreatNeXus\phase-10a1` (isolated — the primary checkout, which carries
   unrelated uncommitted presentation work on `docs/phase-9c-pkcert-technical-dossier`, was never
   touched, never switched, never stashed)
 - Writer lock: held for this ticket, released on handoff
-- Updated: 2026-08-12T02:55:00Z
+- Updated: 2026-08-12T04:30:00Z (correction pass after Codex review 1)
 
-**Status: complete and inert.** Phase 10A-1 records enrichment orchestration INTENT and executes
-nothing. No PR opened, `main` not merged, 10A-2 not started — per instruction.
+**Status: complete and inert, first Codex review resolved, awaiting SECOND Codex review.** Phase
+10A-1 records enrichment orchestration INTENT and executes nothing. No PR opened, `main` not merged,
+10A-2 not started — per instruction.
+
+## Codex review pass 1 — every finding resolved
+
+The first independent review returned **NOT READY** with six blockers. All six are fixed on this
+branch; each has a regression test that fails against the pre-correction code.
+
+| # | Finding | Correction |
+|---|---|---|
+| 1 | Invented hyphenated route; `created: false` under 202 | Routes are now `POST/GET /api/findings/:id/enrichment/runs` and `GET …/runs/:runId`. **No alias retained** — the surface is unmerged, so the old spelling now 404s. The response carries a closed `outcome`: `CREATED` → **202**, `ALREADY_RUNNING` → **200** (existing run returned), `SKIPPED` → **200**. The body shape is pinned field-by-field in the HTTP suite. |
+| 2 | Upload block named `autoEnrichment`, no state | Renamed to `enrichment` with a closed `state`: `AUTOMATIC_DISABLED` (default), `NO_FINDINGS`, `RECORDED`, `PARTIAL`. `executed` stays `false`. The block was **never surfaced over HTTP at all** — the upload controller returned only `success/message/report/findingCounts` — so it is now added there, additively, on the same outcome as `findingCounts`. Every pre-existing field is byte-identical. |
+| 3 | `items.length === 0` guard lost targets after a partial write | Convergent materialization (see below), with a real-PG crash-recovery test and a concurrent-replay test. |
+| 4 | `RUN_DELEGATED` + `PENDING` + no delegate FK was creatable | Delegates are created-or-found through the canonical queue services and linked; when one cannot be established the item records `SKIPPED_EXECUTION_UNAVAILABLE` and **no job** is created. |
+| 5 | No real HTTP/RBAC contract tests | `tests/integration/phase10a1RouteAuthorization.test.js` — 37 cases over the mounted app. |
+| 6 | `STATE.yaml` carried unrelated prior-ticket prose | Rewritten to the current ticket only. |
+
+One extra real defect was found and fixed while proving #3/#4: `phase10a1Orchestration.test.js`
+deleted `RawReport WHERE sourceFileName LIKE 'p10a1-%'`, which also matched
+`phase10a1IngestionDefaultOff.test.js`'s reports and failed on their child foreign keys whenever the
+two files ran concurrently. Each suite now deletes only what it created.
 
 > Note for any future writer: `handoff-task.ps1` overwrites this file with a five-line template on
 > every run. If you run it, restore the detail below from the prior commit afterwards.
@@ -89,9 +109,29 @@ for a subject that already had a fresh answer would be true but misleading.
 let a holder of Finding A's summary correlate it with every other Finding pointing at the same job.
 A run belonging to another Finding is 404, not 403.
 
-**Delegate links are read-only in 10A-1.** The Phase-10 job links an `IocEnrichment` /
-`VulnerabilityEnrichmentJob` row that ingestion or the ADMIN batch already created. It never creates,
-claims or mutates one — which is why those pipelines are provably unchanged.
+**A delegated job is established through the CANONICAL queue service, and never exists unlinked.**
+(Corrected in the review pass — see below.) `enrichmentRunService.establishDelegate` calls
+`enrichmentQueueService.scheduleEnrichment(Forced)` for AbuseIPDB and
+`vulnerabilityQueueService.scheduleVulnerabilityEnrichment(Forced)` for NVD, and links whatever row
+they return. Phase 10 owns no second copy of active-job uniqueness, no second cache-identity
+construction and no second P2002 loop, so the two can never drift apart. `force` is passed through to
+the service's own forced variant, keeping one definition of "force ignores the cache, never the
+queue". Neither service performs I/O beyond the database, so the package stays inert.
+
+Three outcomes, and only the first creates a job:
+`LINKED` → `RUN_DELEGATED` + `WAITING_ON_DELEGATE` + exactly one delegate FK;
+`FRESH` (the canonical service reports a fresh answer) → item `SKIPPED_CACHED`, **no job**;
+refusal/failure → item `SKIPPED_EXECUTION_UNAVAILABLE` + `DELEGATE_UNAVAILABLE`, **no job**.
+A `RUN_DELEGATED` job with no delegate could never reach a terminal state and would hold
+`activeLookupKey` against every future ask about that subject. The ADMIN batches still execute the
+work; their behaviour is unchanged.
+
+**Materialization is CONVERGENT, never "only when the run is empty".** Every idempotent replay
+attempts the complete expected routed-target set, skips what is already present, and lets the
+`(runId, provider, subjectType, subjectValue)` unique absorb a concurrent racer. Nothing is ever
+updated, so a replay can add a missing item but can never rewrite a decision that was already
+recorded. The previous "materialize only when `items.length === 0`" guard permanently lost every
+target a crash left unwritten.
 
 ## Evidence
 
@@ -101,12 +141,15 @@ claims or mutates one — which is why those pipelines are provably unchanged.
 | `migrate deploy` from zero (fresh DB) | **24/24 applied** |
 | `migrate diff --exit-code` | **no difference detected** (exit 0) |
 | CI frozen migration list | updated to 24 in the same commit |
-| 5 tables / 9 enums / 7 constraints in live schema | verified by direct `pg_catalog` query |
+| 5 tables / 9 enums / 7 constraints in live schema | verified by direct `pg_catalog` query, alongside **0 attempt rows, 0 usage rows, 0 unlinked `RUN_DELEGATED` jobs** |
 | Real-PG constraint suite | **9 tests, 8 independent rejections across the 7 constraints** |
 | Real-PG orchestration suite | 9 tests (T-23, concurrent collapse, scope separation, shared job, policy skips, 3×CVE, provider-text exclusion, audit safety) |
 | Real-PG default-off suite | 3 tests (off = zero Phase-10 rows; on = records but no lookup; idempotent re-upload) |
-| Pure unit suites | 101 tests across 6 files, incl. the static inertness gate |
-| **Full backend suite** | **3368 passed, 2 skipped, 0 failed** (fresh DB, `--maxWorkers=3`) |
+| **Real-PG delegate/recovery suite (new)** | **9 tests** — crash recovery, concurrent replay convergence, IOC delegate created / reused / past-terminal, scheduling refusal, NVD delegate, 3×CVE distinct delegates, ADMIN-batch uniqueness respected. Every case re-asserts zero attempts, zero usage, nothing queried, and exactly one delegate FK per `RUN_DELEGATED` job. |
+| **HTTP/RBAC contract suite (new)** | **37 Supertest tests** over the mounted app — full role matrix, 401 vs 403, slash paths vs 404 on the hyphenated ones, 202/200 outcomes, 400 validation, cross-Finding 404, leak checks |
+| Upload HTTP contract | `enrichment.state === AUTOMATIC_DISABLED` proven over real HTTP; the response allow-list test extended (not relaxed) to pin the block's own keys |
+| Pure unit suites | 101 tests across 6 files, incl. the static inertness gate — still green with the two new canonical-queue imports |
+| **Full backend suite** | **3415 passed, 2 skipped, 0 failed** (156 files, fresh DB, `--maxWorkers=3`) |
 | Evaluators | `eval:phase1`, `eval:risk` (19/19), `eval:phase2` (22/112), `eval:phase3` (12/151), `eval:vulnerability` (41/992), `eval:phase4` (14/151), `eval:phase5` (14/150), `eval:phase6.3` (13/108), `eval:phase7` (8/35) — **all PASS** |
 | Risk v1 config version / fingerprint | unchanged (`v1.0.0`, `risk-additive-bucketed-v1`); risk modules untouched per `git status` |
 | Secret scan | CI's own pattern set, repo-wide: clean. No tracked `.env`. |
@@ -123,22 +166,34 @@ applies; the contention is local, not in CI.
 
 ## Honest gaps
 
-- **`SKIPPED_EXECUTION_UNAVAILABLE` and `MANUAL_DIRECT` are defined but unused in 10A-1.** They exist
-  so the vocabulary and constraints are complete and provable before 10A-2 writes the code that uses
-  them. `ProviderLookupAttempt` and `ProviderDailyUsage` likewise have zero rows by design.
+- **`MANUAL_DIRECT` is defined but unused in 10A-1.** It exists so the vocabulary and constraints are
+  complete and provable before 10A-2 writes the code that uses it. `ProviderLookupAttempt` and
+  `ProviderDailyUsage` likewise have zero rows by design. (`SKIPPED_EXECUTION_UNAVAILABLE` is no
+  longer in this list — the review-pass delegate work made it a live, tested decision.)
+- **A `RUN_DELEGATED` job without a delegate FK is prevented in CODE, not by a CHECK constraint.**
+  Adding an eighth constraint would mean a 25th migration and a change to CI's frozen list, which the
+  correction pass was scoped out of. The invariant is asserted on every job in the new real-PG suite.
+  Consider promoting it to a constraint when 10A-2 next touches the migration set.
 - **`ENRICHMENT_WORKER_ENABLED` is declared and validated but consumed by nothing.** There is no
   worker to enable.
 - **Freshness is read one query per target** (bounded by the provider scope plus one per verified
   CVE). Marked with a `ponytail:` comment; batch into a single `IN` query if a Finding ever carries
   enough verified CVEs for it to matter.
-- **The v2 / v2.1 plan documents were not available in the implementing session.** The data model was
-  recovered from the prior session's committed `schema.prisma` (which encodes it in detail), and the
-  async run/summary API shape and the additive upload-response field names were **derived from repo
-  conventions with the user's explicit approval**, not copied from the spec. If v2/v2.1 names those
-  differently, reconcile the field names — the behaviour and contracts should already match.
-- **No independent reviewer has seen this yet.** Per `CLAUDE.md`, do not treat it as final.
+- **The v2 / v2.1 plan documents are still not available on disk.** The route paths, the
+  `CREATED` / `ALREADY_RUNNING` / `SKIPPED` outcome vocabulary and the `enrichment.state` codes in
+  this pass come from the **Codex review's explicit restatement of the approved contract**, not from
+  a file. If the v2.1 document names anything differently, reconcile the NAMES — the behaviour and
+  status codes now match what the review specified.
+- **One review item is proven in an adjacent file rather than the new one.** "Default-off upload
+  returns `enrichment.state === AUTOMATIC_DISABLED`" is asserted in
+  `tests/integration/reportUploadRoute.test.js`, which already carries the complete upload stub and
+  drives the real `POST /api/reports/upload` over Supertest. Duplicating ~200 lines of that stub into
+  the new suite would have added no coverage. The same file's response allow-list test was extended
+  (not relaxed) to pin the new block's own keys.
+- **Second independent review not yet done.** Per `CLAUDE.md`, do not treat this as final.
 
 ## Next action
 
-Codex independent review of this branch. After it passes, design the runner/hook contract in the
-blocker section above and have *that* reviewed before any 10A-2 code is written.
+**Codex second independent review** of this branch, against the six findings above. Do NOT open a PR,
+do NOT merge `main`, do NOT begin 10A-2. After that review passes, design the runner/hook contract in
+the blocker section above and have *that* design reviewed before any 10A-2 execution code is written.

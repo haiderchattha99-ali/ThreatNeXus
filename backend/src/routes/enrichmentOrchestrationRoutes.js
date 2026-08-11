@@ -36,20 +36,34 @@ const {
 
 router.use(authenticate);
 
+// Slash-separated, per the approved v2.1 contract:
+//   POST /api/findings/:id/enrichment/runs
+//   GET  /api/findings/:id/enrichment/runs
+//   GET  /api/findings/:id/enrichment/runs/:runId
+//
+// These do NOT collide with findingEnrichmentRoutes.js's "/:id/enrichment" and
+// "/:id/enrichments": Express matches a route path exactly, so "/1/enrichment"
+// and "/1/enrichment/runs" are different routes even though one is a prefix of
+// the other.
+//
+// There is deliberately no "/:id/enrichment-runs" alias. That spelling was
+// never released — this surface is unmerged — so keeping it would mean shipping
+// a deprecated path that nothing has ever called.
+
 router.get(
-  "/:id/enrichment-runs",
+  "/:id/enrichment/runs",
   requireCapability(CAPABILITIES.READ_FINDINGS),
   getFindingEnrichmentRuns
 );
 
 router.get(
-  "/:id/enrichment-runs/:runId",
+  "/:id/enrichment/runs/:runId",
   requireCapability(CAPABILITIES.READ_FINDINGS),
   getFindingEnrichmentRun
 );
 
 router.post(
-  "/:id/enrichment-runs",
+  "/:id/enrichment/runs",
   providerRateLimiter,
   requireCapability(CAPABILITIES.TRIGGER_FINDING_ENRICHMENT),
   createFindingEnrichmentRun

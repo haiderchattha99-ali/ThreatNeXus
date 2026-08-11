@@ -78,10 +78,26 @@ async function cleanup() {
     MARKER_PORT
   );
   await prisma.$executeRawUnsafe(`DELETE FROM "Finding" WHERE "port" IN ($1, $1 + 1)`, MARKER_PORT);
-  await prisma.$executeRawUnsafe(`DELETE FROM "RawReport" WHERE "sourceFileName" LIKE $1`, "p10a1-%");
+  // Scoped to THIS file's own reports. "p10a1-%" also matched
+  // phase10a1IngestionDefaultOff.test.js's "p10a1-default-off-*.csv", so when
+  // the two files ran concurrently this delete hit reports that still had
+  // RawReportRow/FindingOccurrence children and failed on their foreign keys.
+  // A suite must only ever delete what it created.
+  await prisma.$executeRawUnsafe(
+    `DELETE FROM "RawReport" WHERE "sourceFileName" LIKE $1`,
+    "p10a1-orch-%"
+  );
+  // Delegate rows created THROUGH the canonical queue services by this file's
+  // runs. VulnerabilityEnrichmentJob holds an FK onto Vulnerability, so it must
+  // go first or the Vulnerability delete below fails.
+  await prisma.$executeRawUnsafe(
+    `DELETE FROM "VulnerabilityEnrichmentJob" WHERE "vulnerabilityId" IN
+       (SELECT id FROM "Vulnerability" WHERE "cveId" IN ('CVE-2099-1001','CVE-2099-1002','CVE-2099-1003'))`
+  );
   await prisma.$executeRawUnsafe(
     `DELETE FROM "Vulnerability" WHERE "cveId" IN ('CVE-2099-1001','CVE-2099-1002','CVE-2099-1003')`
   );
+  await prisma.$executeRawUnsafe(`DELETE FROM "IocEnrichment" WHERE "indicator" IN ($1,$2)`, IP_A, IP_B);
 }
 
 async function makeFinding(indicatorValue) {
@@ -300,7 +316,7 @@ describeOrSkip("Phase 10A-1 orchestration (real PostgreSQL)", () => {
       data: {
         reportType: "ACCESSIBLE_RDP",
         schemaVersion: "accessible-rdp.synthetic.v1",
-        sourceFileName: "p10a1-budget.csv",
+        sourceFileName: "p10a1-orch-budget.csv",
         sourceFileSha256: `p10a1budget${"0".repeat(53)}`,
         fileSizeBytes: 1,
         contentType: "text/csv",
