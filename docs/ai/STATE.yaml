@@ -86,7 +86,7 @@
                        "backend_untouched":  "PASS - git status --porcelain backend/ is empty. No route, controller, service, middleware, schema, migration or backend test changed",
                        "git_status_before":  "Isolated worktree created clean from origin/main (c3f8a4b). The primary checkout's six modified tracked files and ~35 untracked paths were never read beyond git status, never staged, never modified",
                        "git_status_after":  "7 ticket-owned files changed across 3 commits on fix/analyst-report-ingestion-contract. Nothing outside frontend/src, frontend/e2e and docs/ was touched",
-                       "ci":  "PENDING - see next_action; branch pushed, run to be confirmed"
+                       "ci":  "PASS - https://github.com/haiderchattha99-ali/ThreatNeXus/actions/runs/31491172952 (all six required jobs green on the first push: Secrets and generated artifacts, Prisma schema and migration history, Backend tests, Frontend lint/tests/build, Browser suite (Chromium), Core evaluators. 'Mutation and concurrency gates' is manual-trigger-only, not required, correctly skipped)"
                    },
     "known_issues":  [
                          "No manual pass in the user's own Chrome profile: the claude-in-chrome extension refused to connect (OAuth token belongs to a different claude.ai account than Claude Code is logged in as). The live verification was done by real Chromium via Playwright driving the production build against the isolated Docker stack, asserting the request URL on the wire, zero console errors AND warnings, and the rendered evidence - then corroborated directly in PostgreSQL. Substantively equivalent, but it is a Playwright-driven browser, not a hand-driven one, and that distinction is recorded rather than smoothed over",
@@ -96,7 +96,7 @@
                          "The legacy POST /api/threats/upload route is still mounted, still writes Threat rows, and still carries NO rate limiter (uploadRateLimiter is mounted on /api/reports only - now documented in OPERATIONS_RUNBOOK.md). Nothing in the analyst workflow reaches it any more, but whether the whole legacy Threat surface can be retired was not investigated and is a separate decision",
                          "No independent reviewer has looked at this change yet - per CLAUDE.md's own rule, an independent pass (Codex) is recommended before it is merged"
                      ],
-    "next_action":  "Push fix/analyst-report-ingestion-contract and confirm CI is green, then hand to Codex for an independent review. Do not open a PR or merge to main without explicit instruction. Before any future demo, note that the analyst upload path now requires the canonical pipeline's schema (timestamp,ip,port,protocol required headers) - the legacy route's looser CSV will be REJECTED with a bounded reason code rather than silently accepted.",
+    "next_action":  "None required to close this ticket - the branch is pushed and CI is green. Hand to Codex for an independent review. Do not open a PR or merge to main without explicit instruction. Before any future demo, note that the analyst upload path now requires the canonical pipeline's schema (timestamp,ip,port,protocol required headers) - the legacy route's looser CSV will be REJECTED with a bounded reason code rather than silently accepted.",
     "checkpoint_ref":  "03ea2ae",
     "updated_at":  "2026-08-11T12:20:00.0000000Z",
     "next_writer":  "codex"

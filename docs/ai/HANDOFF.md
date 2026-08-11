@@ -209,6 +209,12 @@ Two traps this repository has recorded before, both avoided deliberately:
 | complete backend suite | **3071 passed / 177 skipped** — the documented Phase 8F baseline, unchanged |
 | secret scan (CI's own patterns) | clean — no `.env`, no credential literals, no tracked `dist`, nothing secret-shaped in the bundle |
 
+**CI: green on the first push** —
+[run 31491172952](https://github.com/haiderchattha99-ali/ThreatNeXus/actions/runs/31491172952). All six
+required jobs succeeded: Secrets and generated artifacts, Prisma schema and migration history, Backend
+tests, Frontend lint/tests/build, Browser suite (Chromium), Core evaluators. "Mutation and concurrency
+gates" is manual-trigger-only and correctly skipped.
+
 `prisma format` rewrote `backend/prisma/schema.prisma`'s line endings (CRLF→LF, **zero** content
 change); that was reverted so this ticket touches no backend file at all.
 
