@@ -66,7 +66,7 @@
         "frontend": "untouched - git status frontend/ is empty",
         "no_real_env_read": "PASS - backend/.env never opened, read, printed or referenced",
         "primary_checkout": "untouched - C:\\Users\\LENOVO\\Desktop\\ThreatNeXus stayed on docs/phase-9c-pkcert-technical-dossier with its unrelated Phase 9 work intact",
-        "ci": "pending - filled in by the post-push checkpoint commit"
+        "ci": "GREEN on the first push of 4fa62e6 - run 31546832118 (https://github.com/haiderchattha99-ali/ThreatNeXus/actions/runs/31546832118). All six required jobs success: hygiene, schema, backend, frontend, Browser suite (Chromium), core evaluators. The seventh (mutation and concurrency gates) is manual-dispatch-only and correctly skipped"
     },
     "known_issues": [
         "MANDATORY PRE-10A2 BLOCKER: the existing IOC runner owns claimPendingJob and calls provider.lookup() internally. A targeted runner/hook contract must be designed AND independently reviewed before 10A-2 - see docs/ai/HANDOFF.md for the seven guarantees it must provide.",
@@ -79,8 +79,8 @@
         "The second independent review has not happened yet - per CLAUDE.md this must not be treated as final."
     ],
     "next_action": "Codex SECOND independent review of feat/phase-10a1-enrichment-orchestration-foundation, against the six pass-1 findings recorded above. Do NOT open a PR, do NOT merge main, do NOT begin 10A-2. After that review passes, design the targeted IOC runner/hook contract recorded in docs/ai/HANDOFF.md and have that design independently reviewed before writing any 10A-2 execution code.",
-    "checkpoint_ref": "0b95788",
-    "updated_at": "2026-08-12T04:30:00.000Z",
+    "checkpoint_ref": "4fa62e6",
+    "updated_at": "2026-08-12T04:45:00.000Z",
     "next_writer": "codex",
     "current_work": "",
     "files_changed": [

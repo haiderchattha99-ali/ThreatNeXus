@@ -155,6 +155,8 @@ target a crash left unwritten.
 | Secret scan | CI's own pattern set, repo-wide: clean. No tracked `.env`. |
 | Frontend | untouched (`git status frontend/` empty) |
 | `backend/.env` | never opened, read, printed or referenced — only `.env.example` |
+| Primary checkout | untouched — `C:\Users\LENOVO\Desktop\ThreatNeXus` stayed on `docs/phase-9c-pkcert-technical-dossier` with its unrelated Phase 9 work intact |
+| **CI** | **green on the first push of `4fa62e6`** — [run 31546832118](https://github.com/haiderchattha99-ali/ThreatNeXus/actions/runs/31546832118). All six required jobs success; the manual-dispatch-only seventh correctly skipped. |
 
 **Local full-suite flakiness (not a regression).** Running all 154 files at default parallelism on
 this machine produces 5s-timeout failures in unrelated pre-existing suites
