@@ -1,311 +1,144 @@
-# Handoff: TNX-DEMO-INGESTION-REPAIR
+# Handoff: TNX-P10A1-ENRICHMENT-ORCHESTRATION-FOUNDATION
 
 - From: claude
-- Suggested next writer: unassigned — ticket complete
-- Branch: `fix/analyst-report-ingestion-contract` (from `origin/main` @ `c3f8a4b`)
-- Worktree: `F:\AI-Worktrees\ThreatNeXus\ingestion-repair` (isolated — the primary checkout was never touched)
-- Writer lock: **released** (`.ai-team/` is empty)
-- Updated: 2026-08-11T13:15:00Z
+- Suggested next writer: **codex (independent review)** — do not start 10A-2 before that review
+- Branch: `feat/phase-10a1-enrichment-orchestration-foundation` (from `origin/main` @ `3638a39`, the PR #19 merge)
+- Worktree: `F:\AI-Worktrees\ThreatNeXus\phase-10a1` (isolated — the primary checkout, which carries
+  unrelated uncommitted presentation work on `docs/phase-9c-pkcert-technical-dossier`, was never
+  touched, never switched, never stashed)
+- Writer lock: held for this ticket, released on handoff
+- Updated: 2026-08-12T02:55:00Z
 
-**Status: closed.** Codex's independent review found 1 medium test-strength finding and nothing higher.
-It is fixed (see "Review round" below), the fix is verified locally and pushed, and CI is green at the
-new tip. Do not open or merge a PR without explicit instruction.
+**Status: complete and inert.** Phase 10A-1 records enrichment orchestration INTENT and executes
+nothing. No PR opened, `main` not merged, 10A-2 not started — per instruction.
 
 > Note for any future writer: `handoff-task.ps1` overwrites this file with a five-line template on
-> every run. It has run twice this ticket; each time the detailed content below was restored from the
-> prior commit afterwards. If you run the script yourself, do the same — the template alone loses the
-> root cause, the contract table and the evidence below.
+> every run. If you run it, restore the detail below from the prior commit afterwards.
 
-## Review round — Codex, 1 medium finding, fixed
+---
 
-**Finding:** in `findingsUpload.spec.js`, the dashboard-delta proof was conditional —
-`if (openFindingsBefore !== null && openFindingsAfter !== null) { expect(...).toBe(...) }`. For a
-signed-in ANALYST, "Open findings" is expected to be `AVAILABLE` and numeric, so a `null` (RESTRICTED,
-UNAVAILABLE, or a missing `data-count-to`) should be a regression, not a reason to skip the comparison.
-The conditional let such a regression pass silently, weakening the ticket's dashboard-evidence
-acceptance criterion.
+## ⛔ MANDATORY BLOCKER BEFORE PHASE 10A-2
 
-**Fix:** added `requireKpiValue(page, label)` — asserts the value is non-null and finite (with a
-diagnostic message naming the tile and the bad value), then returns it. Both call sites
-(`openFindingsBefore`/`openFindingsAfter`) now use it, and the delta check is an unconditional
-`expect(openFindingsAfter).toBe(openFindingsBefore + 2)`. No production code touched; only
-`frontend/e2e/findingsUpload.spec.js` changed.
+**Do not implement 10A-2 execution until this is designed and independently reviewed.**
 
-**Verified:** writer lock reacquired, isolated stack rebuilt from zero (23 migrations, fresh 11-finding
-seed) so the gate ran against a pristine database, not one carrying prior probe data.
-- targeted `findingsUpload.spec.js`: **5 / 5**
-- complete Chromium suite: **55 / 55**
-- frontend lint: clean (same 6 pre-existing warnings, none new)
-- frontend unit: **169 / 169**
-- production build: clean
+The existing IOC runner (`backend/src/services/enrichment/enrichmentRunner.js`) currently owns
+`claimPendingJob` and calls `provider.lookup()` internally. Phase 10A-2 cannot simply "turn on a
+worker" against it. Before writing any 10A-2 execution code, define — and have independently
+reviewed — a **targeted runner/hook contract** that guarantees all of the following:
 
-Commit and push: see the top of this file / STATE.yaml `checkpoint_ref` for the exact SHA and the CI
-run confirmed green at that tip.
+1. **Only Phase-10-linked IOC ids are considered.** The targeted path must not widen into the
+   ordinary batch's candidate set.
+2. **Quota reservation happens AFTER the IOC claim succeeds but BEFORE `lookup()`.** Reserving
+   before the claim leaks budget on a lost claim race; reserving after the call cannot refuse one.
+3. **The attempt becomes `IN_FLIGHT` immediately before `provider.lookup()`**, so a crash between
+   reservation and fetch is distinguishable from a crash during one.
+4. **A quota refusal performs no provider call and safely releases/refunds the IOC claim attempt.**
+   A refused reservation must not leave an IOC job leased and stranded.
+5. **The normalized result or failure finalizes the corresponding Phase-10 attempt EXACTLY ONCE.**
+6. **The ordinary ADMIN IOC batch retains its existing behaviour**, unchanged and untargeted.
+7. **No provider call is double-counted or executed twice** across the two paths.
 
-## Root cause
+Related, and deliberately still open: `VulnerabilityEnrichmentJob` is **not** made worker-eligible in
+10A-2 either. Its runner calls three providers per job plus a per-batch KEV catalogue fetch, which
+needs its own hook design. NVD delegates therefore continue to require the existing ADMIN
+vulnerability batch, and that limitation is documented in the README, the provider guide and the run
+API's own `SKIPPED_*` vocabulary rather than hidden.
 
-`frontend/src/pages/Upload.jsx` called `threatService.uploadCSV()`, which posts to the **legacy**
-`POST /api/threats/upload`. That route runs `threatController.uploadThreatCSV` and writes standalone
-`Threat` rows. It creates **no** `RawReport`, no `RawReportRow` evidence, no `Finding`, no
-`FindingOccurrence`, no ownership resolution, no enrichment scheduling, no risk recalculation, and no
-`report.ingestion.*` audit event. The page then rendered its "Report processed" heading from that
-route's `"{added} threat(s) added successfully"` message — so an analyst got a success screen for an
-upload the Findings workspace, the occurrence history and the operational overview never received.
+---
 
-One detail the ticket did not state, and which makes the diagnosis certain: **`Upload.jsx` already
-read `result.findingCounts`** — a field only the *canonical* controller returns. The lifecycle chips
-were dead code against the legacy response body. The page had been written for the right contract and
-wired to the wrong one.
+## What Phase 10A-1 delivered
 
-Two test layers should have caught this and structurally could not:
+One additive migration `20260811162611_add_phase10a1_enrichment_orchestration` (**24 migrations
+total**, CI's frozen list updated in the same commit), adding:
 
-- `Upload.test.jsx` mocked `threatService.uploadCSV` and asserted it was called. A service-layer mock
-  can only prove "the page called the function the test named" — it cannot notice that the function
-  talks to the wrong backend route.
-- `findingsUpload.spec.js` asserted that a heading reading "Report processed" appeared. Its own
-  comment even quoted the legacy `"N threat(s) added…"` toast, so the wrong contract was visible in
-  the test file and still read as green.
+- **5 tables** — `FindingEnrichmentRun`, `FindingEnrichmentRunItem`, `ProviderLookupJob`,
+  `ProviderLookupAttempt`, `ProviderDailyUsage`.
+- **9 enums** — `EnrichmentSubjectType`, `EnrichmentRunTrigger`, `EnrichmentRunState`,
+  `RunItemDecision` (8 values), `LookupJobTrigger`, `ProviderLookupJobState` (12 values, including
+  the corrected `SKIPPED_BUDGET`), `QuotaLane`, `AttemptState`, `AttemptOutcome`.
+- **7 CHECK constraints**, hand-written into the migration because Prisma cannot model them.
 
-## What changed (7 files, frontend + docs only)
+Application code, all under `backend/src/services/enrichmentOrchestration/` (10 modules):
+`enrichmentSubject`, `enrichmentDecisionCodes`, `enrichmentIdentity`,
+`enrichmentOrchestrationConfig`, `enrichmentApplicabilityRouter`,
+`enrichmentOrchestrationRepository`, `enrichmentRunService`, `enrichmentRunReadService`,
+`enrichmentReconciliationService`, `enrichmentUsageService`. Plus one controller, two routers,
+`env.js` wiring, `.env.example`, and the ingestion call site.
 
-| File | Why |
-|---|---|
-| `frontend/src/services/api.js` | New `reportIngestionService.uploadReport()` → `POST /reports/upload`. `threatService.uploadCSV` left in place for the legacy Threat screens. |
-| `frontend/src/constants/reportIngestion.js` *(new)* | The closed outcome vocabulary, mirroring the controller's `OUTCOME_RESPONSE` table — status→result classifier, badge dictionary, headlines, screen-owned prose, `safeReasonCode()`, `reportFacts()`. |
-| `frontend/src/pages/Upload.jsx` | Renders the server-assigned outcome, the persisted report facts, and lifecycle counts **only** on a real 201. |
-| `frontend/src/pages/Upload.test.jsx` | Rewritten to stub `axios`, not the service layer, so the literal URL is asserted. 14 tests. |
-| `frontend/e2e/findingsUpload.spec.js` | Deepened from a heading assertion to the full evidence chain + an idempotency proof. 5 tests. |
-| `docs/OPERATIONS_RUNBOOK.md`, `docs/ai/SECURITY.md` | Two lines corrected against `app.js` — see "Documentation corrections" below. |
+## The design decisions worth carrying forward
 
-**`git status --porcelain backend/` is empty.** No backend route, controller, service, middleware,
-Prisma schema, migration, backend test or `package.json` anywhere in the repository was touched, and
-no dependency was added.
+**Request identity and work identity are SEPARATE, and must stay separate.**
+`idempotencyKey` (unique per run) deduplicates *the same ask*; `activeLookupKey` (unique per job,
+held only while non-terminal) deduplicates *outbound work*. Collapsing them is precisely the defect
+the v2.1 correction addendum exists to fix — it let an active AbuseIPDB run silently suppress a
+later Censys request. Three consequences are simultaneously true and each has a test: concurrent
+identical requests collapse to one run; an AbuseIPDB-scoped run does not suppress a Censys-scoped
+run; two Findings on one IP share one job.
 
-## Final frontend→backend contract
+**Routing-time budget refusal ≠ execution-time budget refusal.** A known-zero budget at routing time
+is `RunItem.decision = SKIPPED_BUDGET` with **no job and no reservation**. A refused atomic
+reservation at execution time (10A-2) is `job.state = SKIPPED_BUDGET` while the run item stays
+`ELIGIBLE` and linked. Run aggregation handles both, so "we never asked" is never reported as "we
+asked and were refused".
 
-```
-POST /api/reports/upload
-Content-Type: multipart/form-data
-Body: exactly one field, "file"
-```
+**Router precedence is deliberate**, not incidental: subject compatibility → credential configured →
+freshness → lane budget → eligible. `force` bypasses freshness *only*. Reporting a budget refusal
+for a subject that already had a fresh answer would be true but misleading.
 
-`source` (`SYNTHETIC_UPLOAD`), `reportType` (`ACCESSIBLE_RDP`) and `schemaVersion`
-(`accessible-rdp.synthetic.v1`) stay **server-decided** in `reportIngestionController.js` and are read
-from no request field. The browser cannot claim a provider, report type or schema version it was not
-given — asserted directly (`[...formData.keys()]` is exactly `['file']`).
+**Serializers publish job STATE, never job IDENTITY.** A shared job's id (or any of its hashes) would
+let a holder of Finding A's summary correlate it with every other Finding pointing at the same job.
+A run belonging to another Finding is 404, not 403.
 
-### How the outcome is determined, and why it is not "any 2xx wins"
+**Delegate links are read-only in 10A-1.** The Phase-10 job links an `IocEnrichment` /
+`VulnerabilityEnrichmentJob` row that ingestion or the ADMIN batch already created. It never creates,
+claims or mutates one — which is why those pipelines are provably unchanged.
 
-The controller does **not** put `outcome` in the response body. It does map each member of the closed
-`INGESTION_OUTCOMES` set to exactly one distinct status, so the status *is* the outcome:
-
-| Status | Result | Evidence recorded? |
-|---|---|---|
-| 201 | `PROCESSED` | yes — lifecycle counts rendered |
-| 200 | `DUPLICATE_COMPLETED` | already on file — **nothing recorded again**, no counts shown |
-| 409 | `DUPLICATE_IN_PROGRESS` | no |
-| 400 | `REJECTED` | no |
-| 422 | `UNPROCESSABLE_NO_VALID_ROWS` | no |
-| 500 | `FAILED` | partial, kept as-is |
-| 413 / 429 / 403 / no response | `TOO_LARGE` / `RATE_LIMITED` / `DENIED` / `UNAVAILABLE` | never entered the pipeline — named separately, on purpose |
-
-That 200 row is the important one: under the legacy contract every 2xx rendered "Report processed".
-A replay that recorded nothing now says **"Already ingested"** and shows no lifecycle counts, even if
-a body carried some (there is an explicit test for that).
-
-### Error safety
-
-No server free text reaches the DOM. Every message is the screen's own copy, held in
-`constants/reportIngestion.js`. The **only** server-supplied value rendered is the backend's bounded
-`reason` CODE, and it is shape-checked (`/^[A-Z][A-Z0-9_]{0,63}$/`) before rendering — anything else is
-dropped. A test drives a response body carrying a filesystem path, a stack frame, a provider key
-fragment and an uploaded row's contents, and asserts none of it appears.
-
-## Proof that a real Finding is created — and that a replay creates none
-
-Read directly out of PostgreSQL after the browser run, not off the screen:
-
-```
-     sourceFileName      |     status      | read | accepted | rejected | attempts |   file_id
--------------------------+-----------------+------+----------+----------+----------+--------------
- demo_01_baseline.csv    | COMPLETED       |    9 |        9 |        0 |        1 | 635a91f44197
- demo_02_persistence.csv | COMPLETED       |    6 |        6 |        0 |        1 | ed67f5a6d4b7
- demo_03_latest.csv      | COMPLETED       |    5 |        5 |        0 |        1 | 617a4f99466d
- e2e-ingestion-probe.csv | PARTIALLY_VALID |    3 |        2 |        1 |        1 | d8e3cda7ef2d
- e2e-ingestion-probe.csv | PARTIALLY_VALID |    3 |        2 |        1 |        1 | dcc62a2790d1
-
- indicatorValue | port | protocol | status | occurrenceCount | recurrenceCount
-----------------+------+----------+--------+-----------------+-----------------
- 198.18.151.172 | 3389 | TCP      | OPEN   |               1 |               0
- 198.18.151.52  | 3389 | TCP      | OPEN   |               1 |               0
- 198.18.196.180 | 3389 | TCP      | OPEN   |               1 |               0
- 198.18.196.60  | 3389 | TCP      | OPEN   |               1 |               0
-
-              action              | outcome | count
-----------------------------------+---------+-------
- report.ingestion.completed       | SUCCESS |     3
- report.ingestion.partially_valid | SUCCESS |     2
- report.ingestion.started         | SUCCESS |     5
-```
-
-**Idempotency**, three ways in one table: the probe file was uploaded twice and the demo fixture was
-uploaded again on top of `seed:demo`'s own ingestion — yet there is exactly **one** `RawReport` per
-sha256, `processingAttempts` is still **1** on every row, `occurrenceCount` is still 1, and there are
-**five** `report.ingestion.started` events for five distinct files with **none** for any replay. The
-duplicate short-circuits *before* the attempt increment.
-
-`IocEnrichment` holds 15 rows, all `provider=abuseipdb status=PENDING` — scheduled durably by
-ingestion, never executed. No provider was contacted.
-
-## Test evidence
-
-**Unit / component — `Upload.test.jsx`, 14 tests.** The seam moved from the service layer down to
-`axios`, so `../services/api` is the *real* module and the assertions are made against the literal URL
-that reaches the HTTP client.
-
-> **Red-checked.** Before trusting it, `Upload.jsx` was temporarily re-pointed at
-> `threatService.uploadCSV` and the contract test was confirmed to fail:
-> `Expected: "/reports/upload", Received: "/threats/upload"`. Then restored, re-run green. A test that
-> cannot fail on the regression it exists to catch would have repeated the original mistake.
-
-Covered: canonical URL asserted / legacy URL never called · only `file` crosses the wire · PROCESSED
-renders persisted facts and real lifecycle counts · DUPLICATE_COMPLETED is not a new import and never
-shows counts (even when a body carries them) · IN_PROGRESS / REJECTED + bounded reason code / non-code
-reason dropped / EMPTY / FAILED / transport-failure-is-not-success · 403 renders access-refused ·
-and the **real** shared interceptor is exercised directly to prove 401 clears the session and 403 does
-not.
-
-**Real-stack Chromium — `findingsUpload.spec.js`, 5 tests**, driving the production build against a
-real backend and a real PostgreSQL:
-
-1. upload → **request URL asserted on the wire** (`/api/reports/upload`, never `/threats/`)
-2. → 201 `PROCESSED`
-3. → persisted counters: rows read 3, accepted 2, rejected 1, status `PARTIALLY_VALID`, a report
-   reference, a 12-hex file identity
-4. → `New findings created: 2`
-5. → **the Finding itself**, found by the exact indicator that upload introduced, showing
-   `Times observed = 1`, `Recurrences after closure = 0`
-6. → Operations overview refreshed, `Open findings` up by exactly 2
-7. **idempotency**: identical bytes re-uploaded → "Already ingested", no lifecycle counts, **same
-   report reference**, still exactly one Finding row, still one observation
-8. the demo fixture replays as a duplicate rather than double-counting
-9. VIEWER: denied in place, **no upload request leaves the browser at all**, session survives
-
-## A real defect found in the test harness during the live run
-
-The first live run failed with `Expected: 13, Received: 10` on the dashboard delta. That was neither a
-product bug nor a reason to relax the assertion: `components/ui/Metric.jsx` animates a KPI with a GSAP
-count-up, and `innerText` was read while the digits were still climbing. The authoritative figure is
-the **`data-count-to`** attribute, written straight from `metric.value`, and it is present *only* when
-the figure is a real counted number — so reading it also yields a correct `null` for
-`RESTRICTED`/`UNAVAILABLE` tiles instead of a coerced zero.
-
-**Any future E2E that reads a dashboard metric must read `data-count-to`, never the rendered text.**
-
-## The F-drive writer-lock gap is fixed, not worked around
-
-Every handoff since Phase 8B recorded that `start-task.ps1` "throws against this repo's STATE.yaml
-schema" and that "no working `.ai-team/WRITER_LOCK.json` mechanism exists for this repo". The cause is
-small: the scripts assign `$state.current_work`, `$state.files_changed`, `$state.validation.passing`
-and `$state.validation.failing`, and none of those keys existed here.
-
-Commit `4c60ed0` adds the four keys (empty values, nothing else changed). It had to be committed
-*alone and first*, because `Assert-TeamClean` refuses a dirty tree — and fixing the schema is what
-makes the tree dirty. After that, `start-task.ps1` succeeded and this repository held a real
-`.ai-team/WRITER_LOCK.json` for the first time. `checkpoint-task.ps1` should now work too.
-
-## Local verification stack (all in the session scratchpad, nothing committed)
-
-Compose project `tnx-ingestion`, conflict-free ports: postgres `55432`, backend `5100`, Playwright
-preview `4273`. 23 migrations applied from zero; seeded with `npm run seed:users` + `npm run seed:demo`
-(11 findings). `JWT_SECRET` freshly generated per run; **every provider key resolved empty**,
-`IOC_ENRICHMENT_PROVIDER=mock`, `AI_ENABLED=false`.
-
-Two traps this repository has recorded before, both avoided deliberately:
-
-- Playwright's `reuseExistingServer: true` can silently attach to a leftover preview and fake the
-  gate. Ran with `E2E_SKIP_WEBSERVER=1` against a dedicated port instead.
-- `docker compose down -v` **fails without `JWT_SECRET` set** — the interpolation guard runs even on
-  teardown. The first teardown attempt therefore left the volume in place and re-seeded on top of old
-  data (19 findings instead of 11), which was caught and redone properly. The full browser suite was
-  then run against a genuinely pristine database.
-
-## Gates
+## Evidence
 
 | Gate | Result |
 |---|---|
-| frontend lint | clean (6 pre-existing warnings, none in changed files) |
-| frontend unit | **169 passed**, 13 files |
-| frontend build | clean |
-| Chromium Playwright | **55 / 55 passed** |
-| prisma validate | valid |
-| prisma migrate deploy | 23 migrations from zero |
-| prisma migrate diff | **exit 0 — no drift** |
-| focused ingestion tests | **65 passed** |
-| complete backend suite | **3071 passed / 177 skipped** — the documented Phase 8F baseline, unchanged |
-| secret scan (CI's own patterns) | clean — no `.env`, no credential literals, no tracked `dist`, nothing secret-shaped in the bundle |
+| `prisma format` / `validate` | pass |
+| `migrate deploy` from zero (fresh DB) | **24/24 applied** |
+| `migrate diff --exit-code` | **no difference detected** (exit 0) |
+| CI frozen migration list | updated to 24 in the same commit |
+| 5 tables / 9 enums / 7 constraints in live schema | verified by direct `pg_catalog` query |
+| Real-PG constraint suite | **9 tests, 8 independent rejections across the 7 constraints** |
+| Real-PG orchestration suite | 9 tests (T-23, concurrent collapse, scope separation, shared job, policy skips, 3×CVE, provider-text exclusion, audit safety) |
+| Real-PG default-off suite | 3 tests (off = zero Phase-10 rows; on = records but no lookup; idempotent re-upload) |
+| Pure unit suites | 101 tests across 6 files, incl. the static inertness gate |
+| **Full backend suite** | **3368 passed, 2 skipped, 0 failed** (fresh DB, `--maxWorkers=3`) |
+| Evaluators | `eval:phase1`, `eval:risk` (19/19), `eval:phase2` (22/112), `eval:phase3` (12/151), `eval:vulnerability` (41/992), `eval:phase4` (14/151), `eval:phase5` (14/150), `eval:phase6.3` (13/108), `eval:phase7` (8/35) — **all PASS** |
+| Risk v1 config version / fingerprint | unchanged (`v1.0.0`, `risk-additive-bucketed-v1`); risk modules untouched per `git status` |
+| Secret scan | CI's own pattern set, repo-wide: clean. No tracked `.env`. |
+| Frontend | untouched (`git status frontend/` empty) |
+| `backend/.env` | never opened, read, printed or referenced — only `.env.example` |
 
-**CI: green on the first push** —
-[run 31491172952](https://github.com/haiderchattha99-ali/ThreatNeXus/actions/runs/31491172952). All six
-required jobs succeeded: Secrets and generated artifacts, Prisma schema and migration history, Backend
-tests, Frontend lint/tests/build, Browser suite (Chromium), Core evaluators. "Mutation and concurrency
-gates" is manual-trigger-only and correctly skipped.
-
-`prisma format` rewrote `backend/prisma/schema.prisma`'s line endings (CRLF→LF, **zero** content
-change); that was reverted so this ticket touches no backend file at all.
-
-## Documentation corrections
-
-Two lines described the ingestion route incorrectly and were corrected against `app.js`:
-
-- `docs/ai/SECURITY.md` — the `upload` rate-limit bucket covers `POST /api/reports/upload`, not
-  `POST /api/reports/accessible-rdp` (which does not exist).
-- `docs/OPERATIONS_RUNBOOK.md` — it listed the upload bucket as applying to
-  "`POST /api/reports` (or `/api/threats/upload`)". The legacy route carries **no** limiter:
-  `app.js` mounts `uploadRateLimiter` on `/api/reports` only. Security-relevant, so it is stated
-  plainly rather than left implied.
-
-`docs/API_CONTRACT_PHASE0.md` was left alone — it documents `/threats/upload` as a Phase 0 route,
-which is still accurate, and never claimed the analyst screen used it. `docs/USER_GUIDE.md` already
-described the canonical behaviour; it is simply true now.
+**Local full-suite flakiness (not a regression).** Running all 154 files at default parallelism on
+this machine produces 5s-timeout failures in unrelated pre-existing suites
+(`caseWorkflowConcurrency`, `vulnerabilityPacketBApplication`, `vulnerabilityReleaseWorkflow`). Proven
+unrelated: those files import only workflow/vulnerability services, they pass in isolation, and the
+same failures still occur with **every Phase-10 file excluded**. A fresh database at
+`--maxWorkers=3` is fully green. The suite has no explicit `testTimeout`, so vitest's 5s default
+applies; the contention is local, not in CI.
 
 ## Honest gaps
 
-- **No manual pass in the user's own Chrome.** The `claude-in-chrome` extension refused to connect
-  (its OAuth token belongs to a different claude.ai account than Claude Code is signed into). The live
-  verification was real Chromium via Playwright driving the production build, asserting the wire URL,
-  zero console errors *and* warnings, and the rendered evidence — then corroborated in PostgreSQL.
-  Substantively equivalent, but it is a Playwright-driven browser, not a hand-driven one.
-- **The E2E probe mints indicators from the run clock** (`198.18.<100-199>.<20-99>` plus a `+120`
-  sibling) to avoid colliding with the demo seed *and* with a previous run against the same database.
-  A collision is very unlikely, and would fail loudly (`PERSISTED` instead of `CREATED`) rather than
-  pass silently. CI runs against a fresh database, so it cannot occur there.
-- **The dashboard delta assertion is skipped, not failed, when the tile is RESTRICTED/UNAVAILABLE.**
-  For ANALYST against the demo seed it always runs, but a future permission change could quietly
-  reduce it to a no-op.
-- **The frontend infers the outcome from the HTTP status** because the controller returns no
-  `outcome` field. That is exact today (1:1 with the closed set), but if two outcomes ever shared a
-  status, `constants/reportIngestion.js` would mis-label one. A backend `outcome` field would remove
-  the coupling; adding one was out of scope here.
-- **The legacy `/api/threats/upload` route is still mounted, still writes `Threat` rows, and still has
-  no rate limiter.** Nothing in the analyst workflow reaches it any more. Whether the whole legacy
-  Threat surface can be retired was not investigated — that is a separate decision with its own
-  evidence requirement.
-- **No independent review yet.** Per CLAUDE.md's own rule, this should not be merged on my review
-  alone.
+- **`SKIPPED_EXECUTION_UNAVAILABLE` and `MANUAL_DIRECT` are defined but unused in 10A-1.** They exist
+  so the vocabulary and constraints are complete and provable before 10A-2 writes the code that uses
+  them. `ProviderLookupAttempt` and `ProviderDailyUsage` likewise have zero rows by design.
+- **`ENRICHMENT_WORKER_ENABLED` is declared and validated but consumed by nothing.** There is no
+  worker to enable.
+- **Freshness is read one query per target** (bounded by the provider scope plus one per verified
+  CVE). Marked with a `ponytail:` comment; batch into a single `IN` query if a Finding ever carries
+  enough verified CVEs for it to matter.
+- **The v2 / v2.1 plan documents were not available in the implementing session.** The data model was
+  recovered from the prior session's committed `schema.prisma` (which encodes it in detail), and the
+  async run/summary API shape and the additive upload-response field names were **derived from repo
+  conventions with the user's explicit approval**, not copied from the spec. If v2/v2.1 names those
+  differently, reconcile the field names — the behaviour and contracts should already match.
+- **No independent reviewer has seen this yet.** Per `CLAUDE.md`, do not treat it as final.
 
-## Demo note worth carrying forward
+## Next action
 
-The analyst upload path now enforces the canonical schema (`timestamp,ip,port,protocol` required
-headers). A looser CSV that the legacy route used to swallow will now be **REJECTED** with a bounded
-reason code. That is the correct behaviour, but it will look like a regression to anyone who
-demonstrated with an ad-hoc CSV before.
-
-## Protected boundaries honoured
-
-- The primary checkout `C:\Users\LENOVO\Desktop\ThreatNeXus` was **never modified** — its six changed
-  tracked files and ~35 untracked Phase 9C paths are exactly as found. All work happened in an
-  isolated worktree.
-- `docs/codex/`, `deliverables/`, `tmp/` — never read, staged or modified.
-- `backend/.env` — never opened, read, printed or referenced.
-- No `git add -A` at any point; every commit staged explicit paths after a `git add --dry-run` review.
+Codex independent review of this branch. After it passes, design the runner/hook contract in the
+blocker section above and have *that* reviewed before any 10A-2 code is written.

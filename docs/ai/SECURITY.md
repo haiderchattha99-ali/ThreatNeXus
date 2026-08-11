@@ -479,6 +479,52 @@ record of what exists and where.
   `frontend/e2e/findingAiAssistance.spec.js` for the disabled/denied states CI's own seeded stack can
   reach.
 
+## Phase 10A-1 — enrichment orchestration (inert)
+
+Phase 10A-1 records orchestration INTENT and executes nothing: no provider call, no quota
+reservation, no `ProviderLookupAttempt` row, no `ProviderDailyUsage` row, no worker. The security
+properties that matter here are therefore about *what the records can leak* and *what the switches
+can turn on by accident*, not about outbound traffic.
+
+**Default-off, twice over.** `AUTO_ENRICHMENT_ENABLED=false` and `ENRICHMENT_WORKER_ENABLED=false`,
+and independently every `<PROVIDER>_AUTOMATIC_DAILY_BUDGET` defaults to `0`. Turning the feature on
+still cannot spend automatic third-party quota until an operator also raises a budget deliberately.
+Both switches accept only the exact string `true` — there is no `1`/`yes`/`on` synonym for a control
+that spends money.
+
+**Credential values are never read.** The applicability router is told only *whether* a provider has
+a credential (`isProviderCredentialConfigured` coerces to `Boolean`). No module outside
+`enrichmentOrchestrationConfig.js` names an API-key variable at all, and a unit test asserts that.
+`ProviderLookupJob` deliberately has **no** `errorMessage` and **no** raw-body column, so a provider
+payload or an exception string has nowhere to land.
+
+**Cross-Finding isolation.** A `ProviderLookupJob` is SHARED — ten Findings on one IP point at one
+job. Serializers therefore publish the job's **state** (progress) but never its **identifier**, and
+never `queryIdentityHash`, `requestScopeHash`, `idempotencyKey`, `activeLookupKey` or `claimToken`.
+Each of those is stable across Findings, so publishing one would let a holder of Finding A's summary
+correlate it with Findings B..J by equality alone. A run belonging to another Finding is reported as
+**404, not 403** — confirming existence would itself be the leak. `skipReason` is a closed
+vocabulary and anything outside it is suppressed at serialization rather than passed through.
+
+**Idempotency-Key is bounded before it is hashed.** Non-empty, at most 128 UTF-8 **bytes** (a
+character-based bound would under-count multi-byte input), and no C0/C1 control characters or DEL —
+a control character in a header is a transport bug or an injection attempt. Only the SHA-256 digest
+is persisted; the raw value is never stored, logged, audited or echoed, and rejection messages name
+the rule rather than the value.
+
+**Truthful usage reporting.** `GET /api/enrichment/usage` returns zeros in this milestone, and says
+why: `accountingScope: PHASE_10_RESERVATIONS`, `coverage: PARTIAL`, `reservationsActive: false`,
+plus an explicit `excludedPaths` list (legacy ADMIN IOC batch, ADMIN vulnerability batch, pre-10A2
+synchronous direct-provider routes). It fabricates no total provider-call count, because it cannot
+know one. A bare `0` would have been a true number presented as a false claim.
+
+**Database-enforced integrity.** Seven CHECK constraints (proven by eight independent
+real-PostgreSQL rejection tests in `backend/tests/integration/phase10a1Constraints.test.js`) keep a
+policy skip from ever carrying outbound work, keep provider/subject pairings valid on both the job
+and the item, keep at most one typed result link that must match its provider, keep a
+`MANUAL_DIRECT` job out of the shared-work unique key, keep attempt finalization consistent in both
+directions, and floor `reservedCount` at zero.
+
 ## Security tests
 
 `backend/tests/` (unit, middleware, integration, including real-PostgreSQL concurrency),

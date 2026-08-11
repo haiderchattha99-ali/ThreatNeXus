@@ -194,3 +194,54 @@ There is no automated backup mechanism shipped with this project. For a local Co
 
 See `docs/ai/SECURITY.md` for the full secret-handling policy and `docs/TESTING_AND_CI.md` for how CI
 enforces it automatically.
+
+---
+
+## Phase 10A-1 — enrichment orchestration configuration
+
+Phase 10A-1 adds one additive migration
+(`20260811162611_add_phase10a1_enrichment_orchestration`) bringing the total to **24**. It adds five
+tables, nine enums and seven CHECK constraints. It alters no existing column, so the deployment step
+is an ordinary `npx prisma migrate deploy`.
+
+**No behaviour changes on upgrade.** Both new switches default to off and every automatic provider
+budget defaults to `0`:
+
+```
+AUTO_ENRICHMENT_ENABLED=false      # ingestion records orchestration runs
+ENRICHMENT_WORKER_ENABLED=false    # declared/validated; no worker exists in 10A-1
+```
+
+A deployment that applies this migration and changes nothing else produces exactly the records it
+produced before: the existing `IocEnrichment` row only, and zero Phase-10 rows of any kind.
+
+### Turning it on
+
+1. Set `AUTO_ENRICHMENT_ENABLED=true`. Ingestion now records runs, items and non-terminal jobs.
+   **Still nothing is executed** — there is no worker in this milestone.
+2. Raise the budgets you actually want spent, per provider and lane, e.g.:
+
+   ```
+   CENSYS_AUTOMATIC_DAILY_BUDGET=25
+   ABUSEIPDB_AUTOMATIC_DAILY_BUDGET=100
+   ```
+
+   With every automatic budget left at `0`, ingestion records honest `SKIPPED_BUDGET` decisions and
+   creates no jobs at all. That is the intended safe default, not a misconfiguration.
+
+Both switches accept only the exact string `true`. A malformed budget value fails configuration
+validation at startup with the variable **name** in the message and never its value.
+
+### Operational reads
+
+`GET /api/enrichment/usage` (ADMIN, `execute:enrichment-batch`) reports the configured budgets and
+Phase-10 reservations. In 10A-1 every reservation count is a structural zero and the response says
+so explicitly (`reservationsActive: false`, `coverage: PARTIAL`, plus an `excludedPaths` list). Do
+not read it as a total of provider calls made by the application — the legacy ADMIN IOC batch, the
+ADMIN vulnerability batch and the synchronous provider routes are outside its accounting scope.
+
+### Reconciliation
+
+`enrichmentReconciliationService.reconcileDelegatedJobs()` exists, is tested, and is **not
+scheduled** by anything. Nothing in the application calls it. Scheduling it is Phase 10A-2 work and
+is gated on the runner-hook design recorded in `docs/ai/HANDOFF.md`.
