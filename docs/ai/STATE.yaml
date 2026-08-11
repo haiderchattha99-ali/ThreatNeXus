@@ -2,8 +2,8 @@
     "schema_version":  1,
     "ticket":  "TNX-DEMO-INGESTION-REPAIR",
     "title":  "Analyst report ingestion moved onto the canonical /api/reports/upload contract",
-    "status":  "complete",
-    "owner":  "claude",
+    "status":  "handoff_ready",
+    "owner":  "unassigned",
     "reviewer":  "codex",
     "branch":  "fix/analyst-report-ingestion-contract",
     "worktree":  "F:\\AI-Worktrees\\ThreatNeXus\\ingestion-repair",
@@ -96,10 +96,10 @@
                          "The dashboard delta assertion is skipped (not failed) when the KPI tile is RESTRICTED or UNAVAILABLE, because there is no number to compare. For ANALYST against the demo seed it is always AVAILABLE, so it does run - but a future role/permission change could silently reduce that assertion to a no-op",
                          "Two rendering-adjacent facts about the canonical contract are worth knowing: the controller returns no explicit `outcome` field (the frontend reads the status, which is 1:1 with the closed outcome set), and DUPLICATE_COMPLETED returns 200 while PROCESSED returns 201. If a future change ever gave two outcomes the same status, constants/reportIngestion.js would silently mis-label one of them. A backend `outcome` field would remove that coupling, but adding one was out of this ticket\u0027s scope",
                          "The legacy POST /api/threats/upload route is still mounted, still writes Threat rows, and still carries NO rate limiter (uploadRateLimiter is mounted on /api/reports only - now documented in OPERATIONS_RUNBOOK.md). Nothing in the analyst workflow reaches it any more, but whether the whole legacy Threat surface can be retired was not investigated and is a separate decision",
-                         "Codex's one medium finding (silent skip on a null dashboard KPI) is now fixed - see the review_fix_local validation entry. No other finding was raised"
+                         "Codex\u0027s one medium finding (silent skip on a null dashboard KPI) is now fixed - see the review_fix_local validation entry. No other finding was raised"
                      ],
-    "next_action":  "None required to close this ticket - the review fix is pushed and CI is green at the new tip. Do not open or merge a PR without explicit instruction.",
-    "checkpoint_ref":  "454384f",
-    "updated_at":  "2026-08-11T13:15:00.0000000Z",
-    "next_writer":  "codex"
+    "next_action":  "Ticket closed. Codex review\u0027s 1 medium finding is fixed, verified, and CI-green at commit f2cf21a (run 31494807494). No PR opened per instruction.",
+    "checkpoint_ref":  "d3993232140ba806e14ef283f576a22744934bd3",
+    "updated_at":  "2026-08-11T13:13:58.0424425Z",
+    "next_writer":  "unassigned"
 }
