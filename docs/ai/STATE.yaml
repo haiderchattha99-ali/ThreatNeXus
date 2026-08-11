@@ -99,7 +99,7 @@
                          "Codex's one medium finding (silent skip on a null dashboard KPI) is now fixed - see the review_fix_local validation entry. No other finding was raised"
                      ],
     "next_action":  "None required to close this ticket - the review fix is pushed and CI is green at the new tip. Do not open or merge a PR without explicit instruction.",
-    "checkpoint_ref":  "aa965f3997fc5bb68238a0b16e293f4a03b683dc",
-    "updated_at":  "2026-08-11T12:45:44.3602134Z",
+    "checkpoint_ref":  "454384f",
+    "updated_at":  "2026-08-11T13:15:00.0000000Z",
     "next_writer":  "codex"
 }
