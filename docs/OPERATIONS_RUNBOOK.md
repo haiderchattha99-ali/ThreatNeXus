@@ -126,7 +126,7 @@ Three independent buckets, all configurable via env vars (defaults shown):
 | Bucket | Env var | Default | Applies to |
 |---|---|---|---|
 | Auth | `RATE_LIMIT_AUTH_MAX` / `RATE_LIMIT_AUTH_WINDOW_MS` | 30 / 15 min | `/api/auth/login`, `/api/auth/register` |
-| Upload | `RATE_LIMIT_UPLOAD_MAX` | 20 | `POST /api/reports` (or `/api/threats/upload`) |
+| Upload | `RATE_LIMIT_UPLOAD_MAX` | 20 | `POST /api/reports/upload` — the canonical ingestion route. The legacy `/api/threats/upload` route carries **no** limiter: `app.js` mounts `uploadRateLimiter` on `/api/reports` only |
 | Provider execution | `RATE_LIMIT_PROVIDER_MAX` | 60 | Every `POST .../enrichment/*` route across all six providers, batch enrichment workers, and AI suggestion generation — one shared budget |
 
 A rate-limited caller receives `429`. Reading data is never rate-limited — only causing new work
