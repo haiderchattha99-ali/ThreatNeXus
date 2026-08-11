@@ -1,21 +1,46 @@
 # Handoff: TNX-DEMO-INGESTION-REPAIR
 
 - From: claude
-- Suggested next writer: codex (independent review)
+- Suggested next writer: unassigned — ticket complete
 - Branch: `fix/analyst-report-ingestion-contract` (from `origin/main` @ `c3f8a4b`)
 - Worktree: `F:\AI-Worktrees\ThreatNeXus\ingestion-repair` (isolated — the primary checkout was never touched)
-- Verified code checkpoint: `45f7105`
 - Writer lock: **released** (`.ai-team/` is empty)
-- Updated: 2026-08-11T12:32:00Z
+- Updated: 2026-08-11T13:15:00Z
 
-**Exact next action:** independent review of this change on `fix/analyst-report-ingestion-contract`
-(CI green, run 31491172952). **Do not open or merge a PR without explicit instruction.**
+**Status: closed.** Codex's independent review found 1 medium test-strength finding and nothing higher.
+It is fixed (see "Review round" below), the fix is verified locally and pushed, and CI is green at the
+new tip. Do not open or merge a PR without explicit instruction.
 
-> Note for the incoming writer: `handoff-task.ps1` overwrites this file with a five-line template.
-> It ran, it correctly released the lock and moved `STATE.yaml` to `handoff_ready`, and this detailed
-> content was then restored from commit `45f7105`. If you run the script yourself, restore the
-> substance afterwards the same way — the template alone loses the root cause, the contract table and
-> the evidence below.
+> Note for any future writer: `handoff-task.ps1` overwrites this file with a five-line template on
+> every run. It has run twice this ticket; each time the detailed content below was restored from the
+> prior commit afterwards. If you run the script yourself, do the same — the template alone loses the
+> root cause, the contract table and the evidence below.
+
+## Review round — Codex, 1 medium finding, fixed
+
+**Finding:** in `findingsUpload.spec.js`, the dashboard-delta proof was conditional —
+`if (openFindingsBefore !== null && openFindingsAfter !== null) { expect(...).toBe(...) }`. For a
+signed-in ANALYST, "Open findings" is expected to be `AVAILABLE` and numeric, so a `null` (RESTRICTED,
+UNAVAILABLE, or a missing `data-count-to`) should be a regression, not a reason to skip the comparison.
+The conditional let such a regression pass silently, weakening the ticket's dashboard-evidence
+acceptance criterion.
+
+**Fix:** added `requireKpiValue(page, label)` — asserts the value is non-null and finite (with a
+diagnostic message naming the tile and the bad value), then returns it. Both call sites
+(`openFindingsBefore`/`openFindingsAfter`) now use it, and the delta check is an unconditional
+`expect(openFindingsAfter).toBe(openFindingsBefore + 2)`. No production code touched; only
+`frontend/e2e/findingsUpload.spec.js` changed.
+
+**Verified:** writer lock reacquired, isolated stack rebuilt from zero (23 migrations, fresh 11-finding
+seed) so the gate ran against a pristine database, not one carrying prior probe data.
+- targeted `findingsUpload.spec.js`: **5 / 5**
+- complete Chromium suite: **55 / 55**
+- frontend lint: clean (same 6 pre-existing warnings, none new)
+- frontend unit: **169 / 169**
+- production build: clean
+
+Commit and push: see the top of this file / STATE.yaml `checkpoint_ref` for the exact SHA and the CI
+run confirmed green at that tip.
 
 ## Root cause
 

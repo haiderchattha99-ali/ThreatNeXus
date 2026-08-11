@@ -107,6 +107,19 @@ async function kpiValue(page, label) {
   return countTo === null || countTo === '' ? null : Number(countTo)
 }
 
+// For a signed-in ANALYST, "Open findings" is a real, server-counted query
+// (Finding.status = OPEN) and is expected to be AVAILABLE — see
+// operationalOverviewService.js's `findings.metrics.open`. A null here is not
+// a reason to skip the comparison; it is itself a regression (RESTRICTED,
+// UNAVAILABLE, or the data-count-to attribute missing), and must fail loudly
+// rather than let the delta assertion silently no-op.
+async function requireKpiValue(page, label) {
+  const value = await kpiValue(page, label)
+  expect(value, `"${label}" KPI tile is not showing an available numeric value for ANALYST`).not.toBeNull()
+  expect(Number.isFinite(value), `"${label}" KPI tile value ${value} is not a finite number`).toBe(true)
+  return value
+}
+
 async function openFindingByIndicator(page, indicator) {
   await page.goto(`/findings?indicator=${indicator}`)
   const table = page.getByRole('table', { name: 'Findings' })
@@ -158,7 +171,7 @@ test('an uploaded report creates real Findings, real evidence, and moves the das
   })
 
   await signIn(page, 'ANALYST')
-  const openFindingsBefore = await kpiValue(page, 'Open findings')
+  const openFindingsBefore = await requireKpiValue(page, 'Open findings')
 
   await ingest(page, probe.file)
 
@@ -199,15 +212,15 @@ test('an uploaded report creates real Findings, real evidence, and moves the das
   expect(await fieldValue(page, 'Recurrences after closure')).toBe('0')
 
   // 6. The operational overview's own count of it, after an explicit refresh.
-  //    Skipped honestly if the tile is not showing a number, rather than
-  //    asserted against a coerced zero.
+  //    A signed-in ANALYST's "Open findings" tile is expected to be AVAILABLE
+  //    (see requireKpiValue above), so this is a hard assertion, not a
+  //    best-effort one: a RESTRICTED/UNAVAILABLE regression fails the test
+  //    instead of silently skipping the dashboard-evidence proof.
   await page.goto('/dashboard')
   await page.getByRole('button', { name: /Refresh|Updating/ }).click()
   await expect(page.getByRole('button', { name: 'Refresh' })).toBeVisible()
-  const openFindingsAfter = await kpiValue(page, 'Open findings')
-  if (openFindingsBefore !== null && openFindingsAfter !== null) {
-    expect(openFindingsAfter).toBe(openFindingsBefore + 2)
-  }
+  const openFindingsAfter = await requireKpiValue(page, 'Open findings')
+  expect(openFindingsAfter).toBe(openFindingsBefore + 2)
 
   expect(problems(), problems().join('\n')).toEqual([])
 })

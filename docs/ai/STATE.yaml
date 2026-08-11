@@ -2,8 +2,8 @@
     "schema_version":  1,
     "ticket":  "TNX-DEMO-INGESTION-REPAIR",
     "title":  "Analyst report ingestion moved onto the canonical /api/reports/upload contract",
-    "status":  "handoff_ready",
-    "owner":  "unassigned",
+    "status":  "complete",
+    "owner":  "claude",
     "reviewer":  "codex",
     "branch":  "fix/analyst-report-ingestion-contract",
     "worktree":  "F:\\AI-Worktrees\\ThreatNeXus\\ingestion-repair",
@@ -58,7 +58,8 @@
                       "Ran proportionate complete gates: frontend lint, 169 unit tests, production build, 55/55 Chromium Playwright; backend prisma format/validate/generate, migrate deploy from zero, migrate diff drift check (exit 0), focused ingestion tests (65), and the complete backend suite (3071 passed / 177 skipped - the documented Phase 8F baseline, unchanged, as expected for a frontend-only change)",
                       "Reverted an unintended `prisma format` line-ending rewrite of backend/prisma/schema.prisma (CRLF-\u003eLF, zero content change) so this ticket touches no backend file at all",
                       "Ran CI\u0027s own security scans: no committed .env, no credential-shaped literals, no tracked dist/node_modules, no secret-shaped values in frontend/dist. Confirmed every provider key is empty in the verification stack and AI_ENABLED=false, so no live provider or AI call was possible at any point",
-                      "Staged 7 explicit ticket-owned paths only (never git add -A), after a git add --dry-run review that caught STATE.yaml wanting to ride along"
+                      "Staged 7 explicit ticket-owned paths only (never git add -A), after a git add --dry-run review that caught STATE.yaml wanting to ride along",
+                      "Independent Codex review (0 critical, 0 high, 1 medium): the dashboard-delta E2E proof silently skipped the before/after comparison when a KPI tile was null, which could mask a real RESTRICTED/UNAVAILABLE regression as a pass. Reacquired the writer lock, added requireKpiValue() (asserts non-null and finite, with a diagnostic message) in findingsUpload.spec.js, replaced both call sites and the conditional delta check with hard assertions. Rebuilt the isolated stack from zero, re-ran the targeted spec (5/5) and the complete Chromium suite (55/55) against a pristine seed, plus frontend lint/unit/build - all green. No production code touched"
                   ],
     "validation":  {
                        "passing":  [
@@ -86,7 +87,8 @@
                        "backend_untouched":  "PASS - git status --porcelain backend/ is empty. No route, controller, service, middleware, schema, migration or backend test changed",
                        "git_status_before":  "Isolated worktree created clean from origin/main (c3f8a4b). The primary checkout\u0027s six modified tracked files and ~35 untracked paths were never read beyond git status, never staged, never modified",
                        "git_status_after":  "7 ticket-owned files changed across 3 commits on fix/analyst-report-ingestion-contract. Nothing outside frontend/src, frontend/e2e and docs/ was touched",
-                       "ci":  "PASS - https://github.com/haiderchattha99-ali/ThreatNeXus/actions/runs/31491172952 (all six required jobs green on the first push: Secrets and generated artifacts, Prisma schema and migration history, Backend tests, Frontend lint/tests/build, Browser suite (Chromium), Core evaluators. \u0027Mutation and concurrency gates\u0027 is manual-trigger-only, not required, correctly skipped)"
+                       "ci":  "PASS - https://github.com/haiderchattha99-ali/ThreatNeXus/actions/runs/31491172952 (all six required jobs green on the first push: Secrets and generated artifacts, Prisma schema and migration history, Backend tests, Frontend lint/tests/build, Browser suite (Chromium), Core evaluators. \u0027Mutation and concurrency gates\u0027 is manual-trigger-only, not required, correctly skipped)",
+                       "review_fix_local":  "PASS - after the requireKpiValue() fix (Codex review, 1 medium finding): targeted findingsUpload.spec.js 5/5, complete Chromium suite 55/55 against a rebuilt-from-zero pristine stack (23 migrations, 11-finding seed), frontend lint clean (same 6 pre-existing warnings), frontend unit 169/169, production build clean"
                    },
     "known_issues":  [
                          "No manual pass in the user\u0027s own Chrome profile: the claude-in-chrome extension refused to connect (OAuth token belongs to a different claude.ai account than Claude Code is logged in as). The live verification was done by real Chromium via Playwright driving the production build against the isolated Docker stack, asserting the request URL on the wire, zero console errors AND warnings, and the rendered evidence - then corroborated directly in PostgreSQL. Substantively equivalent, but it is a Playwright-driven browser, not a hand-driven one, and that distinction is recorded rather than smoothed over",
@@ -94,10 +96,10 @@
                          "The dashboard delta assertion is skipped (not failed) when the KPI tile is RESTRICTED or UNAVAILABLE, because there is no number to compare. For ANALYST against the demo seed it is always AVAILABLE, so it does run - but a future role/permission change could silently reduce that assertion to a no-op",
                          "Two rendering-adjacent facts about the canonical contract are worth knowing: the controller returns no explicit `outcome` field (the frontend reads the status, which is 1:1 with the closed outcome set), and DUPLICATE_COMPLETED returns 200 while PROCESSED returns 201. If a future change ever gave two outcomes the same status, constants/reportIngestion.js would silently mis-label one of them. A backend `outcome` field would remove that coupling, but adding one was out of this ticket\u0027s scope",
                          "The legacy POST /api/threats/upload route is still mounted, still writes Threat rows, and still carries NO rate limiter (uploadRateLimiter is mounted on /api/reports only - now documented in OPERATIONS_RUNBOOK.md). Nothing in the analyst workflow reaches it any more, but whether the whole legacy Threat surface can be retired was not investigated and is a separate decision",
-                         "No independent reviewer has looked at this change yet - per CLAUDE.md\u0027s own rule, an independent pass (Codex) is recommended before it is merged"
+                         "Codex's one medium finding (silent skip on a null dashboard KPI) is now fixed - see the review_fix_local validation entry. No other finding was raised"
                      ],
-    "next_action":  "Independent review of the analyst report-ingestion contract repair on fix/analyst-report-ingestion-contract (CI green, run 31491172952). Do not open or merge a PR without explicit instruction.",
-    "checkpoint_ref":  "45f7105603678c2dd502e6750710c6c8e7fbb730",
-    "updated_at":  "2026-08-11T12:31:36.8010106Z",
+    "next_action":  "None required to close this ticket - the review fix is pushed and CI is green at the new tip. Do not open or merge a PR without explicit instruction.",
+    "checkpoint_ref":  "aa965f3997fc5bb68238a0b16e293f4a03b683dc",
+    "updated_at":  "2026-08-11T12:45:44.3602134Z",
     "next_writer":  "codex"
 }
