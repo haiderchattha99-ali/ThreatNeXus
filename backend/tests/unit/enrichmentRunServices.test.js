@@ -14,6 +14,8 @@ const {
   EnrichmentRunValidationError,
   normalizeProviderScope,
   recomputeRunState,
+  boundedJustificationPreview,
+  JUSTIFICATION_PREVIEW_LENGTH,
 } = require("../../src/services/enrichmentOrchestration/enrichmentRunService");
 const {
   FORBIDDEN_OUTPUT_FIELDS,
@@ -39,6 +41,37 @@ const item = (decision, jobState, extra = {}) => ({
   subjectValue: "198.18.0.5",
   skipReason: null,
   ...extra,
+});
+
+describe("boundedJustificationPreview", () => {
+  it("preserves a string at exactly the bound (200) unchanged", () => {
+    const value = "j".repeat(JUSTIFICATION_PREVIEW_LENGTH);
+    const preview = boundedJustificationPreview(value);
+    expect(preview).toBe(value);
+    expect(preview).toHaveLength(200);
+  });
+
+  it("preserves a string just under the bound (199) unchanged", () => {
+    const value = "j".repeat(JUSTIFICATION_PREVIEW_LENGTH - 1);
+    const preview = boundedJustificationPreview(value);
+    expect(preview).toBe(value);
+    expect(preview).toHaveLength(199);
+  });
+
+  it("truncates a string just over the bound (201) to exactly 200 with an ellipsis", () => {
+    const value = "j".repeat(JUSTIFICATION_PREVIEW_LENGTH + 1);
+    const preview = boundedJustificationPreview(value);
+    expect(preview).toHaveLength(200);
+    expect(preview.endsWith("…")).toBe(true);
+    expect(preview).toBe(`${"j".repeat(199)}…`);
+  });
+
+  it("truncates a much longer string (1000) to exactly 200 with an ellipsis", () => {
+    const value = "j".repeat(1000);
+    const preview = boundedJustificationPreview(value);
+    expect(preview).toHaveLength(200);
+    expect(preview.endsWith("…")).toBe(true);
+  });
 });
 
 describe("recomputeRunState", () => {

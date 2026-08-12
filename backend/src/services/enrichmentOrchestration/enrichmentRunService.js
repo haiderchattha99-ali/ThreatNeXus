@@ -210,7 +210,7 @@ function normalizeJustification(value, force) {
 function boundedJustificationPreview(value) {
   if (typeof value !== "string" || value === "") return null;
   return value.length > JUSTIFICATION_PREVIEW_LENGTH
-    ? `${value.slice(0, JUSTIFICATION_PREVIEW_LENGTH)}…`
+    ? `${value.slice(0, JUSTIFICATION_PREVIEW_LENGTH - 1)}…`
     : value;
 }
 

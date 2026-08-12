@@ -607,7 +607,7 @@ describe("POST /api/findings/:id/enrichment/runs - input validation", () => {
     const created = store.auditLogs.find(
       (event) => event.action === "enrichment.orchestration.run.created"
     );
-    expect(created.after.justification).toHaveLength(201);
+    expect(created.after.justification).toHaveLength(200);
     expect(created.after.justification.endsWith("…")).toBe(true);
     expect(created.after.justification).not.toContain("TAIL");
   });
