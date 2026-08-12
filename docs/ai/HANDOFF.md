@@ -34,7 +34,14 @@ other Phase 10A-1 route, contract field, or audit behavior touched.
 - `git diff --check`: clean (CRLF-conversion warnings only, no whitespace/conflict errors).
 - No NUL byte in any file under `backend/src/services/enrichmentOrchestration/`.
 - CI's credential-shaped-literal hygiene pattern run locally over the tracked tree: clean.
-- Not pushed in this pass; not opened as a PR; 10A-2 not started.
+- Pushed. HEAD is `ad6d0f3` (docs-only handoff commit on top of the `75245e4` fix). CI run
+  31577314797 initially failed on `Browser suite (Chromium)` — one E2E spec,
+  `findingAiAssistance.spec.js:78:3 › ADMIN triggers no console errors when opening a finding with
+  the AI panel present`, unrelated to this backend-only change (frontend untouched). Backend tests,
+  Core evaluators, Prisma schema/migrations, and the secrets/generated-artifacts check all passed on
+  the first try. Re-ran the failed job only (`gh run rerun 31577314797 --failed`); it passed on
+  retry, confirming the flake. CI is GREEN at the current tip.
+- Not opened as a PR; 10A-2 not started.
 
 > `handoff-task.ps1` currently cannot run against this worktree's writer-lock file — it was created
 > by `continue-task.ps1`'s older schema (missing `active_provider`/`objective_id`/`lease_id`), while
