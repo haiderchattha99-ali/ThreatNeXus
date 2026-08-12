@@ -78,7 +78,7 @@
                        "frontend":  "untouched - git status frontend/ is empty",
                        "no_real_env_read":  "PASS - backend/.env never opened, read, printed or referenced",
                        "primary_checkout":  "untouched - C:\\Users\\LENOVO\\Desktop\\ThreatNeXus stayed on docs/phase-9c-pkcert-technical-dossier with its unrelated Phase 9 work intact",
-                       "ci":  "pending on the push of this correction pass - see the branch's latest run"
+                       "ci":  "GREEN on the first push of 9c18265 - run 31574190866 (https://github.com/haiderchattha99-ali/ThreatNeXus/actions/runs/31574190866). All six required jobs success: hygiene, schema, backend, frontend, Browser suite (Chromium), core evaluators. The seventh (mutation and concurrency gates) is manual-dispatch-only and correctly skipped"
                    },
     "known_issues":  [
                          "MANDATORY PRE-10A2 BLOCKER: the existing IOC runner owns claimPendingJob and calls provider.lookup() internally. A targeted runner/hook contract must be designed AND independently reviewed before 10A-2 - see docs/ai/HANDOFF.md for the seven guarantees it must provide.",
