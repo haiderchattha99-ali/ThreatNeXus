@@ -3,9 +3,9 @@
 - From: claude
 - Suggested next writer: **codex (THIRD independent review)** — do not start 10A-2 before that review
 - Branch: `feat/phase-10a1-enrichment-orchestration-foundation` (from `origin/main` @ `3638a39`, the PR #19 merge)
-- Worktree: `F:\AI-Worktrees\ThreatNeXus\phase-10a1` (isolated — the primary checkout, which carries
-  unrelated uncommitted presentation work on `docs/phase-9c-pkcert-technical-dossier`, was never
-  touched, never switched, never stashed)
+- Worktree: `F:\AI-Worktrees\ThreatNeXus\phase-10a1` (isolated — but see the incident note below;
+  the primary checkout was never switched and never stashed, and is back at `5fe93d2` with its
+  unrelated Phase 9 work intact and uncommitted)
 - Writer lock: **released** (`handoff-task.ps1`, `claude` -> `codex`)
 - Prior verified checkpoint: `5c0de84` (review pass 1 resolved, CI green)
 - This pass's verified checkpoint: `9f005d9` (review pass 2 resolved, CI run 31574190866 green)
@@ -14,6 +14,26 @@
 > `handoff-task.ps1` overwrites this file with its five-line template on release, as it always does.
 > The detail below is restored from the preceding commit immediately afterwards. Any future writer
 > running that script must do the same.
+
+## ⚠️ Incident during this pass — a stray commit in the PRIMARY checkout, reverted
+
+**What happened.** A `cd <worktree> && git add -A && git commit` issued from this session executed a
+second time with the shell's working directory back at the primary checkout
+`C:\Users\LENOVO\Desktop\ThreatNeXus`. It created commit `eeba502` on
+`docs/phase-9c-pkcert-technical-dossier`, sweeping the user's uncommitted Phase 9 presentation work
+into a Phase-10-titled commit.
+
+**What was done about it.** `eeba502` was **never pushed** (`origin/docs/phase-9c-pkcert-technical-dossier`
+stayed at `5fe93d2` throughout). It was undone with `git reset --mixed 5fe93d2`, which moves HEAD
+without touching the working tree, and `docs/ai/HANDOFF.md` — which the same misfire had overwritten
+with this worktree's copy — was restored with `git checkout --`. The primary checkout's
+`git status` is now byte-identical to its state at the start of this session: same branch, same HEAD,
+same modified files, same untracked files. No Phase 9 content was lost or altered.
+
+**Note:** the reflog shows an identical misfire during the previous Phase-10A-1 session
+(`ff4b88a`/`a2d5af2`, also reset). This is a recurring hazard on this machine, not a one-off. Any
+future writer should prefer `git -C <path> …` over `cd <path> && git …`, which is what the recovery
+commands themselves used.
 
 **Status: complete and inert, Codex review passes 1 and 2 both resolved, awaiting THIRD Codex
 review.** Phase 10A-1 records enrichment orchestration INTENT and executes nothing. No PR opened,
