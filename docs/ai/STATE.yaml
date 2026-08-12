@@ -93,6 +93,7 @@
                          "The THIRD independent review has not happened yet - per CLAUDE.md this must not be treated as final."
                      ],
     "next_action":  "Codex THIRD independent review of feat/phase-10a1-enrichment-orchestration-foundation against docs/ai/PHASE-10A1-API-CONTRACT.md and the five pass-2 findings recorded here. Do NOT open a PR, do NOT merge main, do NOT begin 10A-2.",
+    "checkpoint_ref":  "9f005d9",
     "updated_at":  "2026-08-12",
     "current_work":  "",
     "files_changed":  [
