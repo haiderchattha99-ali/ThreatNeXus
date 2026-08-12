@@ -1,15 +1,48 @@
 # Handoff: TNX-P10A1-ENRICHMENT-ORCHESTRATION-FOUNDATION
 
 - From: claude
-- Suggested next writer: **codex (THIRD independent review)** — do not start 10A-2 before that review
-- Branch: `feat/phase-10a1-enrichment-orchestration-foundation` (from `origin/main` @ `3638a39`, the PR #19 merge)
-- Worktree: `F:\AI-Worktrees\ThreatNeXus\phase-10a1` (isolated — but see the incident note below;
-  the primary checkout was never switched and never stashed, and is back at `5fe93d2` with its
-  unrelated Phase 9 work intact and uncommitted)
-- Writer lock: **released** (`handoff-task.ps1`, `claude` -> `codex`)
-- Prior verified checkpoint: `5c0de84` (review pass 1 resolved, CI green)
-- This pass's verified checkpoint: `9f005d9` (review pass 2 resolved, CI run 31574190866 green)
-- Updated: 2026-08-12 (correction pass after Codex review **2**)
+- Suggested next writer: **codex (narrow re-check of this correction only)** — do not start 10A-2
+- Branch: `feat/phase-10a1-enrichment-orchestration-foundation`
+- Worktree: `F:\AI-Worktrees\ThreatNeXus\phase-10a1`
+- Writer lock: **released**
+- This pass's verified checkpoint: `75245e4` (boundedJustificationPreview 201-char overflow fixed)
+- Updated: 2026-08-12 (surgical correction pass — no full review, see section below)
+
+## Surgical correction — boundedJustificationPreview 201-char overflow, fixed
+
+`docs/ai/PHASE-10A1-API-CONTRACT.md` requires the justification preview reaching audit to be at
+most 200 characters. `boundedJustificationPreview()` in `enrichmentRunService.js` kept 200
+characters and then appended an ellipsis, producing **201**. `phase10a1RouteAuthorization.test.js`
+had locked in the violation with `toHaveLength(201)` instead of catching it.
+
+**Fix.** The truncating branch now slices to 199 characters before appending the ellipsis, so any
+input longer than 200 characters produces a preview of exactly 200 characters; inputs of 200 or
+fewer characters are returned unchanged. The integration assertion now expects length 200. Added
+unit boundary coverage in `enrichmentRunServices.test.js` for input lengths 199, 200, 201, and 1000.
+Confirmed the raw justification is still never echoed in the HTTP response or the run row.
+
+**Scope.** Three files only: `enrichmentRunService.js` (one function), one corrected assertion in
+`phase10a1RouteAuthorization.test.js`, and new boundary tests in `enrichmentRunServices.test.js`. No
+other Phase 10A-1 route, contract field, or audit behavior touched.
+
+**Verification.**
+- Focused: `enrichmentRunServices.test.js` (33 passed) + `phase10a1RouteAuthorization.test.js` (52
+  passed).
+- Full backend suite, `--maxWorkers=3`: **3246 passed, 209 skipped, 0 failed** (157 files). The 209
+  skips are the real-PG suites, which skip gracefully without a locally running Postgres instance —
+  this correction touches no database logic, so that coverage gap is not relevant here.
+- `git diff --check`: clean (CRLF-conversion warnings only, no whitespace/conflict errors).
+- No NUL byte in any file under `backend/src/services/enrichmentOrchestration/`.
+- CI's credential-shaped-literal hygiene pattern run locally over the tracked tree: clean.
+- Not pushed in this pass; not opened as a PR; 10A-2 not started.
+
+> `handoff-task.ps1` currently cannot run against this worktree's writer-lock file — it was created
+> by `continue-task.ps1`'s older schema (missing `active_provider`/`objective_id`/`lease_id`), while
+> `checkpoint-task.ps1`/`handoff-task.ps1` now require the newer lease schema. This is a bug in the
+> shared `F:\Ismail-AI-Dev-Team\scripts` tooling, not in this repository; it was worked around by
+> hand-editing `STATE.yaml`/`HANDOFF.md` and the lock file directly, matching what the scripts would
+> have produced. Report this to whoever maintains the F-drive scripts — `continue-task.ps1` needs to
+> emit lease-schema-v2 fields.
 
 > `handoff-task.ps1` overwrites this file with its five-line template on release, as it always does.
 > The detail below is restored from the preceding commit immediately afterwards. Any future writer
