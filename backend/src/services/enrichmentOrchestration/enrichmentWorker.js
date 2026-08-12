@@ -176,7 +176,7 @@ async function sweepStaleAttempts({ prisma, now, staleBefore, take, audit }) {
         // non-expiring, and only a terminal row can never be claimed again.
         // eslint-disable-next-line no-await-in-loop
         await deadLetterUnleasedJob(
-          { id: delegate.id, reasonCode: "PROVIDER_FAILURE" },
+          { id: delegate.id, reasonCode: "AMBIGUOUS_AFTER_CONTACT" },
           { client: prisma, now }
         );
       }
