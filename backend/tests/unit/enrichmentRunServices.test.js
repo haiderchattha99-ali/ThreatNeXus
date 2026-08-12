@@ -19,7 +19,7 @@ const {
   FORBIDDEN_OUTPUT_FIELDS,
   serializeRun,
   serializeRunItem,
-  serializeRunSummary,
+  resolveExecutionState,
 } = require("../../src/services/enrichmentOrchestration/enrichmentRunReadService");
 const {
   resolveDelegateState,
@@ -207,23 +207,42 @@ describe("serializers — cross-Finding isolation", () => {
     expect(leaky.skipReason).toBeNull();
   });
 
-  it("states on every response that nothing was executed", () => {
+  it("names `run` and `items` separately rather than flattening them", () => {
     const serialized = serializeRun(run, items);
-    expect(serialized.execution).toEqual({
-      performed: false,
-      reason: "PHASE_10A1_ORCHESTRATION_ONLY",
-    });
+    expect(Object.keys(serialized).sort()).toEqual(["items", "run"]);
+    expect(serialized.run.id).toBe(run.id);
+    expect(serialized.items).toHaveLength(1);
+    // The items are NOT nested inside the run.
+    expect(serialized.run.items).toBeUndefined();
   });
 
-  it("reports providers that had no subject on this Finding", () => {
-    const serialized = serializeRun(run, items, { unsubjectedProviders: ["nvd"] });
-    expect(serialized.consideredProviders.noSubject).toEqual(["nvd"]);
+  it("states whether anything will pick recorded work up", () => {
+    // The default deployment. Never "the work is queued and running".
+    expect(resolveExecutionState({})).toBe("PAUSED_WORKER_DISABLED");
+    // The switch being ON does not conjure a worker into existence, and
+    // reporting "paused" there would imply one merely idle.
+    expect(resolveExecutionState({ ENRICHMENT_WORKER_ENABLED: "true" })).toBe("NOT_IMPLEMENTED");
   });
 
-  it("leaks nothing through the compact list serializer either", () => {
-    const serialized = JSON.stringify(serializeRunSummary(run));
-    expect(serialized).not.toContain("idempotencyKey");
-    expect(serialized).not.toContain("requestScopeHash");
+  it("reports no-subject providers from the STORED column, not from a caller hint", () => {
+    // The durable fact. The same run row read six months later serializes the
+    // identical list, because nothing recomputes it from today's Finding.
+    const stored = serializeRun({ ...run, noSubjectProviders: "nvd" }, items);
+    expect(stored.run.consideredProviders.noSubject).toEqual(["nvd"]);
+
+    // A run that recorded none says so, and no caller-supplied extra can
+    // inject one — the serializer takes no such argument any more.
+    expect(serializeRun(run, items).run.consideredProviders.noSubject).toEqual([]);
+  });
+
+  it("drops a stored provider outside the closed vocabulary", () => {
+    // Defence in depth: if some future path ever wrote free text into the
+    // column, it must not become a response field.
+    const serialized = serializeRun(
+      { ...run, noSubjectProviders: "nvd,not-a-provider" },
+      items
+    );
+    expect(serialized.run.consideredProviders.noSubject).toEqual(["nvd"]);
   });
 });
 

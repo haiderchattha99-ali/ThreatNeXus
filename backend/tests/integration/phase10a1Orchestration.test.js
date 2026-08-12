@@ -174,7 +174,7 @@ describeOrSkip("Phase 10A-1 orchestration (real PostgreSQL)", () => {
     // 4. Nothing was executed. No attempt row, no usage row, and the job was
     //    never queried. Phase 10A-2 is where Censys actually runs.
     expect(await prisma.providerLookupAttempt.count()).toBe(0);
-    expect(await prisma.providerDailyUsage.count()).toBe(0);
+    expect(await prisma.providerDailyUsage.count({ where: { provider: { not: { startsWith: "p10a1c-" } } } })).toBe(0);
     expect(censysJob.queriedAt).toBeNull();
     expect(censysJob.claimedAt).toBeNull();
     expect(censysJob.attemptCount).toBe(0);
@@ -239,6 +239,9 @@ describeOrSkip("Phase 10A-1 orchestration (real PostgreSQL)", () => {
       trigger: "MANUAL",
       providers: ["censys"],
       force: true,
+      // Required with force=true: an unexplained freshness bypass is exactly
+      // what the audit trail exists to record.
+      justification: "forced for the Phase 10A-1 orchestration test",
       now: NOW,
     });
 
@@ -342,7 +345,7 @@ describeOrSkip("Phase 10A-1 orchestration (real PostgreSQL)", () => {
     }
     expect(await prisma.providerLookupJob.count({ where: { subjectValue: IP_A } })).toBe(0);
     // Critically: a routing-time refusal creates NO reservation either.
-    expect(await prisma.providerDailyUsage.count()).toBe(0);
+    expect(await prisma.providerDailyUsage.count({ where: { provider: { not: { startsWith: "p10a1c-" } } } })).toBe(0);
   });
 
   it("creates THREE NVD jobs for three verified CVEs", async () => {
@@ -415,7 +418,10 @@ describeOrSkip("Phase 10A-1 orchestration (real PostgreSQL)", () => {
     // No item at all, and the provider is reported as considered-but-unsubjected
     // rather than silently omitted.
     expect(run.items).toHaveLength(0);
-    expect(run.unsubjectedProviders).toEqual(["nvd"]);
+    // Recorded DURABLY on the run row, not merely returned to this caller.
+    expect(run.run.noSubjectProviders).toBe("nvd");
+    const persisted = await prisma.findingEnrichmentRun.findUnique({ where: { id: run.run.id } });
+    expect(persisted.noSubjectProviders).toBe("nvd");
     expect(await prisma.providerLookupJob.count({ where: { provider: "nvd" } })).toBe(0);
 
     // ...and a Shodan exposure record naming a CVE creates no association and
@@ -435,12 +441,69 @@ describeOrSkip("Phase 10A-1 orchestration (real PostgreSQL)", () => {
       trigger: "MANUAL",
       providers: ["nvd"],
       force: true,
+      // Required with force=true: an unexplained freshness bypass is exactly
+      // what the audit trail exists to record.
+      justification: "forced for the Phase 10A-1 orchestration test",
       now: NOW,
     });
     expect(after.items).toHaveLength(0);
     expect(await prisma.providerLookupJob.count({ where: { provider: "nvd" } })).toBe(0);
 
     await prisma.shodanEnrichment.deleteMany({ where: { indicator: IP_A } });
+  });
+
+  // =========================================================================
+  // Historical truthfulness — the second-review finding this exists to prevent
+  // =========================================================================
+  it("does not rewrite a historical run when a verified CVE is associated later", async () => {
+    const finding = await makeFinding(IP_A);
+
+    // At T0 the Finding has no verified CVE, so NVD is considered and has no
+    // valid subject.
+    const historical = await createEnrichmentRun(finding.id, {
+      client: prisma,
+      trigger: "MANUAL",
+      providers: ["nvd"],
+      now: NOW,
+    });
+    expect(historical.items).toHaveLength(0);
+    expect(historical.run.noSubjectProviders).toBe("nvd");
+
+    // At T1 an analyst verifies a CVE.
+    const vulnerability = await prisma.vulnerability.create({ data: { cveId: "CVE-2099-1001" } });
+    await prisma.findingVulnerability.create({
+      data: {
+        findingId: finding.id,
+        vulnerabilityId: vulnerability.id,
+        state: "ACTIVE",
+        evidenceSource: "ANALYST_VERIFIED",
+        justification: "verified after the historical run was recorded",
+        effectiveAt: NOW,
+      },
+    });
+
+    // The HISTORICAL run is unchanged: same stored fact, still no NVD item.
+    // T-09 holds — no NVD run item exists for a run recorded when no active
+    // analyst-verified CVE existed.
+    const reread = await prisma.findingEnrichmentRun.findUnique({
+      where: { id: historical.run.id },
+      include: { items: true },
+    });
+    expect(reread.noSubjectProviders).toBe("nvd");
+    expect(reread.items).toHaveLength(0);
+
+    // A NEW ask, on the other hand, sees the new subject — history is frozen,
+    // the present is not.
+    const current = await createEnrichmentRun(finding.id, {
+      client: prisma,
+      trigger: "MANUAL",
+      providers: ["nvd"],
+      now: NOW,
+    });
+    expect(current.run.id).not.toBe(historical.run.id);
+    expect(current.run.noSubjectProviders).toBe("");
+    expect(current.items).toHaveLength(1);
+    expect(current.items[0].subjectValue).toBe("CVE-2099-1001");
   });
 
   it("records an audit event that carries counts, never a subject or a hash", async () => {

@@ -214,7 +214,22 @@ function delegateLinkCount(job) {
 /** Nothing was executed, by any path, for any of this file's subjects. */
 async function expectNothingExecuted() {
   expect(await prisma.providerLookupAttempt.count()).toBe(0);
-  expect(await prisma.providerDailyUsage.count()).toBe(0);
+  // Counted globally on purpose: Phase 10A-1 must write no reservation
+  // anywhere, by any path, so a global zero is the strongest available
+  // statement of the claim.
+  //
+  // ONE exclusion, and only one: phase10a1Constraints.test.js deliberately
+  // INSERTs a "p10a1c-" marked row to prove the reserved-count CHECK
+  // constraint rejects a negative value. That row is a constraint probe, not
+  // an enrichment reservation, and when the two suites run concurrently an
+  // unqualified count sees it and fails a claim that is still true. Excluding
+  // the marker keeps the assertion global over everything a real path could
+  // ever write.
+  expect(
+    await prisma.providerDailyUsage.count({
+      where: { provider: { not: { startsWith: "p10a1c-" } } },
+    })
+  ).toBe(0);
   const jobs = await prisma.providerLookupJob.findMany({
     where: { subjectValue: { in: [IP_A, IP_B, ...CVE_IDS] } },
   });
@@ -576,6 +591,9 @@ describeOrSkip("Phase 10A-1 delegated jobs are never unlinked (real PostgreSQL)"
       trigger: "MANUAL",
       providers: ["nvd"],
       force: true,
+      // Required with force=true: an unexplained freshness bypass is exactly
+      // what the audit trail exists to record.
+      justification: "forced for the Phase 10A-1 orchestration test",
       now: NOW,
     });
     expect(second.run.id).not.toBe(run.run.id);

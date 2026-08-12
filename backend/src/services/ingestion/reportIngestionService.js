@@ -88,14 +88,23 @@ const ENRICHMENT_PROVIDER = "abuseipdb";
 // `state` is a closed INGESTION_ENRICHMENT_STATES code, never a free string, so
 // a consumer can branch on it exhaustively. AUTOMATIC_DISABLED is the default
 // deployment's answer.
+// The six keys of the binding contract (docs/ai/PHASE-10A1-API-CONTRACT.md),
+// and no others. Deliberately absent:
+//   enabled            implied by `state` — AUTOMATIC_DISABLED IS "off"
+//   runsDeduplicated   an internal convergence detail, not an upload's outcome
+//   failedCount        folded into state = PARTIAL, so a consumer branches on
+//                      one closed code instead of on a count
+//   executed           it is always false and always will be in this milestone;
+//                      a field that can only hold one value is documentation
+//                      pretending to be data
+// Every count describes what THIS upload wrote.
 const ENRICHMENT_DISABLED_RESULT = Object.freeze({
-  enabled: false,
   state: INGESTION_ENRICHMENT_STATES.AUTOMATIC_DISABLED,
   runsCreated: 0,
-  runsDeduplicated: 0,
   itemsCreated: 0,
-  failedCount: 0,
-  executed: false,
+  jobsCreated: 0,
+  jobsShared: 0,
+  skipped: 0,
 });
 
 // Closed classification for one group's scheduling attempt — used only to
@@ -420,7 +429,14 @@ async function scheduleEnrichmentSafely(client, indicatorValue, asOf) {
 // the records it produced before: the existing IocEnrichment row only, and
 // zero Phase-10 rows of any kind.
 async function createEnrichmentRunsSafely(client, auditContext, findingIds, rawReportId, asOf) {
-  const counts = { runsCreated: 0, runsDeduplicated: 0, itemsCreated: 0, failed: 0 };
+  const counts = {
+    runsCreated: 0,
+    itemsCreated: 0,
+    jobsCreated: 0,
+    jobsShared: 0,
+    skipped: 0,
+    failed: 0,
+  };
 
   // eslint-disable-next-line no-restricted-syntax
   for (const findingId of findingIds) {
@@ -434,13 +450,21 @@ async function createEnrichmentRunsSafely(client, auditContext, findingIds, rawR
         now: asOf,
         auditContext,
       });
+      // Only a run this call actually inserted. A replay that converged onto an
+      // existing run created nothing, and counting it would report work a
+      // previous upload had already recorded.
       if (outcome.created) counts.runsCreated += 1;
-      else counts.runsDeduplicated += 1;
-      // Items this call actually WROTE, not the run's total. On a replay that
-      // converged onto an existing run the two differ, and reporting the total
-      // would claim work that a previous upload had already recorded.
+      // Same rule for every other count: what THIS call wrote, never the run's
+      // totals. jobsCreated and jobsShared are tracked separately because they
+      // cannot be told apart afterwards — an item holding a job id looks
+      // identical whether it inserted that job or attached to a shared one.
       counts.itemsCreated += outcome.itemsCreated;
+      counts.jobsCreated += outcome.jobsCreated;
+      counts.jobsShared += outcome.jobsShared;
+      counts.skipped += outcome.skipped;
     } catch (error) {
+      // Never rethrown: an ingested report must not be invalidated by an
+      // orchestration problem. Surfaced as state = PARTIAL.
       counts.failed += 1;
       console.error("Enrichment orchestration failed during ingestion", {
         name: error && error.name,
@@ -910,7 +934,10 @@ async function ingestAccessibleRdpReport(input, options = {}) {
     // Enabled, but this report touched no Finding. Reporting AUTOMATIC_DISABLED
     // here would misstate the deployment's configuration, so it gets its own
     // state rather than borrowing the disabled one.
-    enrichment = { ...ENRICHMENT_DISABLED_RESULT, enabled: true, state: INGESTION_ENRICHMENT_STATES.NO_FINDINGS };
+    enrichment = {
+      ...ENRICHMENT_DISABLED_RESULT,
+      state: INGESTION_ENRICHMENT_STATES.NO_FINDINGS,
+    };
   } else if (autoEnrichmentEnabled) {
     const counts = await createEnrichmentRunsSafely(
       client,
@@ -920,19 +947,18 @@ async function ingestAccessibleRdpReport(input, options = {}) {
       enrichmentAsOf
     );
     enrichment = {
-      enabled: true,
+      // A failure to record orchestration for one Finding is reported as
+      // PARTIAL rather than as a count, so a consumer branches on one closed
+      // code. Ingestion itself still succeeded either way.
       state:
         counts.failed > 0
           ? INGESTION_ENRICHMENT_STATES.PARTIAL
           : INGESTION_ENRICHMENT_STATES.RECORDED,
       runsCreated: counts.runsCreated,
-      runsDeduplicated: counts.runsDeduplicated,
       itemsCreated: counts.itemsCreated,
-      failedCount: counts.failed,
-      // Always false in Phase 10A-1. Stated on the response rather than left
-      // to documentation, so no consumer can read "runsCreated: 3" as
-      // "three providers were contacted".
-      executed: false,
+      jobsCreated: counts.jobsCreated,
+      jobsShared: counts.jobsShared,
+      skipped: counts.skipped,
     };
 
     await audit(client, auditContext, {
@@ -940,7 +966,14 @@ async function ingestAccessibleRdpReport(input, options = {}) {
       outcome: AUDIT_OUTCOMES.SUCCESS,
       entityType: "RawReport",
       entityId: finishedReport.id,
-      after: { ...enrichment, distinctFindingCount: touchedFindingIds.size },
+      // The audit payload MAY carry more than the public block — failedCount is
+      // exactly the sort of operational detail an audit trail is for and a
+      // public response is not.
+      after: {
+        ...enrichment,
+        failedCount: counts.failed,
+        distinctFindingCount: touchedFindingIds.size,
+      },
       reason: "Enrichment orchestration recorded for report findings (no provider contacted)",
     });
   }

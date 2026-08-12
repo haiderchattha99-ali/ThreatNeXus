@@ -109,18 +109,42 @@ async function updateRunState(client, runId, { state, completedAt }) {
   });
 }
 
-async function listRunsForFinding(client, findingId, { take }) {
-  return client.findingEnrichmentRun.findMany({
-    where: { findingId },
-    orderBy: { requestedAt: "desc" },
-    take,
-  });
-}
+// There is deliberately NO "list every run for a Finding" query. A run-history
+// browser is not part of the Phase 10A-1 contract, and the surface that existed
+// for it was unplanned; the summary read below answers the question an analyst
+// actually has ("what is known about this Finding?") without paging through
+// request records.
 
 // --- Run items -------------------------------------------------------------
 
 async function createRunItem(client, data) {
   return client.findingEnrichmentRunItem.create({ data });
+}
+
+/**
+ * The most recent item for ONE (Finding, provider, subject) triple, with its
+ * job AND the job's delegate rows.
+ *
+ * Bounded by construction: the summary calls this once per known provider plus
+ * once per verified CVE, never once per row in any table. The delegates are
+ * included because a delegated job's own state is WAITING_ON_DELEGATE, which is
+ * a fact about the job and not about the work — the truth lives in the
+ * canonical queue's row.
+ *
+ * Ordered by id descending: a Finding accumulates one item per run per target
+ * over time, and the CURRENT answer is the newest one.
+ */
+async function findLatestRunItemForSubject(
+  client,
+  { findingId, provider, subjectType, subjectValue }
+) {
+  return client.findingEnrichmentRunItem.findFirst({
+    where: { findingId, provider, subjectType, subjectValue },
+    orderBy: { id: "desc" },
+    include: {
+      lookupJob: { include: { iocEnrichment: true, vulnerabilityEnrichmentJob: true } },
+    },
+  });
 }
 
 /**
@@ -223,8 +247,8 @@ module.exports = {
   createRun,
   findRunById,
   updateRunState,
-  listRunsForFinding,
   createRunItem,
+  findLatestRunItemForSubject,
   listRunItemsWithJobs,
   findActiveJobByLookupKey,
   createLookupJob,

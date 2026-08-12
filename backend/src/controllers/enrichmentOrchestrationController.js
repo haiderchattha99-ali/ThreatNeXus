@@ -5,6 +5,9 @@
 // input, delegate every decision to a service, map service errors onto a safe
 // response. No orchestration logic lives here.
 //
+// The binding contract is docs/ai/PHASE-10A1-API-CONTRACT.md. If this file and
+// that document disagree, this file is wrong.
+//
 // ---------------------------------------------------------------------------
 // Status codes follow the OUTCOME, not the verb
 // ---------------------------------------------------------------------------
@@ -20,6 +23,17 @@
 // The outcome is decided by the service (RUN_REQUEST_OUTCOMES) and only mapped
 // to a status here, so the HTTP contract and the durable record can never
 // disagree about what happened.
+//
+// ---------------------------------------------------------------------------
+// The body names its parts
+// ---------------------------------------------------------------------------
+// `outcome`, `executionState`, `run` and `items` are four distinct top-level
+// fields. The run is NOT flattened into a generic `data` envelope: a caller
+// that has to dig a run's state out of an opaque payload will end up branching
+// on `success` instead, which carries no information at all.
+//
+// `success: true` is kept only because every other endpoint in this repository
+// emits it. It never substitutes for a binding field.
 //
 // ---------------------------------------------------------------------------
 // Idempotency-Key handling
@@ -49,8 +63,13 @@ const {
 } = require("../services/enrichmentOrchestration/enrichmentRunService");
 const {
   serializeRun,
-  serializeRunSummary,
+  resolveExecutionState,
 } = require("../services/enrichmentOrchestration/enrichmentRunReadService");
+const {
+  EnrichmentSummaryNotFoundError,
+  EnrichmentSummaryValidationError,
+  getFindingEnrichmentSummary,
+} = require("../services/enrichmentOrchestration/enrichmentSummaryReadService");
 const repository = require("../services/enrichmentOrchestration/enrichmentOrchestrationRepository");
 const { getProviderUsage } = require("../services/enrichmentOrchestration/enrichmentUsageService");
 
@@ -61,8 +80,7 @@ const serverError = (res, label, err) => {
 
 const actorUserId = (req) => (req.user && Number.isInteger(req.user.id) ? req.user.id : null);
 
-// Bounded so a caller cannot ask for an unbounded history page.
-const MAX_RUN_PAGE_SIZE = 50;
+const runLocation = (findingId, runId) => `/api/findings/${findingId}/enrichment/runs/${runId}`;
 
 exports.createFindingEnrichmentRun = async (req, res) => {
   const id = parseResourceId(req.params.id);
@@ -96,18 +114,25 @@ exports.createFindingEnrichmentRun = async (req, res) => {
       trigger: RUN_TRIGGERS.MANUAL,
       providers: body.providers,
       force: body.force === true,
+      // Normalized, bounded and (when force=true) REQUIRED by the service, so
+      // the rule has one definition rather than one per caller.
+      justification: body.justification,
       actorUserId: actorUserId(req),
       idempotencyKeyHash,
       now: new Date(),
       auditContext: buildAuditContext(req),
     });
 
-    return res.status(outcome.outcome === RUN_REQUEST_OUTCOMES.CREATED ? 202 : 200).json({
+    const status = outcome.outcome === RUN_REQUEST_OUTCOMES.CREATED ? 202 : 200;
+    // Set on every outcome, including ALREADY_RUNNING: the caller asked about a
+    // run and there is one to point at, whether or not this request made it.
+    res.set("Location", runLocation(id, outcome.run.id));
+
+    return res.status(status).json({
       success: true,
       outcome: outcome.outcome,
-      data: serializeRun(outcome.run, outcome.items, {
-        unsubjectedProviders: outcome.unsubjectedProviders,
-      }),
+      executionState: resolveExecutionState(process.env),
+      ...serializeRun(outcome.run, outcome.items),
     });
   } catch (error) {
     if (error instanceof EnrichmentRunNotFoundError) {
@@ -140,28 +165,43 @@ exports.getFindingEnrichmentRun = async (req, res) => {
       return res.status(404).json({ success: false, message: "Enrichment run not found." });
     }
     const items = await repository.listRunItemsWithJobs(prisma, run.id);
-    return res.status(200).json({ success: true, data: serializeRun(run, items) });
+    return res.status(200).json({
+      success: true,
+      executionState: resolveExecutionState(process.env),
+      ...serializeRun(run, items),
+    });
   } catch (error) {
     return serverError(res, "Failed to load enrichment orchestration run", error);
   }
 };
 
-exports.getFindingEnrichmentRuns = async (req, res) => {
-  const findingId = parseResourceId(req.params.id);
-  if (findingId === null) {
+// GET /api/findings/:id/enrichment/summary
+//
+// A pure read: no provider is contacted, no run/item/job/attempt/usage row is
+// created, no quota is reserved and no worker is started. It answers "what is
+// known about this Finding, per provider" from stored state alone.
+exports.getFindingEnrichmentSummary = async (req, res) => {
+  const id = parseResourceId(req.params.id);
+  if (id === null) {
     return res.status(400).json({ success: false, message: "Invalid finding id." });
   }
 
   try {
-    const runs = await repository.listRunsForFinding(prisma, findingId, {
-      take: MAX_RUN_PAGE_SIZE,
+    const summary = await getFindingEnrichmentSummary(id, {
+      client: prisma,
+      // Obtained ONCE here and passed down, so every row in one response is
+      // timestamped against the same instant.
+      asOf: new Date(),
     });
-    return res.status(200).json({
-      success: true,
-      data: { runs: runs.map(serializeRunSummary) },
-    });
+    return res.status(200).json({ success: true, data: summary });
   } catch (error) {
-    return serverError(res, "Failed to list enrichment orchestration runs", error);
+    if (error instanceof EnrichmentSummaryNotFoundError) {
+      return res.status(404).json({ success: false, message: "Finding not found." });
+    }
+    if (error instanceof EnrichmentSummaryValidationError) {
+      return res.status(400).json({ success: false, message: error.message });
+    }
+    return serverError(res, "Failed to load the finding enrichment summary", error);
   }
 };
 

@@ -605,14 +605,18 @@ established the run item records `SKIPPED_EXECUTION_UNAVAILABLE` and no job is c
 
 | Endpoint | Capability | Notes |
 |---|---|---|
-| `POST /api/findings/:id/enrichment/runs` | `trigger:finding-enrichment` | **202 Accepted + `outcome: CREATED`** when a new run has eligible work — the ask is *recorded*, not executed. **200 + `ALREADY_RUNNING`** for an idempotent replay or the loser of a concurrent race (the existing run is returned). **200 + `SKIPPED`** when a new run's every target was refused by policy. Optional `Idempotency-Key` header (≤128 UTF-8 bytes, no control characters); only its SHA-256 digest is ever persisted, and the raw value is never logged, audited or returned. |
-| `GET /api/findings/:id/enrichment/runs[/:runId]` | `read:findings` | Summaries never expose a shared job identifier, any identity hash, or another Finding's subject. A run belonging to a different Finding answers 404, never 403. |
+| `POST /api/findings/:id/enrichment/runs` | `trigger:finding-enrichment` | **202 Accepted + `outcome: CREATED`** when a new run has eligible work — the ask is *recorded*, not executed. **200 + `ALREADY_RUNNING`** for an idempotent replay or the loser of a concurrent race (the existing run is returned). **200 + `SKIPPED`** when a new run's every target was refused by policy. `Location` points at the resulting run. The body names `outcome`, `executionState`, `run` and `items` as separate fields. `justification` is bounded to 1000 characters and **required when `force=true`**; it is never echoed back and reaches audit only as a ≤200-character preview. Optional `Idempotency-Key` header (≤128 UTF-8 bytes, no control characters); only its SHA-256 digest is ever persisted, and the raw value is never logged, audited or returned. |
+| `GET /api/findings/:id/enrichment/runs/:runId` | `read:findings` | The same `run`/`items` pair. Never exposes a shared job identifier, any identity hash, or another Finding's subject. A run belonging to a different Finding answers 404, never 403. There is deliberately no run-*list* route. |
+| `GET /api/findings/:id/enrichment/summary` | `read:findings` | One timestamped row per known provider, resolved from stored state — **no provider is contacted, nothing is written**. A Finding with no active analyst-verified CVE shows NVD as `NO_SUBJECT`, and no NVD run item is created; an IP is never an NVD subject. |
 | `GET /api/enrichment/usage` | `execute:enrichment-batch` | Reports **`accountingScope: PHASE_10_RESERVATIONS`, `coverage: PARTIAL`, `reservationsActive: false`** and names its excluded paths. Its zeros mean "no Phase-10 reservations", **not** "no provider calls happened" — the legacy ADMIN IOC batch, the ADMIN vulnerability batch and the pre-10A2 synchronous provider routes are not accounted for here, and no total call count is fabricated. |
 
 The report upload response gains one additive `enrichment` block; all pre-existing fields
-(`outcome`, `report`, `findingCounts`, `enrichmentCounts`) are unchanged. Its `state` is a closed
-code — `AUTOMATIC_DISABLED` (the default), `NO_FINDINGS`, `RECORDED` or `PARTIAL` — and `executed` is
-`false` throughout Phase 10A-1.
+(`outcome`, `report`, `findingCounts`, `enrichmentCounts`) are unchanged. It carries exactly six
+keys — `state`, `runsCreated`, `itemsCreated`, `jobsCreated`, `jobsShared`, `skipped` — where every
+count describes what *that upload* wrote. `state` is a closed code: `AUTOMATIC_DISABLED` (the
+default), `NO_FINDINGS`, `RECORDED` or `PARTIAL`.
+
+The binding contract for all of the above is `docs/ai/PHASE-10A1-API-CONTRACT.md`.
 
 ## Known limitations
 

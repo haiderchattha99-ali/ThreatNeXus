@@ -38,9 +38,9 @@ const OBSERVED_AT = "2026-08-11T09:00:00.000Z";
 let prisma;
 
 const HEADER = "timestamp,ip,port,protocol,hostname,asn,as_name,country_code";
-function buildCsv() {
+function buildCsv(port = "3389") {
   return Buffer.from(
-    [HEADER, [OBSERVED_AT, IP, "3389", "tcp", "", "64500", "Example AS", "PK"].join(",")].join("\n") +
+    [HEADER, [OBSERVED_AT, IP, port, "tcp", "", "64500", "Example AS", "PK"].join(",")].join("\n") +
       "\n",
     "utf8"
   );
@@ -95,7 +95,7 @@ async function countPhase10Rows() {
     prisma.findingEnrichmentRunItem.count({ where: { finding: { indicatorValue: IP } } }),
     prisma.providerLookupJob.count({ where: { subjectValue: IP } }),
     prisma.providerLookupAttempt.count(),
-    prisma.providerDailyUsage.count(),
+    prisma.providerDailyUsage.count({ where: { provider: { not: { startsWith: "p10a1c-" } } } }),
   ]);
   return { runs, items, jobs, attempts, usage };
 }
@@ -184,14 +184,22 @@ describeOrSkip("Phase 10A-1 default-off contract (real PostgreSQL)", () => {
     // not `autoEnrichment`) and the closed `state` code are the contract.
     expect(result.autoEnrichment).toBeUndefined();
     expect(result.enrichment).toEqual({
-      enabled: false,
       state: "AUTOMATIC_DISABLED",
       runsCreated: 0,
-      runsDeduplicated: 0,
       itemsCreated: 0,
-      failedCount: 0,
-      executed: false,
+      jobsCreated: 0,
+      jobsShared: 0,
+      skipped: 0,
     });
+    // The key set itself, so the block cannot quietly grow a field.
+    expect(Object.keys(result.enrichment).sort()).toEqual([
+      "itemsCreated",
+      "jobsCreated",
+      "jobsShared",
+      "runsCreated",
+      "skipped",
+      "state",
+    ]);
 
     // No Phase-10 orchestration audit event was emitted for THIS report or its
     // Findings. Scoped deliberately: the suite shares one database and other
@@ -225,13 +233,32 @@ describeOrSkip("Phase 10A-1 default-off contract (real PostgreSQL)", () => {
     );
 
     expect(result.outcome).toBe("PROCESSED");
-    expect(result.enrichment.enabled).toBe(true);
     expect(result.enrichment.state).toBe("RECORDED");
     expect(result.enrichment.runsCreated).toBe(1);
     expect(result.enrichment.itemsCreated).toBeGreaterThan(0);
-    expect(result.enrichment.failedCount).toBe(0);
-    // The claim that matters on the response.
-    expect(result.enrichment.executed).toBe(false);
+    // The same six keys when enabled — the block's shape never changes with
+    // the switch, only its values.
+    expect(Object.keys(result.enrichment).sort()).toEqual([
+      "itemsCreated",
+      "jobsCreated",
+      "jobsShared",
+      "runsCreated",
+      "skipped",
+      "state",
+    ]);
+
+    // The counts are TRUTHFUL, not merely present: censys has a fake
+    // credential and a budget of 25, so its target is genuinely eligible and
+    // inserts one job; the four providers with no credential are policy-
+    // skipped; nothing was shared, because no prior job existed for this IP.
+    const createdJobs = await prisma.providerLookupJob.count({ where: { subjectValue: IP } });
+    expect(result.enrichment.jobsCreated).toBe(createdJobs);
+    expect(result.enrichment.jobsCreated).toBeGreaterThan(0);
+    expect(result.enrichment.jobsShared).toBe(0);
+    expect(result.enrichment.skipped).toBeGreaterThan(0);
+    // Every item is either eligible-with-a-job or a policy skip.
+    expect(result.enrichment.jobsCreated + result.enrichment.jobsShared + result.enrichment.skipped)
+      .toBe(result.enrichment.itemsCreated);
 
     // Durable records exist.
     const runs = await prisma.findingEnrichmentRun.findMany({
@@ -262,10 +289,42 @@ describeOrSkip("Phase 10A-1 default-off contract (real PostgreSQL)", () => {
 
     // THE core inertness assertion: not one attempt, not one reservation.
     expect(await prisma.providerLookupAttempt.count()).toBe(0);
-    expect(await prisma.providerDailyUsage.count()).toBe(0);
+    expect(await prisma.providerDailyUsage.count({ where: { provider: { not: { startsWith: "p10a1c-" } } } })).toBe(0);
 
     // The legacy path is unaffected by the switch being on.
     expect(await prisma.iocEnrichment.count({ where: { indicator: IP } })).toBe(1);
+  });
+
+  it("counts a SHARED job as shared, not as created, for a second Finding on one IP", async () => {
+    const pipeline = await loadPipeline({ autoEnabled: true, censysBudget: 25 });
+
+    // First report: port 3389. Creates the job for this IP.
+    const first = await pipeline.ingestAccessibleRdpReport(
+      { fileBytes: buildCsv("3389"), ...upload(`${MARKER}-share-a.csv`) },
+      { client: prisma }
+    );
+    expect(first.enrichment.jobsCreated).toBeGreaterThan(0);
+    expect(first.enrichment.jobsShared).toBe(0);
+
+    // Second report: SAME IP, different port. The dedup key is
+    // (indicator, port, protocol, reportType), so this is a DIFFERENT Finding
+    // — but the same enrichment SUBJECT, so it must attach to the existing job
+    // rather than create a second one.
+    const second = await pipeline.ingestAccessibleRdpReport(
+      { fileBytes: buildCsv("3390"), ...upload(`${MARKER}-share-b.csv`) },
+      { client: prisma }
+    );
+
+    expect(second.enrichment.runsCreated).toBe(1);
+    expect(second.enrichment.jobsCreated).toBe(0);
+    expect(second.enrichment.jobsShared).toBe(first.enrichment.jobsCreated);
+
+    // ONE outbound unit of work for both Findings — the whole point of keeping
+    // work identity separate from request identity.
+    expect(
+      await prisma.providerLookupJob.count({ where: { subjectValue: IP, provider: "censys" } })
+    ).toBe(1);
+    expect(await prisma.providerLookupAttempt.count()).toBe(0);
   });
 
   it("is idempotent: re-uploading the identical report creates no second run", async () => {

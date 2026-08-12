@@ -58,6 +58,7 @@ const {
   KNOWN_PROVIDERS,
   isKnownProvider,
   subjectTypeForProvider,
+  serializeProviderList: serializeNoSubjectProviders,
 } = require("./enrichmentSubject");
 const {
   EnrichmentIdentityError,
@@ -108,6 +109,15 @@ const MAX_CREATE_ATTEMPTS = 5;
 
 const AUDIT_ENTITY_TYPE = "Finding";
 
+// The SAME bounds findingEnrichmentScheduleService.js and
+// findingOwnershipService.js already enforce for an analyst-written reason.
+// Mirrored rather than imported for the reason the module header gives about
+// env.js: findingEnrichmentScheduleService requires config/env at module scope,
+// and importing it here would make every pure unit test of this file depend on
+// a fully configured environment.
+const MAX_JUSTIFICATION_LENGTH = 1000;
+const JUSTIFICATION_PREVIEW_LENGTH = 200;
+
 const AUDIT_ACTIONS = Object.freeze({
   RUN_CREATED: "enrichment.orchestration.run.created",
   RUN_DEDUPLICATED: "enrichment.orchestration.run.deduplicated",
@@ -151,6 +161,57 @@ function assertValidNow(now) {
     throw new EnrichmentRunValidationError("now must be an explicit, valid Date");
   }
   return now;
+}
+
+/**
+ * Normalizes the analyst's optional written reason.
+ *
+ * A supplied justification is NEVER silently discarded: it is trimmed and
+ * bounded, and a value that fails the bound is a 400 rather than a request that
+ * quietly proceeds with the reason dropped. When `force` is set it is
+ * REQUIRED — bypassing freshness spends real third-party quota once a worker
+ * exists, and an unexplained bypass is exactly what an audit trail is for.
+ *
+ * The raw value never reaches a response body and reaches audit only as a
+ * bounded preview (see boundedJustificationPreview).
+ *
+ * @param {unknown} value
+ * @param {boolean} force
+ * @returns {string|null}
+ */
+function normalizeJustification(value, force) {
+  if (value === undefined || value === null) {
+    if (force) {
+      throw new EnrichmentRunValidationError(
+        `justification is required and must be 1-${MAX_JUSTIFICATION_LENGTH} characters when force=true`
+      );
+    }
+    return null;
+  }
+  if (typeof value !== "string") {
+    throw new EnrichmentRunValidationError("justification must be a string");
+  }
+  const trimmed = value.trim();
+  if (trimmed === "" || trimmed.length > MAX_JUSTIFICATION_LENGTH) {
+    throw new EnrichmentRunValidationError(
+      `justification must be 1-${MAX_JUSTIFICATION_LENGTH} characters`
+    );
+  }
+  return trimmed;
+}
+
+/**
+ * The only form of a justification allowed to leave this module. Bounded, and
+ * only ever placed in an audit payload — never in an HTTP response.
+ *
+ * @param {string|null} value
+ * @returns {string|null}
+ */
+function boundedJustificationPreview(value) {
+  if (typeof value !== "string" || value === "") return null;
+  return value.length > JUSTIFICATION_PREVIEW_LENGTH
+    ? `${value.slice(0, JUSTIFICATION_PREVIEW_LENGTH)}…`
+    : value;
 }
 
 /**
@@ -378,8 +439,13 @@ async function establishDelegate(client, { provider, subjectValue, force, now })
  * both cases NO ProviderLookupJob is created, so a stranded delegated job
  * cannot exist.
  *
+ * `jobCreated` distinguishes a job this call INSERTED from one it merely
+ * attached to. The upload response reports the two separately (`jobsCreated`
+ * vs `jobsShared`) and neither can be inferred afterwards: an item holding a
+ * job id looks identical either way.
+ *
  * @returns {Promise<{decision: string, skipReason: string|null,
- *   lookupJobId: number|null}>}
+ *   lookupJobId: number|null, jobCreated: boolean}>}
  */
 async function resolveEligibleTarget(client, routed, { force, now }) {
   const { provider, subjectType, subjectValue, lane } = routed;
@@ -390,7 +456,12 @@ async function resolveEligibleTarget(client, routed, { force, now }) {
   // nothing is scheduled a second time.
   const existing = await repository.findActiveJobByLookupKey(client, queryIdentityHash);
   if (existing) {
-    return { decision: RUN_ITEM_DECISIONS.ELIGIBLE, skipReason: null, lookupJobId: existing.id };
+    return {
+      decision: RUN_ITEM_DECISIONS.ELIGIBLE,
+      skipReason: null,
+      lookupJobId: existing.id,
+      jobCreated: false,
+    };
   }
 
   const delegated = DELEGATED_PROVIDERS.includes(provider);
@@ -411,6 +482,7 @@ async function resolveEligibleTarget(client, routed, { force, now }) {
         decision: RUN_ITEM_DECISIONS.SKIPPED_EXECUTION_UNAVAILABLE,
         skipReason: SKIP_REASONS.DELEGATE_UNAVAILABLE,
         lookupJobId: null,
+        jobCreated: false,
       };
     }
 
@@ -419,6 +491,7 @@ async function resolveEligibleTarget(client, routed, { force, now }) {
         decision: RUN_ITEM_DECISIONS.SKIPPED_CACHED,
         skipReason: SKIP_REASONS.FRESH_RESULT_EXISTS,
         lookupJobId: null,
+        jobCreated: false,
       };
     }
     if (delegate.status !== "LINKED") {
@@ -426,6 +499,7 @@ async function resolveEligibleTarget(client, routed, { force, now }) {
         decision: RUN_ITEM_DECISIONS.SKIPPED_EXECUTION_UNAVAILABLE,
         skipReason: SKIP_REASONS.DELEGATE_UNAVAILABLE,
         lookupJobId: null,
+        jobCreated: false,
       };
     }
   }
@@ -448,22 +522,40 @@ async function resolveEligibleTarget(client, routed, { force, now }) {
   if (delegate.status === "LINKED") data[delegate.field] = delegate.id;
 
   let job;
+  let jobCreated = true;
   try {
     job = await repository.createLookupJob(client, data);
   } catch (error) {
     if (!repository.isUniqueViolation(error)) throw error;
     // Lost the race on activeLookupKey — the winner's job is the shared one.
     // The delegate scheduling above was idempotent, so the loser created no
-    // duplicate delegate either.
+    // duplicate delegate either. The race WINNER's job is shared, not created,
+    // by this call: exactly one caller may count it as created.
     job = await repository.findActiveJobByLookupKey(client, queryIdentityHash);
     if (!job) throw error;
+    jobCreated = false;
   }
-  return { decision: RUN_ITEM_DECISIONS.ELIGIBLE, skipReason: null, lookupJobId: job.id };
+  return {
+    decision: RUN_ITEM_DECISIONS.ELIGIBLE,
+    skipReason: null,
+    lookupJobId: job.id,
+    jobCreated,
+  };
 }
 
-/** The identity that makes an item and a routed target the same thing. */
+/**
+ * The identity that makes an item and a routed target the same thing.
+ *
+ * JSON.stringify over an ARRAY, not a delimiter join. A delimiter has to be a
+ * character no value can contain, and every candidate is either legal
+ * somewhere in a subject or - as this line previously was - a literal NUL byte
+ * embedded in a source file: unreviewable in a diff, hostile to every text
+ * tool, and rejected outright by some of them. JSON quoting is text-safe and
+ * collision-resistant by construction, because the encoding escapes whatever
+ * the values contain.
+ */
 function targetKey(target) {
-  return `${target.provider} ${target.subjectType} ${target.subjectValue}`;
+  return JSON.stringify([target.provider, target.subjectType, target.subjectValue]);
 }
 
 /**
@@ -487,12 +579,17 @@ function targetKey(target) {
  * Runs AFTER the run row is committed and outside any transaction, for the
  * P2002 reason in the module header.
  *
+ * Every count returned describes what THIS CALL wrote, never the run's totals.
+ * On a replay that converged onto an existing run the two differ, and reporting
+ * the totals would claim work a previous request had already recorded.
+ *
  * @param {Array<object>} existingItems the run's already-written items
- * @returns {Promise<number>} how many items this call created
+ * @returns {Promise<{itemsCreated: number, jobsCreated: number,
+ *   jobsShared: number, skipped: number}>}
  */
 async function materializeItems(client, run, routedTargets, existingItems, { force, now }) {
   const present = new Set(existingItems.map(targetKey));
-  let created = 0;
+  const counts = { itemsCreated: 0, jobsCreated: 0, jobsShared: 0, skipped: 0 };
 
   // eslint-disable-next-line no-restricted-syntax
   for (const routed of routedTargets) {
@@ -503,6 +600,7 @@ async function materializeItems(client, run, routedTargets, existingItems, { for
       decision: routed.decision,
       skipReason: routed.skipReason,
       lookupJobId: null,
+      jobCreated: false,
     };
     if (routed.decision === RUN_ITEM_DECISIONS.ELIGIBLE) {
       // eslint-disable-next-line no-await-in-loop
@@ -521,14 +619,22 @@ async function materializeItems(client, run, routedTargets, existingItems, { for
         skipReason: resolved.skipReason,
         lookupJobId: resolved.lookupJobId,
       });
-      created += 1;
+      counts.itemsCreated += 1;
+      if (resolved.decision === RUN_ITEM_DECISIONS.ELIGIBLE) {
+        if (resolved.jobCreated) counts.jobsCreated += 1;
+        else counts.jobsShared += 1;
+      } else {
+        // Every non-ELIGIBLE decision is a policy refusal, and none of them
+        // created a job.
+        counts.skipped += 1;
+      }
     } catch (error) {
       // Already written by a concurrent replay of this same run — converge on
       // it rather than overwriting the decision it recorded.
       if (!repository.isUniqueViolation(error)) throw error;
     }
   }
-  return created;
+  return counts;
 }
 
 async function audit(client, auditContext, event) {
@@ -568,9 +674,15 @@ function runAuditSummary(run, items) {
  *   force?: boolean, rawReportId?: number|null, actorUserId?: number|null,
  *   idempotencyKeyHash?: string|null, now: Date, auditContext?: object}} options
  * @returns {Promise<{run: object, items: Array, created: boolean,
- *   itemsCreated: number, outcome: string,
- *   unsubjectedProviders: Array<string>}>} `outcome` is a RUN_REQUEST_OUTCOMES
- *   value — the API contract, decided here rather than in the controller.
+ *   itemsCreated: number, jobsCreated: number, jobsShared: number,
+ *   skipped: number, outcome: string}>} `outcome` is a RUN_REQUEST_OUTCOMES
+ *   value — the API contract, decided here rather than in the controller. The
+ *   four counts describe what THIS call wrote, never the run's totals.
+ *
+ *   Providers that were in scope but had no subject are NOT returned separately:
+ *   they are persisted on the run itself (`noSubjectProviders`), so the answer a
+ *   caller serializes now and the answer a later GET serializes are the same
+ *   stored fact rather than two independent derivations.
  */
 async function createEnrichmentRun(findingId, options = {}) {
   const client = resolveClient(options.client);
@@ -587,6 +699,10 @@ async function createEnrichmentRun(findingId, options = {}) {
   // manual ask can never be charged against the automatic budget or vice
   // versa.
   const lane = trigger === RUN_TRIGGERS.INGESTION ? QUOTA_LANES.AUTOMATIC : QUOTA_LANES.MANUAL;
+
+  // Validated BEFORE anything touches the database, so a rejected reason never
+  // produces an orchestration record or an audit row.
+  const justification = normalizeJustification(options.justification, force);
 
   const providerScope = normalizeProviderScope(options.providers);
   const config = resolveOrchestrationConfig(process.env);
@@ -636,13 +752,16 @@ async function createEnrichmentRun(findingId, options = {}) {
   }
 
   // A provider that was asked for but has no subject on this Finding is
-  // recorded honestly rather than silently omitted. It uses the Finding's own
-  // indicator as the item's subject only when the provider's subject type is
-  // IPv4; for a CVE provider with no verified CVE there is genuinely no
-  // subject, so no item can be written (subjectValue is NOT NULL). The
-  // provider is reported through the run summary's `consideredProviders`
-  // instead — see enrichmentRunReadService.js.
-  const unsubjectedProviders = [...missingSubjectProviders];
+  // recorded DURABLY, not just serialized into this one response. For a CVE
+  // provider with no verified CVE there is genuinely no subject, so no item can
+  // be written (subjectValue is NOT NULL) — and previously the fact lived only
+  // in the POST body and vanished from every later GET of the same run.
+  //
+  // Persisted on the run row, written once at creation and never updated, so:
+  //   * the immediate POST and any later GET return the identical list;
+  //   * associating a verified CVE afterwards cannot rewrite history;
+  //   * nothing has to reverse requestScopeHash to recover the asked scope.
+  const noSubjectProviders = serializeNoSubjectProviders(missingSubjectProviders);
 
   // --- Create the run, converging on the idempotency unique ----------------
   let run = null;
@@ -664,6 +783,7 @@ async function createEnrichmentRun(findingId, options = {}) {
         requestedAt: now,
         force,
         requestScopeHash,
+        noSubjectProviders,
         idempotencyKey,
         rawReportId: options.rawReportId ?? null,
         actorUserId: trigger === RUN_TRIGGERS.MANUAL ? options.actorUserId ?? null : null,
@@ -697,7 +817,7 @@ async function createEnrichmentRun(findingId, options = {}) {
   // path, an idempotent replay, and a crash that committed some items but not
   // all of them — see materializeItems for why "only when empty" loses targets.
   const existingItems = await repository.listRunItemsWithJobs(client, run.id);
-  const itemsCreated = await materializeItems(client, run, routedTargets, existingItems, {
+  const counts = await materializeItems(client, run, routedTargets, existingItems, {
     force,
     now,
   });
@@ -724,24 +844,34 @@ async function createEnrichmentRun(findingId, options = {}) {
     outcome: AUDIT_OUTCOMES.SUCCESS,
     entityType: AUDIT_ENTITY_TYPE,
     entityId: id,
-    after: runAuditSummary(run, items),
+    after: {
+      ...runAuditSummary(run, items),
+      // Bounded preview only, the existing convention
+      // (findingEnrichmentScheduleService.js). The raw reason is never stored
+      // in an audit payload and never returned to any caller.
+      justification: boundedJustificationPreview(justification),
+    },
     reason: created
       ? "Enrichment orchestration run created (no provider was contacted)"
       : "Enrichment orchestration run deduplicated onto an existing run",
   });
 
-  return { run, items, created, itemsCreated, outcome, unsubjectedProviders };
+  return { run, items, created, outcome, ...counts };
 }
 
 module.exports = {
   AUDIT_ACTIONS,
   AUDIT_ENTITY_TYPE,
   MAX_CREATE_ATTEMPTS,
+  MAX_JUSTIFICATION_LENGTH,
+  JUSTIFICATION_PREVIEW_LENGTH,
   DELEGATED_PROVIDERS,
   TERMINAL_RUN_STATES,
   EnrichmentRunValidationError,
   EnrichmentRunNotFoundError,
   EnrichmentIdentityError,
+  normalizeJustification,
+  boundedJustificationPreview,
   normalizeProviderScope,
   assembleTargets,
   recomputeRunState,

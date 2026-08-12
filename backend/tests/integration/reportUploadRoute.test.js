@@ -326,14 +326,17 @@ describe("POST /api/reports/upload — authentication and authorization", () => 
   it("reports enrichment.state AUTOMATIC_DISABLED with orchestration off", async () => {
     const res = await uploadAs("ANALYST");
     expect(res.status).toBe(201);
+    // The block is pinned EXACTLY — six keys, every count zero. `enabled`,
+    // `runsDeduplicated`, `failedCount` and `executed` were removed from the
+    // public block deliberately (docs/ai/PHASE-10A1-API-CONTRACT.md); this
+    // toEqual fails if any of them comes back.
     expect(res.body.enrichment).toEqual({
-      enabled: false,
       state: "AUTOMATIC_DISABLED",
       runsCreated: 0,
-      runsDeduplicated: 0,
       itemsCreated: 0,
-      failedCount: 0,
-      executed: false,
+      jobsCreated: 0,
+      jobsShared: 0,
+      skipped: 0,
     });
     // The renamed block replaced the old one outright — no consumer should be
     // able to keep reading the pre-review name.
@@ -488,15 +491,7 @@ describe("POST /api/reports/upload — response safety", () => {
       ["enrichment", "findingCounts", "message", "report", "success"].sort()
     );
     expect(Object.keys(res.body.enrichment).sort()).toEqual(
-      [
-        "enabled",
-        "executed",
-        "failedCount",
-        "itemsCreated",
-        "runsCreated",
-        "runsDeduplicated",
-        "state",
-      ].sort()
+      ["itemsCreated", "jobsCreated", "jobsShared", "runsCreated", "skipped", "state"].sort()
     );
     expect(Object.keys(res.body.report).sort()).toEqual(
       [

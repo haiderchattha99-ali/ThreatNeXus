@@ -79,6 +79,7 @@ describe("Phase 10A-1 inertness — the orchestration package cannot reach a pro
       "enrichmentRunReadService.js",
       "enrichmentRunService.js",
       "enrichmentSubject.js",
+      "enrichmentSummaryReadService.js",
       "enrichmentUsageService.js",
     ]);
     // No worker, by name or by existence.
@@ -136,7 +137,25 @@ describe("Phase 10A-1 inertness — the orchestration package cannot reach a pro
         }
       }
     }
-    expect(files.length).toBe(10);
+    expect(files.length).toBe(11);
+  });
+
+  // A literal NUL byte reached enrichmentRunService.js as a "safe" delimiter
+  // inside a template literal. It is invisible in every editor, unreviewable in
+  // a diff, breaks text tooling, and some toolchains reject the file outright.
+  // Read as BYTES rather than as decoded text: a decoder can silently drop or
+  // substitute a NUL, which would make this gate pass against a file that still
+  // contains one.
+  it("contains no literal NUL byte in any committed source file", () => {
+    // eslint-disable-next-line no-restricted-syntax
+    for (const name of fs.readdirSync(PACKAGE_DIR).filter((file) => file.endsWith(".js"))) {
+      const bytes = fs.readFileSync(path.join(PACKAGE_DIR, name));
+      const at = bytes.indexOf(0);
+      if (at !== -1) {
+        throw new Error(`${name} contains a literal NUL byte at offset ${at}`);
+      }
+      expect(at).toBe(-1);
+    }
   });
 
   it("never reads a provider credential VALUE, only whether one is present", () => {

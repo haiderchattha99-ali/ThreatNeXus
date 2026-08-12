@@ -7,9 +7,9 @@
 // ===========================================================================
 // A ProviderLookupJob is SHARED. Ten Findings on one IP point at one job. That
 // is the whole point of the design — and it is exactly why a Finding-scoped
-// summary must never serialize a job identifier.
+// response must never serialize a job identifier.
 //
-// If it did, an analyst holding Finding A's summary would learn a job id that
+// If it did, an analyst holding Finding A's response would learn a job id that
 // also belongs to Findings B..J, which is a cross-tenant inference channel
 // built out of an internal primary key. So:
 //
@@ -27,8 +27,37 @@
 // What IS published is the run's own identity (its id, scoped to the Finding
 // the caller already asked about), the decision, and the shared job's STATE —
 // a state is a fact about progress, not an identifier.
+//
+// ---------------------------------------------------------------------------
+// `run` and `items` are SEPARATE fields, not one flattened object
+// ---------------------------------------------------------------------------
+// A run is a request record; an item is a per-target decision. Nesting the
+// items inside the run made the two read as one blob and pushed callers toward
+// treating `data` as an opaque payload. The contract names them separately
+// (docs/ai/PHASE-10A1-API-CONTRACT.md), so this module produces them
+// separately and the controller assembles the envelope.
 
-const { isKnownSkipReason } = require("./enrichmentDecisionCodes");
+const { isKnownSkipReason, EXECUTION_STATES } = require("./enrichmentDecisionCodes");
+const { parseProviderList } = require("./enrichmentSubject");
+const { resolveOrchestrationConfig } = require("./enrichmentOrchestrationConfig");
+
+/**
+ * Whether anything will actually pick a recorded job up.
+ *
+ * Stated on every orchestration response as its own top-level field rather than
+ * left to documentation: without it, "CREATED" reads as "contacted".
+ *
+ * @param {object} [source] normally process.env
+ * @returns {string} an EXECUTION_STATES value
+ */
+function resolveExecutionState(source) {
+  const config = resolveOrchestrationConfig(source || process.env);
+  // The switch being ON does not make a worker exist — Phase 10A-1 ships none.
+  // Reporting "paused" in that case would imply one is merely idle.
+  return config.ENRICHMENT_WORKER_ENABLED
+    ? EXECUTION_STATES.NOT_IMPLEMENTED
+    : EXECUTION_STATES.PAUSED_WORKER_DISABLED;
+}
 
 /**
  * Serializes one run item for a Finding-scoped response.
@@ -55,23 +84,21 @@ function serializeRunItem(item) {
 }
 
 /**
- * Serializes a run plus its items.
+ * Serializes the run record itself. Items are serialized separately.
  *
- * `consideredProviders` reports providers that were in scope but produced no
- * item because the Finding had no subject for them (e.g. nvd with no verified
- * CVE). Recording that is the difference between "we did not ask NVD" and
- * "NVD was never considered".
+ * `consideredProviders.noSubject` is read from the STORED column, never
+ * recomputed from today's Finding and never recovered by reversing a hash. That
+ * is what makes the POST response and a GET six months later agree, and what
+ * stops a CVE association added afterwards from rewriting history.
  *
- * @param {object} run
- * @param {Array<object>} items
- * @param {{unsubjectedProviders?: Array<string>}} [extra]
+ * @param {object} run a FindingEnrichmentRun row
+ * @param {Array<object>} items the run's items (for counts only)
  * @returns {object} frozen
  */
-function serializeRun(run, items, extra = {}) {
-  const serializedItems = items.map(serializeRunItem);
+function serializeRunRecord(run, items) {
   const decisionCounts = {};
   // eslint-disable-next-line no-restricted-syntax
-  for (const item of serializedItems) {
+  for (const item of items) {
     decisionCounts[item.decision] = (decisionCounts[item.decision] || 0) + 1;
   }
 
@@ -83,34 +110,28 @@ function serializeRun(run, items, extra = {}) {
     force: run.force,
     requestedAt: run.requestedAt,
     completedAt: run.completedAt,
-    itemCount: serializedItems.length,
-    decisionCounts,
-    items: serializedItems,
+    itemCount: items.length,
+    decisionCounts: Object.freeze(decisionCounts),
     consideredProviders: Object.freeze({
-      // In scope, but this Finding has no subject of the required type.
-      noSubject: Object.freeze([...(extra.unsubjectedProviders || [])]),
-    }),
-    // Stated on every response rather than left to documentation: this
-    // milestone records intent and executes nothing.
-    execution: Object.freeze({
-      performed: false,
-      reason: "PHASE_10A1_ORCHESTRATION_ONLY",
+      // In scope when this run was requested, but the Finding had no subject of
+      // the required type — so no item exists, and never will for this run.
+      noSubject: Object.freeze(parseProviderList(run.noSubjectProviders)),
     }),
   });
 }
 
 /**
- * A compact run descriptor for list responses — no items, no hashes.
+ * The full `{ run, items }` pair a response body carries.
+ *
+ * @param {object} run
+ * @param {Array<object>} items
+ * @returns {{run: object, items: Array<object>}} frozen
  */
-function serializeRunSummary(run) {
+function serializeRun(run, items) {
+  const serializedItems = Object.freeze(items.map(serializeRunItem));
   return Object.freeze({
-    id: run.id,
-    findingId: run.findingId,
-    trigger: run.trigger,
-    state: run.state,
-    force: run.force,
-    requestedAt: run.requestedAt,
-    completedAt: run.completedAt,
+    run: serializeRunRecord(run, serializedItems),
+    items: serializedItems,
   });
 }
 
@@ -134,7 +155,8 @@ const FORBIDDEN_OUTPUT_FIELDS = Object.freeze([
 
 module.exports = {
   FORBIDDEN_OUTPUT_FIELDS,
+  resolveExecutionState,
   serializeRunItem,
+  serializeRunRecord,
   serializeRun,
-  serializeRunSummary,
 };

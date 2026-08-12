@@ -55,6 +55,39 @@ const PROVIDER_SUBJECT_TYPES = Object.freeze({
 
 const KNOWN_PROVIDERS = Object.freeze(Object.keys(PROVIDER_SUBJECT_TYPES).sort());
 
+// What a provider is ASKED FOR. Reported on the Finding enrichment summary so
+// an analyst reading six rows can tell which question each one answers.
+//
+// The IOC_REPUTATION / VULNERABILITY split is not cosmetic: vulnerability
+// enrichment (NVD, and later KEV/EPSS) is a SEPARATE path from IOC reputation,
+// and neither substitutes for the other. Collapsing them into one label in the
+// UI is exactly how that distinction gets lost.
+//
+// EXPOSURE is what a scan observed about a host. An exposed service is a
+// condition, never proof an attacker used it.
+const PROVIDER_PURPOSES = Object.freeze({
+  abuseipdb: "IOC_REPUTATION",
+  greynoise: "IOC_REPUTATION",
+  censys: "EXPOSURE",
+  shodan: "EXPOSURE",
+  netlas: "EXPOSURE",
+  nvd: "VULNERABILITY",
+});
+
+const PROVIDER_PURPOSE_VALUES = Object.freeze([
+  ...new Set(Object.values(PROVIDER_PURPOSES)),
+]);
+
+/**
+ * The purpose a provider serves.
+ *
+ * @param {string} provider
+ * @returns {string|null} null for an unknown provider
+ */
+function purposeForProvider(provider) {
+  return isKnownProvider(provider) ? PROVIDER_PURPOSES[provider] : null;
+}
+
 class EnrichmentSubjectError extends TypeError {
   constructor(message) {
     super(message);
@@ -165,6 +198,37 @@ function buildSubject(input) {
 }
 
 /**
+ * Encodes a provider set for the FindingEnrichmentRun.noSubjectProviders
+ * column: sorted, de-duplicated, comma-joined.
+ *
+ * Sorted so the stored value is a function of the SET, not of the order the
+ * caller happened to assemble it in — two identical asks must produce identical
+ * rows. Only known identifiers survive; they are a closed six-member set of
+ * lowercase names that cannot contain a comma, so the delimiter needs no
+ * escaping and the column can never hold caller-supplied text.
+ *
+ * @param {Array<string>} providers
+ * @returns {string} "" for an empty set
+ */
+function serializeProviderList(providers) {
+  if (!Array.isArray(providers)) return "";
+  return [...new Set(providers.filter(isKnownProvider))].sort().join(",");
+}
+
+/**
+ * The inverse. Unknown entries are dropped rather than surfaced: this reads a
+ * stored value, and a value some future code path wrote outside the vocabulary
+ * must not become a free-text leak in an HTTP response.
+ *
+ * @param {unknown} value
+ * @returns {Array<string>}
+ */
+function parseProviderList(value) {
+  if (typeof value !== "string" || value === "") return [];
+  return value.split(",").filter(isKnownProvider).sort();
+}
+
+/**
  * Deterministic ordering for a set of subjects, so requestScopeHash's input is
  * stable regardless of the order the caller assembled them in.
  *
@@ -192,10 +256,15 @@ module.exports = {
   SUBJECT_TYPE_VALUES,
   PROVIDER_SUBJECT_TYPES,
   KNOWN_PROVIDERS,
+  PROVIDER_PURPOSES,
+  PROVIDER_PURPOSE_VALUES,
   isKnownProvider,
   subjectTypeForProvider,
+  purposeForProvider,
   isProviderSubjectCompatible,
   canonicalizeSubjectValue,
   buildSubject,
+  serializeProviderList,
+  parseProviderList,
   sortTargets,
 };

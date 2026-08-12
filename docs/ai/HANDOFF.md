@@ -1,22 +1,60 @@
 # Handoff: TNX-P10A1-ENRICHMENT-ORCHESTRATION-FOUNDATION
 
 - From: claude
-- Suggested next writer: **codex (SECOND independent review)** — do not start 10A-2 before that review
+- Suggested next writer: **codex (THIRD independent review)** — do not start 10A-2 before that review
 - Branch: `feat/phase-10a1-enrichment-orchestration-foundation` (from `origin/main` @ `3638a39`, the PR #19 merge)
 - Worktree: `F:\AI-Worktrees\ThreatNeXus\phase-10a1` (isolated — the primary checkout, which carries
   unrelated uncommitted presentation work on `docs/phase-9c-pkcert-technical-dossier`, was never
   touched, never switched, never stashed)
-- Writer lock: **released** (`handoff-task.ps1`, `claude` -> `codex`)
-- Verified code checkpoint: `11b0f4a` (CI green); handoff commit `2990ee2`
-- Updated: 2026-08-12T04:50:00Z (correction pass after Codex review 1)
+- Writer lock: **released** (`claude` -> `codex`)
+- Prior verified checkpoint: `5c0de84` (review pass 1 resolved, CI green)
+- Updated: 2026-08-12 (correction pass after Codex review **2**)
 
-> `handoff-task.ps1` overwrote this file with its five-line template on release, as it always does.
-> The detail below was restored from `11b0f4a` immediately afterwards. Any future writer running that
-> script must do the same.
+> `handoff-task.ps1` overwrites this file with its five-line template on release, as it always does.
+> The detail below is restored from the preceding commit immediately afterwards. Any future writer
+> running that script must do the same.
 
-**Status: complete and inert, first Codex review resolved, awaiting SECOND Codex review.** Phase
-10A-1 records enrichment orchestration INTENT and executes nothing. No PR opened, `main` not merged,
-10A-2 not started — per instruction.
+**Status: complete and inert, Codex review passes 1 and 2 both resolved, awaiting THIRD Codex
+review.** Phase 10A-1 records enrichment orchestration INTENT and executes nothing. No PR opened,
+`main` not merged, 10A-2 not started — per instruction.
+
+## The binding contract now lives in a file
+
+`docs/ai/PHASE-10A1-API-CONTRACT.md` is **the** Phase 10A-1 API contract: routes, request and
+response shapes, status codes, closed vocabularies, and the upload block's exact key set. It exists
+because the Phase 10 Plan v2/v2.1 documents are on no disk in this project, and two sessions in a row
+reconstructed the surface differently as a result. If the code and that file disagree, the code is
+wrong. Amending it needs explicit approval and a `DECISIONS.md` entry.
+
+## Codex review pass 2 — every finding resolved
+
+| # | Finding | Correction |
+|---|---|---|
+| 1 | The summary endpoint did not exist; an unplanned run-*list* surface stood in for it | Added `GET /api/findings/:id/enrichment/summary` (`read:findings`) — one timestamped row per known provider, resolved from stored state, closed `status`/`source`/`purpose` vocabularies, delegate state read from the delegate rather than from the waiting job, NVD carrying per-CVE sub-rows and `NO_SUBJECT` when the Finding has no active analyst-verified CVE (no NVD item is created; an IP is never an NVD subject). **The run-list surface was removed**, not kept: it was never part of the contract and the summary answers the question it stood in for. |
+| 2 | `POST …/runs` flattened the run into `data`, discarded `justification`, set no `Location` | The body now names `outcome`, `executionState`, `run` and `items` separately. `justification` is trimmed, bounded to 1000 characters and **required when `force=true`** (400 otherwise) — the same rule `findingEnrichmentScheduleService` already enforces — is never echoed back, and reaches audit only as a ≤200-character preview. `Location: /api/findings/:id/enrichment/runs/:runId` is set on all three outcomes. `executionState` is `PAUSED_WORKER_DISABLED` with the worker switch off, `NOT_IMPLEMENTED` with it on (the switch conjures no worker). Body and header are pinned in Supertest. |
+| 3 | The upload `enrichment` block exposed internals and lacked truthful counts | Now exactly six keys: `state`, `runsCreated`, `itemsCreated`, `jobsCreated`, `jobsShared`, `skipped`. `enabled` (implied by `state`), `runsDeduplicated`, `failedCount` (folded into `PARTIAL`) and `executed` are gone from the public block; `failedCount` survives in the audit payload, where operational detail belongs. Every count describes what *that upload* wrote. Proven with exact key allow-lists in both the disabled and enabled cases, plus a real-PG case that a second Finding on one IP counts a job as **shared**, not created. |
+| 4 | Two literal NUL bytes in `enrichmentRunService.js` | `targetKey()` is now `JSON.stringify([provider, subjectType, subjectValue])` — text-safe and collision-resistant by construction. A new inertness case reads every package file as **bytes** and fails on any NUL. |
+| 5 | `consideredProviders.noSubject` was supplied at POST serialization only and vanished on GET | It is now **durably recorded** on `FindingEnrichmentRun.noSubjectProviders`, written once at creation and never updated. POST and a later GET return the identical list; associating a verified CVE afterwards does not rewrite a historical run (real-PG test); T-09 still holds; nothing reverses `requestScopeHash`. |
+
+### The design decision behind #5, stated plainly
+
+The five-table model is unchanged. One column was added to an existing table — the migration is the
+same unmerged `20260811162611_add_phase10a1_enrichment_orchestration`, amended rather than followed
+by a 25th, so CI's frozen migration list still reads 24 and `migrate deploy` from zero still applies
+24/24 with no drift.
+
+A provider in scope with no subject cannot produce a run item at all: `subjectValue` is NOT NULL and
+a CHECK constraint forbids an IP becoming an NVD subject. So the fact has nowhere to live except the
+run row. The column stores the *no-subject* set rather than the whole requested scope, because the
+requested scope is already recoverable as `providers(items) ∪ noSubjectProviders` — storing both
+would be two sources for one truth.
+
+### One pre-existing cross-suite flake fixed on the way
+
+`phase10a1Constraints.test.js` deliberately INSERTs a `p10a1c-`-marked `ProviderDailyUsage` row to
+prove the reserved-count CHECK constraint. Three other suites asserted a **global** zero on that
+table, so running concurrently they saw the constraint probe and failed a claim that was still true.
+The global assertions now exclude that one marker and nothing else.
 
 ## Codex review pass 1 — every finding resolved
 
@@ -148,20 +186,20 @@ target a crash left unwritten.
 | CI frozen migration list | updated to 24 in the same commit |
 | 5 tables / 9 enums / 7 constraints in live schema | verified by direct `pg_catalog` query, alongside **0 attempt rows, 0 usage rows, 0 unlinked `RUN_DELEGATED` jobs** |
 | Real-PG constraint suite | **9 tests, 8 independent rejections across the 7 constraints** |
-| Real-PG orchestration suite | 9 tests (T-23, concurrent collapse, scope separation, shared job, policy skips, 3×CVE, provider-text exclusion, audit safety) |
-| Real-PG default-off suite | 3 tests (off = zero Phase-10 rows; on = records but no lookup; idempotent re-upload) |
+| Real-PG orchestration suite | **10 tests** (T-23, concurrent collapse, scope separation, shared job, policy skips, 3×CVE, provider-text exclusion, audit safety, **historical truthfulness — a CVE associated later does not rewrite an earlier run**) |
+| Real-PG default-off suite | **4 tests** (off = zero Phase-10 rows and the exact six-key block; on = records but no lookup, with truthful created/shared/skipped counts; **a second Finding on one IP counts its job as SHARED**; idempotent re-upload) |
 | **Real-PG delegate/recovery suite (new)** | **9 tests** — crash recovery, concurrent replay convergence, IOC delegate created / reused / past-terminal, scheduling refusal, NVD delegate, 3×CVE distinct delegates, ADMIN-batch uniqueness respected. Every case re-asserts zero attempts, zero usage, nothing queried, and exactly one delegate FK per `RUN_DELEGATED` job. |
-| **HTTP/RBAC contract suite (new)** | **37 Supertest tests** over the mounted app — full role matrix, 401 vs 403, slash paths vs 404 on the hyphenated ones, 202/200 outcomes, 400 validation, cross-Finding 404, leak checks |
-| Upload HTTP contract | `enrichment.state === AUTOMATIC_DISABLED` proven over real HTTP; the response allow-list test extended (not relaxed) to pin the block's own keys |
-| Pure unit suites | 101 tests across 6 files, incl. the static inertness gate — still green with the two new canonical-queue imports |
-| **Full backend suite** | **3415 passed, 2 skipped, 0 failed** (156 files, fresh DB, `--maxWorkers=3`) |
+| **HTTP/RBAC contract suite** | **52 Supertest tests** over the mounted app — full role matrix on all three routes, 401 vs 403, contract paths served and the hyphenated **and removed run-list** ones 404, 202/200 outcomes with the exact body keys and `Location`, justification validation and audit-preview bounding, summary shape / NVD `NO_SUBJECT` / cross-Finding isolation / zero writes, leak checks |
+| Upload HTTP contract | the **exact six-key** default-off block proven over real HTTP (`toEqual`, so a removed field cannot come back); the response allow-list test pins the block's own keys |
+| Pure unit suites | **2416 tests across 108 files**, incl. the static inertness gate (now 11 modules) and its new **NUL-byte** case, plus a new 15-test summary suite |
+| **Full backend suite** | **3449 passed, 2 skipped, 0 failed** (157 files, fresh DB `tnx_p10a1_r2`, `--maxWorkers=3`) |
 | Evaluators | `eval:phase1`, `eval:risk` (19/19), `eval:phase2` (22/112), `eval:phase3` (12/151), `eval:vulnerability` (41/992), `eval:phase4` (14/151), `eval:phase5` (14/150), `eval:phase6.3` (13/108), `eval:phase7` (8/35) — **all PASS** |
 | Risk v1 config version / fingerprint | unchanged (`v1.0.0`, `risk-additive-bucketed-v1`); risk modules untouched per `git status` |
 | Secret scan | CI's own pattern set, repo-wide: clean. No tracked `.env`. |
 | Frontend | untouched (`git status frontend/` empty) |
 | `backend/.env` | never opened, read, printed or referenced — only `.env.example` |
 | Primary checkout | untouched — `C:\Users\LENOVO\Desktop\ThreatNeXus` stayed on `docs/phase-9c-pkcert-technical-dossier` with its unrelated Phase 9 work intact |
-| **CI** | **green on the first push of `4fa62e6`** — [run 31546832118](https://github.com/haiderchattha99-ali/ThreatNeXus/actions/runs/31546832118). All six required jobs success; the manual-dispatch-only seventh correctly skipped. |
+| **CI** | see `STATE.yaml` for the review-pass-2 run. |
 
 **Local full-suite flakiness (not a regression).** Running all 154 files at default parallelism on
 this machine produces 5s-timeout failures in unrelated pre-existing suites

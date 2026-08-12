@@ -108,6 +108,58 @@ const RUN_REQUEST_OUTCOMES = Object.freeze({
   SKIPPED: "SKIPPED",
 });
 
+// Whether anything will actually pick a recorded job up. Stated as its own
+// top-level response field rather than left to documentation, so no consumer
+// can read "CREATED" as "three providers were contacted".
+//
+//   PAUSED_WORKER_DISABLED  ENRICHMENT_WORKER_ENABLED is false — the default.
+//   NOT_IMPLEMENTED         the switch is on, but Phase 10A-1 ships no worker,
+//                           so nothing will run either way. Reporting
+//                           "paused" there would imply a worker exists.
+const EXECUTION_STATES = Object.freeze({
+  PAUSED_WORKER_DISABLED: "PAUSED_WORKER_DISABLED",
+  NOT_IMPLEMENTED: "NOT_IMPLEMENTED",
+});
+
+// The closed status vocabulary of ONE provider row in the Finding enrichment
+// summary. Every value is resolved from STORED state — no provider is asked
+// anything to compute one.
+//
+//   NO_SUBJECT     considered, but this Finding carries no subject of the
+//                  provider's required type. This is the answer for `nvd` on a
+//                  Finding with no ACTIVE, ANALYST_VERIFIED CVE, and it exists
+//                  precisely so that truth can be told WITHOUT creating an NVD
+//                  item (T-09).
+//   NOT_REQUESTED  a subject exists, but no orchestration item was ever
+//                  recorded for it. Never conflated with NO_SUBJECT: one is
+//                  "there was nothing to ask about", the other is "nobody
+//                  asked".
+//   PENDING        an item exists and its work is non-terminal.
+//   COMPLETED      the work reached a real answer.
+//   UNAVAILABLE    the work reached a terminal failure. Never reported as
+//                  COMPLETED-with-no-evidence, which would read as "nothing
+//                  found" rather than "we do not know".
+//   SKIPPED        refused by policy, or refused before it could be attempted.
+const SUMMARY_STATUSES = Object.freeze({
+  NO_SUBJECT: "NO_SUBJECT",
+  NOT_REQUESTED: "NOT_REQUESTED",
+  PENDING: "PENDING",
+  COMPLETED: "COMPLETED",
+  UNAVAILABLE: "UNAVAILABLE",
+  SKIPPED: "SKIPPED",
+});
+
+// WHICH stored record answered a summary row. A delegated provider's truth
+// lives in the canonical queue's own row, not in the Phase-10 job that waits on
+// it, so naming the source is what keeps the answer honest rather than
+// approximate.
+const SUMMARY_SOURCES = Object.freeze({
+  NONE: "NONE",
+  ORCHESTRATION_JOB: "ORCHESTRATION_JOB",
+  IOC_ENRICHMENT: "IOC_ENRICHMENT",
+  VULNERABILITY_ENRICHMENT: "VULNERABILITY_ENRICHMENT",
+});
+
 // The closed state vocabulary of the report-upload response's `enrichment`
 // block. Distinct from RUN_REQUEST_OUTCOMES: one upload can touch many
 // Findings, so this describes the WHOLE orchestration attempt for one report.
@@ -190,6 +242,9 @@ module.exports = {
   SKIPPED_JOB_STATES,
   QUOTA_LANES,
   RUN_REQUEST_OUTCOMES,
+  EXECUTION_STATES,
+  SUMMARY_STATUSES,
+  SUMMARY_SOURCES,
   INGESTION_ENRICHMENT_STATES,
   SKIP_REASONS,
   SKIP_REASON_VALUES,

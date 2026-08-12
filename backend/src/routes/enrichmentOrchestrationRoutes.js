@@ -31,15 +31,16 @@ const { CAPABILITIES } = require("../lib/roles");
 const {
   createFindingEnrichmentRun,
   getFindingEnrichmentRun,
-  getFindingEnrichmentRuns,
+  getFindingEnrichmentSummary,
 } = require("../controllers/enrichmentOrchestrationController");
 
 router.use(authenticate);
 
-// Slash-separated, per the approved v2.1 contract:
+// The three routes of the binding contract
+// (docs/ai/PHASE-10A1-API-CONTRACT.md):
 //   POST /api/findings/:id/enrichment/runs
-//   GET  /api/findings/:id/enrichment/runs
 //   GET  /api/findings/:id/enrichment/runs/:runId
+//   GET  /api/findings/:id/enrichment/summary
 //
 // These do NOT collide with findingEnrichmentRoutes.js's "/:id/enrichment" and
 // "/:id/enrichments": Express matches a route path exactly, so "/1/enrichment"
@@ -49,11 +50,16 @@ router.use(authenticate);
 // There is deliberately no "/:id/enrichment-runs" alias. That spelling was
 // never released — this surface is unmerged — so keeping it would mean shipping
 // a deprecated path that nothing has ever called.
+//
+// There is deliberately NO run-list route either. It was never part of the
+// contract; it appeared as an unplanned extra surface, and a paged history of
+// request records is not a Phase 10A-1 requirement. The summary below answers
+// the question an analyst actually has.
 
 router.get(
-  "/:id/enrichment/runs",
+  "/:id/enrichment/summary",
   requireCapability(CAPABILITIES.READ_FINDINGS),
-  getFindingEnrichmentRuns
+  getFindingEnrichmentSummary
 );
 
 router.get(

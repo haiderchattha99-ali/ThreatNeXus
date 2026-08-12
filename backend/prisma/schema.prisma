@@ -3251,6 +3251,20 @@ model FindingEnrichmentRun {
   // same ask.
   requestScopeHash String
 
+  // The providers that were in scope for this ask but had NO subject of their
+  // required type on this Finding — in practice `nvd` on a Finding with no
+  // ACTIVE, ANALYST_VERIFIED CVE association. Such a provider produces no run
+  // item at all (subjectValue is NOT NULL, and a CHECK constraint forbids an IP
+  // becoming an NVD subject), so without this column the fact would exist only
+  // in the POST response and would vanish on a later GET of the same run.
+  //
+  // Sorted, comma-joined, allow-listed lowercase identifiers. The values are a
+  // closed six-member set that cannot contain a comma, so a delimited string
+  // needs no escaping and no scalar-list type this schema uses nowhere else.
+  // Written once at request time and never updated: associating a verified CVE
+  // later must not rewrite what a historical run truthfully recorded.
+  noSubjectProviders String @default("")
+
   // INGESTION: "ing:<rawReportId>:<requestScopeHash>"
   // MANUAL:    "man:<requestScopeHash>:<time bucket | hashed Idempotency-Key>"
   // A caller-supplied Idempotency-Key is validated and hashed before it gets

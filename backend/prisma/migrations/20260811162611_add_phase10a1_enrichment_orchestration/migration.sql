@@ -35,6 +35,7 @@ CREATE TABLE "FindingEnrichmentRun" (
     "completedAt" TIMESTAMP(3),
     "force" BOOLEAN NOT NULL DEFAULT false,
     "requestScopeHash" TEXT NOT NULL,
+    "noSubjectProviders" TEXT NOT NULL DEFAULT '',
     "idempotencyKey" TEXT NOT NULL,
     "rawReportId" INTEGER,
     "actorUserId" INTEGER,
