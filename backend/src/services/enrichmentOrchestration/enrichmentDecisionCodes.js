@@ -113,12 +113,21 @@ const RUN_REQUEST_OUTCOMES = Object.freeze({
 // can read "CREATED" as "three providers were contacted".
 //
 //   PAUSED_WORKER_DISABLED  ENRICHMENT_WORKER_ENABLED is false — the default.
-//   NOT_IMPLEMENTED         the switch is on, but Phase 10A-1 ships no worker,
-//                           so nothing will run either way. Reporting
-//                           "paused" there would imply a worker exists.
+//   ACTIVE                  the switch is on and a worker will pick eligible
+//                           work up.
+//
+// NOT_IMPLEMENTED was retired in Phase 10A-2 (D-P10A2-03). It meant "the
+// switch is on but no worker exists", which was true in 10A-1 and is false
+// now: with the switch on, execution IS implemented. Keeping it would leave a
+// closed vocabulary containing a value that can never be truthfully returned.
+//
+// NVD's continued non-execution is deliberately NOT expressed here.
+// executionState is a DEPLOYMENT-level fact about whether a worker exists;
+// NVD is a per-provider fact, carried by SKIP_REASONS.DELEGATE_BATCH_REQUIRED
+// and the summary's source: VULNERABILITY_ENRICHMENT.
 const EXECUTION_STATES = Object.freeze({
   PAUSED_WORKER_DISABLED: "PAUSED_WORKER_DISABLED",
-  NOT_IMPLEMENTED: "NOT_IMPLEMENTED",
+  ACTIVE: "ACTIVE",
 });
 
 // The closed status vocabulary of ONE provider row in the Finding enrichment

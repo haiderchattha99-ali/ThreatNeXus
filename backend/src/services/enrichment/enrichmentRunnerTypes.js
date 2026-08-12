@@ -85,6 +85,17 @@ const RUNNER_OUTCOME = Object.freeze({
   // The sweep above was attempted but the guarded write matched nothing or
   // raised (another worker moved the row first). Nothing was changed.
   EXHAUSTED_SWEEP_FAILED: "EXHAUSTED_SWEEP_FAILED",
+  // ---- Phase 10A-2, targeted entry point only -----------------------------
+  // The claim succeeded, then the caller's authorize hook refused — in
+  // practice a daily-quota reservation that was declined. NO provider was
+  // constructed and provider.lookup was never reached; the claim was released
+  // and its attempt-budget unit refunded, because no attempt took place.
+  REFUSED_BEFORE_LOOKUP: "REFUSED_BEFORE_LOOKUP",
+  // The explicitly named job could not be claimed at all: already terminal,
+  // lost to another worker, not yet retry-eligible, budget exhausted, or held
+  // by the contact sentinel. Distinct from SKIPPED_NOT_CLAIMED, which follows
+  // a LISTING; nothing was listed here.
+  TARGET_NOT_CLAIMABLE: "TARGET_NOT_CLAIMABLE",
 });
 
 const RUNNER_OUTCOME_VALUES = Object.freeze(Object.values(RUNNER_OUTCOME));

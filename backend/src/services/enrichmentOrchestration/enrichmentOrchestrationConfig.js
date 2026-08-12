@@ -163,6 +163,126 @@ function resolveOrchestrationConfig(source) {
   });
 }
 
+// --- Phase 10A-2 worker runtime -------------------------------------------
+//
+// Bounds for the values that decide when work is claimed, how long a claim is
+// held, how long one lookup may take, and when an unfinished attempt is swept.
+// These four are NOT independent: a combination that is individually legal can
+// still sweep a lookup that is still executing, which would dead-letter live
+// work and make its eventual real result unrecordable. So they are
+// cross-validated against each other below.
+//
+// There is deliberately NO contact-guard duration. The hold placed on a
+// contacted IocEnrichment row is a non-expiring sentinel (see
+// PHASE-10A2-RUNNER-CONTRACT.md 5.7 / DECISIONS.md D-P10A2-07), because an
+// ordering of durations bounds how long things last, not WHEN recovery runs.
+const WORKER_RUNTIME_BOUNDS = Object.freeze({
+  ENRICHMENT_WORKER_POLL_INTERVAL_MS: { min: 1000, max: 3600000, default: 15000 },
+  ENRICHMENT_WORKER_BATCH_SIZE: { min: 1, max: 50, default: 5 },
+  ENRICHMENT_WORKER_LEASE_SECONDS: { min: 30, max: 3600, default: 120 },
+  ENRICHMENT_LOOKUP_MAX_MS: { min: 5000, max: 600000, default: 60000 },
+  ENRICHMENT_ATTEMPT_STALE_SECONDS: { min: 60, max: 86400, default: 600 },
+});
+
+// A claim must outlive the longest lookup plus the write that follows it.
+const LEASE_MARGIN_MS = 30000;
+// A sweep must never reach an attempt whose lookup could still be running.
+const STALE_MARGIN_MS = 60000;
+
+/**
+ * Validates one bounded integer environment value.
+ *
+ * Plain decimal digits only, checked BEFORE Number(), for the same reason
+ * validateDailyBudget does it: Number("1e3") is 1000 and Number.isInteger
+ * agrees, so a Number()-first check silently accepts exponent notation.
+ *
+ * The error names the VARIABLE and its bounds, never the supplied value.
+ *
+ * @param {string} variableName
+ * @param {unknown} rawValue
+ * @returns {number}
+ */
+function validateBoundedInt(variableName, rawValue) {
+  const bounds = WORKER_RUNTIME_BOUNDS[variableName];
+  if (!bounds) {
+    throw new EnrichmentOrchestrationConfigError(
+      `Unknown worker runtime variable: ${variableName}`
+    );
+  }
+  if (rawValue === undefined || rawValue === null || String(rawValue).trim() === "") {
+    return bounds.default;
+  }
+  const trimmed = String(rawValue).trim();
+  const invalid = () => {
+    throw new EnrichmentOrchestrationConfigError(
+      `Invalid value for environment variable: ${variableName} ` +
+        `(must be an integer between ${bounds.min} and ${bounds.max})`
+    );
+  };
+  if (!/^\d+$/.test(trimmed)) invalid();
+  const parsed = Number(trimmed);
+  if (!Number.isInteger(parsed) || parsed < bounds.min || parsed > bounds.max) invalid();
+  return parsed;
+}
+
+/**
+ * Resolves and CROSS-VALIDATES the Phase 10A-2 worker runtime configuration.
+ *
+ * The cross-field rules are the whole point of this function. Each value is
+ * individually legal across a wide range, but two relationships must hold or
+ * the recovery machinery becomes unsafe:
+ *
+ *   lease >= lookupMax + 30s   a worker must still own its claim when the
+ *                              longest permitted lookup finishes and its
+ *                              result is written. A shorter lease lets another
+ *                              worker legitimately reclaim mid-call.
+ *
+ *   stale >= lookupMax + 60s   the stale-attempt sweep must never resolve an
+ *                              attempt whose lookup is STILL EXECUTING. A
+ *                              shorter threshold dead-letters live work, and
+ *                              the real answer that arrives afterwards can
+ *                              never be recorded.
+ *
+ * Note both rules are stated against ENRICHMENT_LOOKUP_MAX_MS — the worker's
+ * own end-to-end bound — and NOT against any provider's configured timeout.
+ * No provider timeout bounds lookup(): every provider clears its timeout when
+ * fetch() resolves its HEADERS and then reads the body afterwards
+ * (censysProvider.js:139/182, greyNoiseProvider.js:117/160,
+ * abuseIpdbProvider.js's composed.cleanup()). See D-P10A2-09.
+ *
+ * @param {object} source normally process.env
+ * @returns {object} frozen
+ */
+function resolveWorkerRuntimeConfig(source) {
+  const env = source || {};
+  const resolved = {};
+  // eslint-disable-next-line no-restricted-syntax
+  for (const name of Object.keys(WORKER_RUNTIME_BOUNDS)) {
+    resolved[name] = validateBoundedInt(name, env[name]);
+  }
+
+  const lookupMaxMs = resolved.ENRICHMENT_LOOKUP_MAX_MS;
+  const leaseMs = resolved.ENRICHMENT_WORKER_LEASE_SECONDS * 1000;
+  const staleMs = resolved.ENRICHMENT_ATTEMPT_STALE_SECONDS * 1000;
+
+  if (leaseMs < lookupMaxMs + LEASE_MARGIN_MS) {
+    throw new EnrichmentOrchestrationConfigError(
+      "Invalid enrichment worker configuration: ENRICHMENT_WORKER_LEASE_SECONDS must be at least " +
+        `ENRICHMENT_LOOKUP_MAX_MS plus ${LEASE_MARGIN_MS / 1000}s, so a claim outlives the longest ` +
+        "permitted lookup and the write that follows it"
+    );
+  }
+  if (staleMs < lookupMaxMs + STALE_MARGIN_MS) {
+    throw new EnrichmentOrchestrationConfigError(
+      "Invalid enrichment worker configuration: ENRICHMENT_ATTEMPT_STALE_SECONDS must be at least " +
+        `ENRICHMENT_LOOKUP_MAX_MS plus ${STALE_MARGIN_MS / 1000}s, so the stale-attempt sweep can ` +
+        "never resolve an attempt whose lookup is still executing"
+    );
+  }
+
+  return Object.freeze(resolved);
+}
+
 /**
  * Whether a provider has the credential it needs to be called at all.
  *
@@ -204,8 +324,13 @@ module.exports = {
   DEFAULT_MANUAL_DAILY_BUDGET,
   MAX_DAILY_BUDGET,
   PROVIDER_ENV_PREFIX,
+  WORKER_RUNTIME_BOUNDS,
+  LEASE_MARGIN_MS,
+  STALE_MARGIN_MS,
   validateDailyBudget,
+  validateBoundedInt,
   parseDefaultOffSwitch,
   resolveOrchestrationConfig,
+  resolveWorkerRuntimeConfig,
   isProviderCredentialConfigured,
 };

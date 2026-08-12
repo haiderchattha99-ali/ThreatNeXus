@@ -218,7 +218,7 @@ async function applyRetryDecision({ prisma, now, retryPolicy, record, claimToken
  * returns a closed job result for every path, including cancellation and
  * unexpected exceptions.
  */
-async function processClaimedJob({ prisma, providerRegistry, now, ttlPolicy, retryPolicy, signal, record, claimToken }) {
+async function processClaimedJob({ prisma, providerRegistry, now, ttlPolicy, retryPolicy, signal, record, claimToken, hooks = null }) {
   const base = {
     enrichmentId: record.id,
     provider: record.provider,
@@ -242,6 +242,21 @@ async function processClaimedJob({ prisma, providerRegistry, now, ttlPolicy, ret
   }
   if (!provider || typeof provider.lookup !== "function") {
     return { job: await applyFailure(FAILURE_CLASS.UNKNOWN_PROVIDER), cancelled: false };
+  }
+
+  // Phase 10A-2 seam. The hook runs on the statement IMMEDIATELY preceding the
+  // provider call, which is what lets a caller mark its own attempt IN_FLIGHT
+  // (and place the contact hold) at the exact instant the request becomes
+  // possible. The ordinary ADMIN batch passes no hooks and reaches
+  // provider.lookup with nothing added to its path.
+  if (hooks && typeof hooks.beforeLookup === "function") {
+    try {
+      await hooks.beforeLookup({ record });
+    } catch {
+      // A hook that throws has not marked the attempt, so no request may be
+      // sent: treat it exactly like any other local fault before contact.
+      return { job: await applyFailure(FAILURE_CLASS.PROVIDER_PROGRAMMER_ERROR), cancelled: false };
+    }
   }
 
   // Exactly one provider call for this claimed job, outside any transaction.
@@ -452,6 +467,107 @@ async function runEnrichmentBatch(options) {
   return buildBatchSummary({ requestedBatchSize: batchSize, candidateCount: candidates.length, cancelled, results });
 }
 
+/**
+ * Phase 10A-2 — processes ONE explicitly named IOC job.
+ *
+ * ===========================================================================
+ * WHY THIS EXISTS, AND WHAT IT DELIBERATELY DOES NOT DO
+ * ===========================================================================
+ * The ordinary batch above LISTS candidates and works through them. Phase 10
+ * must not do that: a targeted pass may only touch the canonical row a
+ * Phase-10 job actually links, and widening into the batch's candidate set is
+ * precisely the failure binding guarantee 1 forbids. So this entry point takes
+ * an explicit `enrichmentId` and never calls listPendingCandidates.
+ *
+ * It shares the SAME claimPendingJob compare-and-swap the ADMIN batch uses.
+ * That is the whole of guarantee 7: the two paths contend on one lock for one
+ * row, so exactly one of them can ever call the provider for it.
+ *
+ * `signal` is intentionally absent from the parameter list. The ADMIN batch
+ * re-checks cancellation AFTER the provider returns and releases the claim
+ * with a refund — correct there, but on a contacted row that is exactly the
+ * duplicate charge Phase 10 exists to prevent (D-P10A2-07). A targeted caller
+ * drains instead of aborting.
+ *
+ * @param {{prisma: object, providerRegistry: object, now: Date,
+ *   ttlPolicy: Function, retryPolicy: Function, leaseMs: number,
+ *   enrichmentId: number, hooks?: {authorize?: Function, beforeLookup?: Function}}} options
+ * @returns {Promise<object>} a closed job result, exactly like the batch's
+ */
+async function runTargetedEnrichmentJob(options = {}) {
+  const { prisma, providerRegistry, now, ttlPolicy, retryPolicy, leaseMs, enrichmentId, hooks = null } = options;
+
+  let claim;
+  try {
+    claim = await claimPendingJob(enrichmentId, { client: prisma, now, leaseMs });
+  } catch {
+    return buildJobResult({
+      enrichmentId,
+      provider: null,
+      indicatorType: null,
+      indicator: null,
+      outcome: RUNNER_OUTCOME.CLAIM_FAILED,
+    });
+  }
+
+  // Lost the race, already terminal, not retry-eligible, budget spent, or
+  // held by the contact sentinel. Nothing is reserved and nobody is called.
+  if (!claim) {
+    return buildJobResult({
+      enrichmentId,
+      provider: null,
+      indicatorType: null,
+      indicator: null,
+      outcome: RUNNER_OUTCOME.TARGET_NOT_CLAIMABLE,
+    });
+  }
+
+  const { record, claimToken } = claim;
+  const base = {
+    enrichmentId: record.id,
+    provider: record.provider,
+    indicatorType: record.indicatorType,
+    indicator: record.indicator,
+  };
+
+  // Authorization runs AFTER the claim (so a lost race leaks no budget) and
+  // BEFORE any provider is resolved or called (so a refusal costs nothing).
+  if (hooks && typeof hooks.authorize === "function") {
+    let decision;
+    try {
+      decision = await hooks.authorize({ record, claimToken });
+    } catch {
+      decision = { proceed: false, reasonCode: "AUTHORIZE_FAILED" };
+    }
+    if (!decision || decision.proceed !== true) {
+      // Refund: this claim consumed one unit of the attempt budget for an
+      // attempt that never happened. No provider was constructed and
+      // provider.lookup was never reached.
+      const released = await safeRelease(prisma, record.id, claimToken, null, true);
+      return buildJobResult({
+        ...base,
+        outcome: released ? RUNNER_OUTCOME.REFUSED_BEFORE_LOOKUP : RUNNER_OUTCOME.RELEASE_FAILED,
+        attemptCount: record.attemptCount,
+        maxAttempts: record.maxAttempts,
+      });
+    }
+  }
+
+  const outcome = await processClaimedJob({
+    prisma,
+    providerRegistry,
+    now,
+    ttlPolicy,
+    retryPolicy,
+    signal: undefined,
+    record,
+    claimToken,
+    hooks,
+  });
+  return outcome.job;
+}
+
 module.exports = {
   runEnrichmentBatch,
+  runTargetedEnrichmentJob,
 };

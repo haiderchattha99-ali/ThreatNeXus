@@ -99,6 +99,41 @@ services:
       # AI is off by default and there is no live provider in this repository.
       AI_ENABLED: ${AI_ENABLED:-false}
       AI_PROVIDER: ${AI_PROVIDER:-null}
+      # Phase 10A-2 — live enrichment execution. EVERY control is passed
+      # through from the operator's environment and EVERY default is the safe
+      # one, so a plain `docker compose up` starts no worker and spends
+      # nothing. Turning execution on requires the operator to supply the
+      # switches, a provider credential AND a positive automatic budget:
+      #
+      #   docker compose --env-file backend/.env up -d --build
+      #
+      # backend/.env is gitignored and is read by nothing in this repository,
+      # in CI, or in any test. Never write a real key or budget into this file.
+      #
+      # Recommended for a local demonstration: a SMALL positive automatic
+      # budget on one provider (e.g. CENSYS_AUTOMATIC_DAILY_BUDGET=25) rather
+      # than an unlimited one. A zero budget performs no provider call at all,
+      # and a missing key yields a truthful NOT_CONFIGURED outcome without
+      # failing ingestion.
+      AUTO_ENRICHMENT_ENABLED: ${AUTO_ENRICHMENT_ENABLED:-false}
+      ENRICHMENT_WORKER_ENABLED: ${ENRICHMENT_WORKER_ENABLED:-false}
+      ENRICHMENT_WORKER_POLL_INTERVAL_MS: ${ENRICHMENT_WORKER_POLL_INTERVAL_MS:-15000}
+      ENRICHMENT_WORKER_BATCH_SIZE: ${ENRICHMENT_WORKER_BATCH_SIZE:-5}
+      ENRICHMENT_WORKER_LEASE_SECONDS: ${ENRICHMENT_WORKER_LEASE_SECONDS:-120}
+      ENRICHMENT_LOOKUP_MAX_MS: ${ENRICHMENT_LOOKUP_MAX_MS:-60000}
+      ENRICHMENT_ATTEMPT_STALE_SECONDS: ${ENRICHMENT_ATTEMPT_STALE_SECONDS:-600}
+      ABUSEIPDB_AUTOMATIC_DAILY_BUDGET: ${ABUSEIPDB_AUTOMATIC_DAILY_BUDGET:-0}
+      ABUSEIPDB_MANUAL_DAILY_BUDGET: ${ABUSEIPDB_MANUAL_DAILY_BUDGET:-}
+      CENSYS_AUTOMATIC_DAILY_BUDGET: ${CENSYS_AUTOMATIC_DAILY_BUDGET:-0}
+      CENSYS_MANUAL_DAILY_BUDGET: ${CENSYS_MANUAL_DAILY_BUDGET:-}
+      GREYNOISE_AUTOMATIC_DAILY_BUDGET: ${GREYNOISE_AUTOMATIC_DAILY_BUDGET:-0}
+      GREYNOISE_MANUAL_DAILY_BUDGET: ${GREYNOISE_MANUAL_DAILY_BUDGET:-}
+      SHODAN_AUTOMATIC_DAILY_BUDGET: ${SHODAN_AUTOMATIC_DAILY_BUDGET:-0}
+      SHODAN_MANUAL_DAILY_BUDGET: ${SHODAN_MANUAL_DAILY_BUDGET:-}
+      NETLAS_AUTOMATIC_DAILY_BUDGET: ${NETLAS_AUTOMATIC_DAILY_BUDGET:-0}
+      NETLAS_MANUAL_DAILY_BUDGET: ${NETLAS_MANUAL_DAILY_BUDGET:-}
+      NVD_AUTOMATIC_DAILY_BUDGET: ${NVD_AUTOMATIC_DAILY_BUDGET:-0}
+      NVD_MANUAL_DAILY_BUDGET: ${NVD_MANUAL_DAILY_BUDGET:-}
       # Where the fixture CSVs are mounted (see the volumes block below). Set
       # explicitly because the seed script's relative walk assumes the
       # repository layout, and the image has no backend/ level in its paths.

@@ -9,6 +9,7 @@ const {
   RUN_ITEM_DECISIONS,
   RUN_STATES,
   JOB_STATES,
+  EXECUTION_STATES,
 } = require("../../src/services/enrichmentOrchestration/enrichmentDecisionCodes");
 const {
   EnrichmentRunValidationError,
@@ -252,9 +253,18 @@ describe("serializers — cross-Finding isolation", () => {
   it("states whether anything will pick recorded work up", () => {
     // The default deployment. Never "the work is queued and running".
     expect(resolveExecutionState({})).toBe("PAUSED_WORKER_DISABLED");
-    // The switch being ON does not conjure a worker into existence, and
-    // reporting "paused" there would imply one merely idle.
-    expect(resolveExecutionState({ ENRICHMENT_WORKER_ENABLED: "true" })).toBe("NOT_IMPLEMENTED");
+    // Phase 10A-2 (D-P10A2-03): the switch being ON now genuinely starts a
+    // worker, so ACTIVE is the truthful answer. NOT_IMPLEMENTED meant "the
+    // switch is on but no worker exists" — true in 10A-1, false now.
+    expect(resolveExecutionState({ ENRICHMENT_WORKER_ENABLED: "true" })).toBe("ACTIVE");
+  });
+
+  it("no longer exposes NOT_IMPLEMENTED anywhere in the closed vocabulary", () => {
+    // Changing only resolveExecutionState would leave a retired value in the
+    // exported enum, so a consumer switching on it would still compile and
+    // still be wrong. The vocabulary and the resolver move together.
+    expect(Object.values(EXECUTION_STATES)).toEqual(["PAUSED_WORKER_DISABLED", "ACTIVE"]);
+    expect(EXECUTION_STATES.NOT_IMPLEMENTED).toBeUndefined();
   });
 
   it("reports no-subject providers from the STORED column, not from a caller hint", () => {
@@ -292,13 +302,33 @@ describe("delegate reconciliation mapping", () => {
   });
 
   it("leaves a still-working delegate alone", () => {
-    // PENDING and RATE_LIMITED both mean the delegate's own retry policy still
-    // owns the work. Copying either over as terminal would fabricate an
-    // outcome no provider gave.
+    // PENDING is the ONLY non-terminal IocEnrichment status
+    // (iocEnrichmentCacheRules.js:57 — TERMINAL_STATUSES is every value except
+    // this one), so it is the only status that means "still working".
     expect(resolveDelegateState({ provider: "abuseipdb", iocEnrichment: { status: "PENDING" } })).toBeNull();
+  });
+
+  it("maps a rate-limited delegate to terminal FAILED rather than stranding it", () => {
+    // This assertion previously required null, on the belief that a
+    // rate-limited delegate was "still working". That belief was false against
+    // the code, and it was a real defect rather than a simplification:
+    // RATE_LIMITED is terminal, and resolveEnrichmentRetry COMPLETEs it as
+    // stored evidence. So the map returned null forever, the Phase-10 job
+    // stayed WAITING_ON_DELEGATE, and its activeLookupKey was never released —
+    // which permanently blocks every FUTURE ask about that subject.
+    //
+    // FAILED, never NO_RECORD: "we have no answer" must not render as
+    // "nothing found".
     expect(
       resolveDelegateState({ provider: "abuseipdb", iocEnrichment: { status: "RATE_LIMITED" } })
-    ).toBeNull();
+    ).toBe(JOB_STATES.FAILED);
+  });
+
+  it("maps a dead-lettered delegate to DEAD_LETTER rather than stranding it", () => {
+    // The same hole, with the same consequence.
+    expect(
+      resolveDelegateState({ provider: "abuseipdb", iocEnrichment: { status: "DEAD_LETTER" } })
+    ).toBe(JOB_STATES.DEAD_LETTER);
   });
 
   it("never reads a dead-lettered CVE batch job as evidence of no vulnerability", () => {

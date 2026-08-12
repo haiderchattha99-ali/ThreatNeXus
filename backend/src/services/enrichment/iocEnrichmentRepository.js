@@ -579,10 +579,106 @@ async function deadLetterExhaustedJob(input, options = {}) {
   return { outcome: DEAD_LETTER_OUTCOME.DEAD_LETTERED, record: deadLettered };
 }
 
+/**
+ * Phase 10A-2 — places a NON-EXPIRING hold on a claimed row, so nothing can
+ * claim it again until somebody establishes what happened to the request.
+ *
+ * ===========================================================================
+ * Why a hold is needed at all, and why it is not a duration
+ * ===========================================================================
+ * A lease expires. Once it does, `claimPendingJob` will happily hand this row
+ * to the next caller — including the ordinary ADMIN batch — even though a
+ * request for it may still be in flight or may already have been answered and
+ * charged. That is a duplicate outbound call against a paid third party.
+ *
+ * This does NOT add a new gate. It reuses the one `claimPendingJob` already
+ * applies: it refuses any row whose `nextAttemptAt` is in the future. Writing
+ * a far-future `nextAttemptAt` therefore makes the row unclaimable by every
+ * caller, with no change to claimPendingJob and no change to the ADMIN batch's
+ * behaviour on any other row.
+ *
+ * A DURATION was considered and rejected: an ordering like
+ * lease < stale < guard bounds how long things last, not WHEN recovery runs.
+ * If no worker runs for longer than the guard, it lapses and the duplicate
+ * happens anyway. Only a hold cleared by a path that KNOWS the outcome is
+ * safe — completeClaimedJob clears nextAttemptAt on any terminal result, and
+ * the ambiguity sweep drives the row terminal (a terminal row can never be
+ * claimed again).
+ *
+ * Guarded by the claim token, so only the holder of the live lease can place
+ * the hold.
+ *
+ * @param {{id: number, claimToken: string, until: Date}} input
+ * @param {{client?: object}} [options]
+ * @returns {Promise<boolean>} whether THIS call placed the hold
+ */
+async function holdContactedJob(input, options = {}) {
+  const client = resolveClient(options.client);
+  const id = assertValidId(input.id);
+  const claimToken = assertValidClaimToken(input.claimToken);
+  const until = assertValidDate(input.until, "until");
+
+  const { count } = await client.iocEnrichment.updateMany({
+    where: { id, status: ENRICHMENT_STATUS.PENDING, claimToken },
+    data: { nextAttemptAt: until },
+  });
+  return count === 1;
+}
+
+/**
+ * Phase 10A-2 — retires a PENDING row that is NOT currently leased, by
+ * explicit id, without holding a claim token.
+ *
+ * The narrow sibling of deadLetterExhaustedJob: same guard shape (still
+ * PENDING, no live lease) with the attempt-budget condition replaced by an
+ * explicit id. It exists for exactly one caller — the ambiguity sweep, which
+ * must terminalize a row whose contacted attempt went stale after its worker
+ * died. The row cannot be re-claimed once terminal, which is what finally
+ * closes the duplicate-call window opened by the crash.
+ *
+ * A job another worker is actively processing cannot be retired out from
+ * under it: the guard requires no live lease.
+ *
+ * @param {{id: number, reasonCode: string}} input
+ * @param {{client?: object, now: Date}} options
+ */
+async function deadLetterUnleasedJob(input, options = {}) {
+  const client = resolveClient(options.client);
+  const id = assertValidId(input.id);
+  const reasonCode = assertValidTerminalReasonCode(input.reasonCode);
+  const now = assertValidDate(options.now, "now");
+
+  const { count } = await client.iocEnrichment.updateMany({
+    where: {
+      id,
+      status: ENRICHMENT_STATUS.PENDING,
+      OR: [{ claimToken: null }, { leaseExpiresAt: { lte: now } }],
+    },
+    data: {
+      status: QUEUE_STATUS.DEAD_LETTER,
+      deadLetteredAt: now,
+      terminalReasonCode: reasonCode,
+      activeCacheKey: null,
+      claimToken: null,
+      claimedAt: null,
+      leaseExpiresAt: null,
+      // Clears the contact hold: the row is terminal, so the hold has done its
+      // job and leaving a far-future date behind would be misleading history.
+      nextAttemptAt: null,
+    },
+  });
+
+  if (count === 0) return { outcome: DEAD_LETTER_OUTCOME.NOT_CLAIM_OWNER, record: null };
+  const deadLettered = await client.iocEnrichment.findUnique({ where: { id } });
+  return { outcome: DEAD_LETTER_OUTCOME.DEAD_LETTERED, record: deadLettered };
+}
+
 module.exports = {
   COMPLETION_OUTCOME,
   RELEASE_OUTCOME,
   DEAD_LETTER_OUTCOME,
+  holdContactedJob,
+  deadLetterUnleasedJob,
   findFreshCachedResult,
   findActiveJobByCacheKey,
   createPendingJob,

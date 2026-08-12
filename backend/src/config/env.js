@@ -62,6 +62,7 @@ const {
 const {
   EnrichmentOrchestrationConfigError,
   resolveOrchestrationConfig,
+  resolveWorkerRuntimeConfig,
 } = require("../services/enrichmentOrchestration/enrichmentOrchestrationConfig");
 
 // Loading a developer's .env is right for running the app and wrong for running
@@ -456,6 +457,21 @@ function buildConfig() {
     );
   }
 
+  // Phase 10A-2 — the worker runtime. Resolved and CROSS-VALIDATED here even
+  // when ENRICHMENT_WORKER_ENABLED is false, so a deployment learns its timing
+  // configuration is unsafe at startup rather than the first time an operator
+  // turns the worker on.
+  let workerRuntimeConfig;
+  try {
+    workerRuntimeConfig = resolveWorkerRuntimeConfig(process.env);
+  } catch (err) {
+    throw new ConfigError(
+      err instanceof EnrichmentOrchestrationConfigError
+        ? err.message
+        : `Invalid enrichment worker configuration: ${err.message}`
+    );
+  }
+
   // Declared, not consumed by anything: no code reads this value — the TTL
   // policy (enrichmentTtlPolicy.js) is a pure module configured through
   // explicit policy input, never through the environment.
@@ -559,6 +575,11 @@ function buildConfig() {
     ENRICHMENT_WORKER_ENABLED: orchestrationConfig.ENRICHMENT_WORKER_ENABLED,
     ENRICHMENT_AUTOMATIC_DAILY_BUDGETS: orchestrationConfig.automaticDailyBudgets,
     ENRICHMENT_MANUAL_DAILY_BUDGETS: orchestrationConfig.manualDailyBudgets,
+
+    // Phase 10A-2 — worker runtime. Cross-validated above: the lease outlives
+    // the longest permitted lookup, and the stale-attempt sweep can never
+    // reach an attempt whose lookup is still executing.
+    ...workerRuntimeConfig,
   });
 }
 
