@@ -569,6 +569,49 @@ LIVE_NETLAS_SMOKE=1 npm run smoke:netlas --prefix backend
 Shadowserver, VirusTotal, OTX and MISP remain unintegrated — see `docs/ai/HANDOFF.md` for the
 recommended next provider phase.
 
+### Phase 10A-2 — live enrichment execution (default off)
+
+Phase 10A-2 makes the intent Phase 10A-1 recorded **executable**, behind a switch that is off by
+default. With `ENRICHMENT_WORKER_ENABLED` unset, `server.js` never even requires the worker module,
+so a disabled deployment holds no timer and no provider in memory.
+
+| Provider | Executed | How |
+|---|---|---|
+| Censys, GreyNoise, Shodan, Netlas | **directly** | the worker leases the `ProviderLookupJob` and calls the provider through that provider's **existing** execution service |
+| AbuseIPDB | **targeted** | the worker claims the *linked* canonical `IocEnrichment` row and drives the **existing** IOC runner |
+| NVD | **not executed** | still delegated to the ADMIN vulnerability batch |
+
+No second HTTP adapter, result model, evidence table, cache rule, retry vocabulary or rate limiter
+is created anywhere.
+
+Three independent controls must **all** hold before a provider is called: the switch, the
+provider's credential, and a **positive** daily budget for the lane in use. Any one missing is a
+truthful recorded refusal — `SKIPPED_NOT_CONFIGURED` or `SKIPPED_BUDGET` — with zero provider calls
+and, in both cases, zero quota spent. Ingestion never fails because of any of it.
+
+**A provider result is always terminal.** There is no automatic retry of a provider outcome: a
+negative answer is real evidence governed by the existing TTL policy, and a stale answer is re-asked
+by creating a new run, or immediately with `force` plus a written justification — a human decision
+to spend quota.
+
+**Duplicate outbound calls are prevented structurally.** The targeted path and the ordinary ADMIN
+batch contend on the *same* database compare-and-swap for the same row, so at most one of them can
+call a provider for it. Once a request has been handed to the transport, a non-expiring hold makes
+that row unclaimable until a path that *knows* the outcome clears it.
+
+**Crashes are represented honestly.** The system claims exactly-once *database* finalization and
+single-owner execution; it does **not** claim exactly-once network delivery, which nothing with a
+non-transactional third party can. A crash before the request left is safely retried. A crash at or
+after transport hand-off becomes `DEAD_LETTER` / `AMBIGUOUS_AFTER_CONTACT` — a terminal, queryable
+"we do not know" — and is never retried automatically, never rendered as success, failure, or
+"no record found".
+
+Quota accounting is deliberately conservative: it may over-count a call reserved but never sent, and
+can never under-count one that was sent. There is no refund path.
+
+The binding design is `docs/ai/PHASE-10A2-RUNNER-CONTRACT.md`; day-to-day operations, including what
+to do about an ambiguous outcome, are in `docs/OPERATIONS_RUNBOOK.md`.
+
 ### Phase 10A-1 — enrichment orchestration (records intent, executes nothing)
 
 Phase 10A-1 adds a durable record of **which providers should be asked about which subjects for a
@@ -585,7 +628,7 @@ Two independent switches, **both off by default**, so upgrading changes no behav
 | Variable | Default | Effect |
 |---|---|---|
 | `AUTO_ENRICHMENT_ENABLED` | `false` | Whether report ingestion records orchestration runs. Off = ingestion behaves exactly as before: the existing `IocEnrichment` row is still created and **no** Phase-10 row of any kind exists. |
-| `ENRICHMENT_WORKER_ENABLED` | `false` | Declared and validated; consumed by nothing in 10A-1 — there is no worker to enable yet. |
+| `ENRICHMENT_WORKER_ENABLED` | `false` | **Phase 10A-2:** now genuinely starts a worker that calls providers and spends real quota. See the section below. |
 
 On top of the switches, **every automatic per-provider daily budget defaults to `0`**
 (`<PROVIDER>_AUTOMATIC_DAILY_BUDGET`), so even turning orchestration on cannot spend a unit of
