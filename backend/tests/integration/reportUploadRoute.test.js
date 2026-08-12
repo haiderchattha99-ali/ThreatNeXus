@@ -319,6 +319,36 @@ describe("POST /api/reports/upload — authentication and authorization", () => 
     expect(res.status).toBe(201);
     expect(res.body.success).toBe(true);
   });
+
+  // Phase 10A-1 — the additive upload-response contract, asserted over real
+  // HTTP on the mounted application. AUTO_ENRICHMENT_ENABLED is unset in this
+  // file's BASE_ENV, so this is the DEFAULT deployment's answer.
+  it("reports enrichment.state AUTOMATIC_DISABLED with orchestration off", async () => {
+    const res = await uploadAs("ANALYST");
+    expect(res.status).toBe(201);
+    // The block is pinned EXACTLY — six keys, every count zero. `enabled`,
+    // `runsDeduplicated`, `failedCount` and `executed` were removed from the
+    // public block deliberately (docs/ai/PHASE-10A1-API-CONTRACT.md); this
+    // toEqual fails if any of them comes back.
+    expect(res.body.enrichment).toEqual({
+      state: "AUTOMATIC_DISABLED",
+      runsCreated: 0,
+      itemsCreated: 0,
+      jobsCreated: 0,
+      jobsShared: 0,
+      skipped: 0,
+    });
+    // The renamed block replaced the old one outright — no consumer should be
+    // able to keep reading the pre-review name.
+    expect(res.body.autoEnrichment).toBeUndefined();
+    // Every pre-existing response field is still present and unchanged.
+    // enrichmentCounts is deliberately absent: it was never exposed over HTTP
+    // before Phase 10 and this milestone does not start exposing it.
+    expect(res.body.success).toBe(true);
+    expect(res.body.report).toBeTruthy();
+    expect(res.body.findingCounts).toBeTruthy();
+    expect(res.body.enrichmentCounts).toBeUndefined();
+  });
 });
 
 describe("POST /api/reports/upload — file handling", () => {
@@ -454,8 +484,14 @@ describe("POST /api/reports/upload — response safety", () => {
   it("only returns the documented safe response fields", async () => {
     const res = await uploadAs("ANALYST");
 
+    // "enrichment" is the Phase 10A-1 additive block. It is added to the
+    // allow-list rather than the allow-list being relaxed, and its OWN keys are
+    // pinned below so the block cannot quietly grow a leaky field.
     expect(Object.keys(res.body).sort()).toEqual(
-      ["findingCounts", "message", "report", "success"].sort()
+      ["enrichment", "findingCounts", "message", "report", "success"].sort()
+    );
+    expect(Object.keys(res.body.enrichment).sort()).toEqual(
+      ["itemsCreated", "jobsCreated", "jobsShared", "runsCreated", "skipped", "state"].sort()
     );
     expect(Object.keys(res.body.report).sort()).toEqual(
       [

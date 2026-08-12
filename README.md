@@ -569,6 +569,55 @@ LIVE_NETLAS_SMOKE=1 npm run smoke:netlas --prefix backend
 Shadowserver, VirusTotal, OTX and MISP remain unintegrated — see `docs/ai/HANDOFF.md` for the
 recommended next provider phase.
 
+### Phase 10A-1 — enrichment orchestration (records intent, executes nothing)
+
+Phase 10A-1 adds a durable record of **which providers should be asked about which subjects for a
+Finding**, and stops there. It is deliberately **inert**:
+
+- **zero** provider calls, **zero** quota reservations, **zero** `ProviderLookupAttempt` rows,
+  **zero** `ProviderDailyUsage` rows, and **no worker** — execution is Phase 10A-2;
+- an eligible unit of work is recorded as a non-terminal `ProviderLookupJob` that nothing claims;
+- `backend/tests/unit/enrichmentOrchestrationInertness.test.js` is a static gate that fails if any
+  module in the package so much as *imports* a provider, a runner or a fetch implementation.
+
+Two independent switches, **both off by default**, so upgrading changes no behaviour at all:
+
+| Variable | Default | Effect |
+|---|---|---|
+| `AUTO_ENRICHMENT_ENABLED` | `false` | Whether report ingestion records orchestration runs. Off = ingestion behaves exactly as before: the existing `IocEnrichment` row is still created and **no** Phase-10 row of any kind exists. |
+| `ENRICHMENT_WORKER_ENABLED` | `false` | Declared and validated; consumed by nothing in 10A-1 — there is no worker to enable yet. |
+
+On top of the switches, **every automatic per-provider daily budget defaults to `0`**
+(`<PROVIDER>_AUTOMATIC_DAILY_BUDGET`), so even turning orchestration on cannot spend a unit of
+third-party quota without an operator also raising a budget deliberately. Manual budgets
+(`<PROVIDER>_MANUAL_DAILY_BUDGET`) default to unlimited but are still parsed and validated. See
+`backend/.env.example`.
+
+Subjects are typed: `abuseipdb`, `greynoise`, `censys`, `shodan` and `netlas` accept **IPv4 only**;
+`nvd` accepts **CVE only**. A Finding's CVE subjects come only from `ACTIVE`, `ANALYST_VERIFIED`
+associations — a CVE named in Shodan's provider text is **never** promoted into one. Three verified
+CVEs remain three separate NVD subjects. AbuseIPDB and NVD work is **delegated**: the delegate row is
+created or found through the **existing** canonical queue services (`enrichmentQueueService`,
+`vulnerabilityQueueService`) and the Phase-10 job links it, rather than taking execution over — so
+NVD results still require the existing ADMIN vulnerability batch, whose behaviour is unchanged. A
+`RUN_DELEGATED` job is never created without exactly one delegate FK; if a delegate cannot be
+established the run item records `SKIPPED_EXECUTION_UNAVAILABLE` and no job is created at all.
+
+| Endpoint | Capability | Notes |
+|---|---|---|
+| `POST /api/findings/:id/enrichment/runs` | `trigger:finding-enrichment` | **202 Accepted + `outcome: CREATED`** when a new run has eligible work — the ask is *recorded*, not executed. **200 + `ALREADY_RUNNING`** for an idempotent replay or the loser of a concurrent race (the existing run is returned). **200 + `SKIPPED`** when a new run's every target was refused by policy. `Location` points at the resulting run. The body names `outcome`, `executionState`, `run` and `items` as separate fields. `justification` is bounded to 1000 characters and **required when `force=true`**; it is never echoed back and reaches audit only as a ≤200-character preview. Optional `Idempotency-Key` header (≤128 UTF-8 bytes, no control characters); only its SHA-256 digest is ever persisted, and the raw value is never logged, audited or returned. |
+| `GET /api/findings/:id/enrichment/runs/:runId` | `read:findings` | The same `run`/`items` pair. Never exposes a shared job identifier, any identity hash, or another Finding's subject. A run belonging to a different Finding answers 404, never 403. There is deliberately no run-*list* route. |
+| `GET /api/findings/:id/enrichment/summary` | `read:findings` | One timestamped row per known provider, resolved from stored state — **no provider is contacted, nothing is written**. A Finding with no active analyst-verified CVE shows NVD as `NO_SUBJECT`, and no NVD run item is created; an IP is never an NVD subject. |
+| `GET /api/enrichment/usage` | `execute:enrichment-batch` | Reports **`accountingScope: PHASE_10_RESERVATIONS`, `coverage: PARTIAL`, `reservationsActive: false`** and names its excluded paths. Its zeros mean "no Phase-10 reservations", **not** "no provider calls happened" — the legacy ADMIN IOC batch, the ADMIN vulnerability batch and the pre-10A2 synchronous provider routes are not accounted for here, and no total call count is fabricated. |
+
+The report upload response gains one additive `enrichment` block; all pre-existing fields
+(`outcome`, `report`, `findingCounts`, `enrichmentCounts`) are unchanged. It carries exactly six
+keys — `state`, `runsCreated`, `itemsCreated`, `jobsCreated`, `jobsShared`, `skipped` — where every
+count describes what *that upload* wrote. `state` is a closed code: `AUTOMATIC_DISABLED` (the
+default), `NO_FINDINGS`, `RECORDED` or `PARTIAL`.
+
+The binding contract for all of the above is `docs/ai/PHASE-10A1-API-CONTRACT.md`.
+
 ## Known limitations
 
 - **Single report type.** Only Shadowserver-style *Accessible RDP* is ingested.

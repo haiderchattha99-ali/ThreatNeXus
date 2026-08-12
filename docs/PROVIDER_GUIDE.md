@@ -155,3 +155,67 @@ between them — merging would fabricate a join the evidence doesn't support. Ne
 - **VirusTotal, OTX, MISP.** Not integrated. No adapter, no env var, no code path references them.
   Recommended as the natural next live-provider phase if one is wanted (same pattern: own table, own
   module set, shared quota).
+
+---
+
+## Phase 10A-1 — enrichment orchestration (inert: records intent, executes nothing)
+
+Phase 10A-1 introduces a layer *above* the individual providers documented on this page. It decides
+and records **which provider should be asked about which subject for a Finding**. It does not call
+anything. Every provider integration described above continues to behave exactly as documented.
+
+### Subject compatibility
+
+Orchestration is typed by *subject*, not by "indicator" — NVD's subject is a CVE identifier, which
+is not an indicator of compromise.
+
+| Provider | Subject type | Execution in Phase 10 |
+|---|---|---|
+| `abuseipdb` | IPv4 only | **Delegated** — the `IocEnrichment` delegate is created-or-found through the existing `enrichmentQueueService` (never a second copy of its queue logic) and linked; the ADMIN IOC batch still executes it. |
+| `greynoise` | IPv4 only | Direct (Phase 10A-2). Job is created and left non-terminal in 10A-1. |
+| `censys` | IPv4 only | Direct (Phase 10A-2). |
+| `shodan` | IPv4 only | Direct (Phase 10A-2). |
+| `netlas` | IPv4 only | Direct (Phase 10A-2). |
+| `nvd` | CVE only | **Delegated** — the `VulnerabilityEnrichmentJob` delegate is created-or-found through the existing `vulnerabilityQueueService` and linked; NVD results still require the ADMIN vulnerability batch, which 10A-2 deliberately does not make worker-eligible. |
+
+A `RUN_DELEGATED` `ProviderLookupJob` is **never** created without exactly one delegate FK. If the
+canonical queue service reports a fresh answer already on file, the run item records
+`SKIPPED_CACHED`; if it refuses or fails, the item records `SKIPPED_EXECUTION_UNAVAILABLE`. In both
+cases no job is created — a delegated job with nothing to wait on could never reach a terminal state
+and would hold `activeLookupKey` against every future ask about that subject.
+
+Subject values are canonicalized **before** any hashing or uniqueness decision: strict dotted-quad
+IPv4 (leading zeros, CIDR suffixes, IPv6 and hostnames are rejected, never coerced) and canonical
+uppercase `CVE-YYYY-NNNN…`. Skipping canonicalization would fragment the shared-work key into one
+job per spelling.
+
+A Finding's CVE subjects come **only** from `ACTIVE`, `ANALYST_VERIFIED` `FindingVulnerability`
+associations. A CVE named in Shodan's exposure text is never promoted into a subject. Three verified
+CVEs stay three separate NVD subjects.
+
+### Budgets and lanes
+
+Every outbound call is charged to one lane, fixed at job creation from the run's trigger:
+
+- **AUTOMATIC** — ingestion-triggered. `<PROVIDER>_AUTOMATIC_DAILY_BUDGET`, **default `0`**.
+- **MANUAL** — an analyst explicitly asking. `<PROVIDER>_MANUAL_DAILY_BUDGET`, default unlimited
+  (blank or the literal `unlimited`), still parsed and validated.
+
+Accepted values are a plain decimal integer `0..1000000`, or `unlimited` on the manual lane only.
+Exponent notation, `0x` forms and signed values are rejected as configuration mistakes.
+
+A **known-zero** budget is refused at routing time: the run item records `SKIPPED_BUDGET` and **no
+job is created and no reservation is attempted**. That is structurally different from a job whose
+execution-time reservation is refused (Phase 10A-2), which is recorded as
+`ProviderLookupJobState.SKIPPED_BUDGET` on an already-created job while its run item stays
+`ELIGIBLE`. Run aggregation distinguishes the two, so "we never asked" is never reported as "we
+asked and were refused".
+
+### Deduplication: two mechanisms, never conflated
+
+- `idempotencyKey` (unique per run) deduplicates **the same ask**.
+- `activeLookupKey` (unique per job, held only while non-terminal) deduplicates **outbound work**.
+
+So: two concurrent identical requests collapse into one run; ten Findings on one IP share one job;
+and an AbuseIPDB-scoped run does **not** suppress a later Censys-scoped run. Collapsing these two
+into a single key is exactly the defect the v2.1 correction addendum exists to fix.

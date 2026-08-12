@@ -59,6 +59,15 @@ const { INDICATOR_TYPES } = require("../enrichment/iocEnrichmentTypes");
 const { EnrichmentCacheKeyError } = require("../enrichment/enrichmentCacheKey");
 const { recalculateAfterIngestion } = require("../risk/riskRecalculationService");
 const {
+  createEnrichmentRun,
+} = require("../enrichmentOrchestration/enrichmentRunService");
+const {
+  resolveOrchestrationConfig,
+} = require("../enrichmentOrchestration/enrichmentOrchestrationConfig");
+const {
+  INGESTION_ENRICHMENT_STATES,
+} = require("../enrichmentOrchestration/enrichmentDecisionCodes");
+const {
   processRecurrenceReopensSafely,
 } = require("../workflow/caseRecurrenceReopenService");
 const { AUDIT_OUTCOMES, safeLogAuditEvent } = require("../auditService");
@@ -69,6 +78,34 @@ const env = require("../../config/env");
 // provider any more than it can choose its own reportType/schemaVersion (see
 // the trusted-source note above).
 const ENRICHMENT_PROVIDER = "abuseipdb";
+
+// Phase 10A-1 — the additive `enrichment` upload-response block when
+// orchestration is off. Truthful and complete: nothing was recorded, and
+// nothing was executed. The four pre-existing response fields (outcome, report,
+// findingCounts, enrichmentCounts) are untouched, so every existing consumer is
+// unaffected.
+//
+// `state` is a closed INGESTION_ENRICHMENT_STATES code, never a free string, so
+// a consumer can branch on it exhaustively. AUTOMATIC_DISABLED is the default
+// deployment's answer.
+// The six keys of the binding contract (docs/ai/PHASE-10A1-API-CONTRACT.md),
+// and no others. Deliberately absent:
+//   enabled            implied by `state` — AUTOMATIC_DISABLED IS "off"
+//   runsDeduplicated   an internal convergence detail, not an upload's outcome
+//   failedCount        folded into state = PARTIAL, so a consumer branches on
+//                      one closed code instead of on a count
+//   executed           it is always false and always will be in this milestone;
+//                      a field that can only hold one value is documentation
+//                      pretending to be data
+// Every count describes what THIS upload wrote.
+const ENRICHMENT_DISABLED_RESULT = Object.freeze({
+  state: INGESTION_ENRICHMENT_STATES.AUTOMATIC_DISABLED,
+  runsCreated: 0,
+  itemsCreated: 0,
+  jobsCreated: 0,
+  jobsShared: 0,
+  skipped: 0,
+});
 
 // Closed classification for one group's scheduling attempt — used only to
 // build the report-level aggregate audit payload below, never persisted or
@@ -372,6 +409,70 @@ async function scheduleEnrichmentSafely(client, indicatorValue, asOf) {
     console.error("Enrichment scheduling failed during ingestion", { name: error && error.name });
     return ENRICHMENT_SCHEDULE_RESULT.FAILED;
   }
+}
+
+// Phase 10A-1 — durable ORCHESTRATION records for the Findings this report
+// touched, behind AUTO_ENRICHMENT_ENABLED (default false).
+//
+// Same isolation contract as resolveOwnershipSafely and
+// scheduleEnrichmentSafely above, and for the same reasons:
+//   - createEnrichmentRun performs no I/O beyond the database. It never
+//     constructs or calls a provider, never reserves quota, never writes a
+//     ProviderLookupAttempt or ProviderDailyUsage row, and starts no worker.
+//   - a missing API key cannot affect it: the applicability router reads only
+//     WHETHER a credential is configured, never the value.
+//   - every failure is caught and classified, never rethrown — an ingested
+//     report must not be invalidated by an orchestration problem.
+//
+// With the switch off this function is never called at all, so a deployment
+// that upgrades to this milestone and changes nothing else produces exactly
+// the records it produced before: the existing IocEnrichment row only, and
+// zero Phase-10 rows of any kind.
+async function createEnrichmentRunsSafely(client, auditContext, findingIds, rawReportId, asOf) {
+  const counts = {
+    runsCreated: 0,
+    itemsCreated: 0,
+    jobsCreated: 0,
+    jobsShared: 0,
+    skipped: 0,
+    failed: 0,
+  };
+
+  // eslint-disable-next-line no-restricted-syntax
+  for (const findingId of findingIds) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const outcome = await createEnrichmentRun(findingId, {
+        client,
+        trigger: "INGESTION",
+        force: false,
+        rawReportId,
+        now: asOf,
+        auditContext,
+      });
+      // Only a run this call actually inserted. A replay that converged onto an
+      // existing run created nothing, and counting it would report work a
+      // previous upload had already recorded.
+      if (outcome.created) counts.runsCreated += 1;
+      // Same rule for every other count: what THIS call wrote, never the run's
+      // totals. jobsCreated and jobsShared are tracked separately because they
+      // cannot be told apart afterwards — an item holding a job id looks
+      // identical whether it inserted that job or attached to a shared one.
+      counts.itemsCreated += outcome.itemsCreated;
+      counts.jobsCreated += outcome.jobsCreated;
+      counts.jobsShared += outcome.jobsShared;
+      counts.skipped += outcome.skipped;
+    } catch (error) {
+      // Never rethrown: an ingested report must not be invalidated by an
+      // orchestration problem. Surfaced as state = PARTIAL.
+      counts.failed += 1;
+      console.error("Enrichment orchestration failed during ingestion", {
+        name: error && error.name,
+      });
+    }
+  }
+
+  return counts;
 }
 
 // Allow-listed aggregate-only payload for the one enrichment-scheduling audit
@@ -813,6 +914,70 @@ async function ingestAccessibleRdpReport(input, options = {}) {
     });
   }
 
+  // 11c-2. Phase 10A-1 — enrichment orchestration, OFF BY DEFAULT.
+  //
+  // Runs after risk scoring so the orchestration record reflects the state
+  // this report actually produced. Records intent only: no provider is
+  // contacted here or anywhere else in this milestone.
+  //
+  // The switch is resolved from process.env at call time, NOT from env.js's
+  // frozen startup snapshot. Two reasons, and the second is the important one:
+  //   * enrichmentRunService already resolves the per-provider BUDGETS the same
+  //     way on every call, so reading the switch from a different source would
+  //     let the two disagree after a configuration change;
+  //   * env.js still validates both switches at startup, so a malformed value
+  //     is caught there and this read cannot be the first to see a bad one.
+  let enrichment = ENRICHMENT_DISABLED_RESULT;
+  const autoEnrichmentEnabled =
+    resolveOrchestrationConfig(process.env).AUTO_ENRICHMENT_ENABLED;
+  if (autoEnrichmentEnabled && touchedFindingIds.size === 0) {
+    // Enabled, but this report touched no Finding. Reporting AUTOMATIC_DISABLED
+    // here would misstate the deployment's configuration, so it gets its own
+    // state rather than borrowing the disabled one.
+    enrichment = {
+      ...ENRICHMENT_DISABLED_RESULT,
+      state: INGESTION_ENRICHMENT_STATES.NO_FINDINGS,
+    };
+  } else if (autoEnrichmentEnabled) {
+    const counts = await createEnrichmentRunsSafely(
+      client,
+      auditContext,
+      [...touchedFindingIds],
+      finishedReport.id,
+      enrichmentAsOf
+    );
+    enrichment = {
+      // A failure to record orchestration for one Finding is reported as
+      // PARTIAL rather than as a count, so a consumer branches on one closed
+      // code. Ingestion itself still succeeded either way.
+      state:
+        counts.failed > 0
+          ? INGESTION_ENRICHMENT_STATES.PARTIAL
+          : INGESTION_ENRICHMENT_STATES.RECORDED,
+      runsCreated: counts.runsCreated,
+      itemsCreated: counts.itemsCreated,
+      jobsCreated: counts.jobsCreated,
+      jobsShared: counts.jobsShared,
+      skipped: counts.skipped,
+    };
+
+    await audit(client, auditContext, {
+      action: "enrichment.orchestration.ingestion.completed",
+      outcome: AUDIT_OUTCOMES.SUCCESS,
+      entityType: "RawReport",
+      entityId: finishedReport.id,
+      // The audit payload MAY carry more than the public block — failedCount is
+      // exactly the sort of operational detail an audit trail is for and a
+      // public response is not.
+      after: {
+        ...enrichment,
+        failedCount: counts.failed,
+        distinctFindingCount: touchedFindingIds.size,
+      },
+      reason: "Enrichment orchestration recorded for report findings (no provider contacted)",
+    });
+  }
+
   // eslint-disable-next-line no-restricted-syntax
   for (const entry of reopenedFindings) {
     // eslint-disable-next-line no-await-in-loop
@@ -859,6 +1024,8 @@ async function ingestAccessibleRdpReport(input, options = {}) {
     report: reportSummary(finishedReport),
     findingCounts,
     enrichmentCounts,
+    // Phase 10A-1 — additive only. Every field above is unchanged.
+    enrichment,
   };
 }
 
@@ -867,9 +1034,11 @@ module.exports = {
   NO_VALID_ROWS_REASON,
   ENRICHMENT_PROVIDER,
   ENRICHMENT_SCHEDULE_RESULT,
+  ENRICHMENT_DISABLED_RESULT,
   RowEvidenceIntegrityError,
   resolveOwnershipSafely,
   scheduleEnrichmentSafely,
+  createEnrichmentRunsSafely,
   enrichmentScheduleSummary,
   deepEqualJson,
   ingestAccessibleRdpReport,

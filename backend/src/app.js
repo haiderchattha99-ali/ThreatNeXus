@@ -21,6 +21,8 @@ const organizationRoutes = require("./routes/organizationRoutes");
 const ownershipRoutes = require("./routes/ownershipRoutes");
 const findingOwnershipRoutes = require("./routes/findingOwnershipRoutes");
 const findingEnrichmentRoutes = require("./routes/findingEnrichmentRoutes");
+const enrichmentOrchestrationRoutes = require("./routes/enrichmentOrchestrationRoutes");
+const enrichmentUsageRoutes = require("./routes/enrichmentUsageRoutes");
 const censysEnrichmentRoutes = require("./routes/censysEnrichmentRoutes");
 const greyNoiseEnrichmentRoutes = require("./routes/greyNoiseEnrichmentRoutes");
 const shodanEnrichmentRoutes = require("./routes/shodanEnrichmentRoutes");
@@ -77,6 +79,10 @@ app.use("/api/organizations", organizationRoutes);
 app.use("/api/ownership", ownershipRoutes);
 app.use("/api/findings", findingOwnershipRoutes);
 app.use("/api/findings", findingEnrichmentRoutes);
+// Phase 10A-1 — enrichment orchestration. Records intent only; no worker, no
+// provider call. Mounted after findingEnrichmentRoutes so the existing
+// enrichment surface keeps its path precedence.
+app.use("/api/findings", enrichmentOrchestrationRoutes);
 app.use("/api/findings", censysEnrichmentRoutes);
 app.use("/api/findings", greyNoiseEnrichmentRoutes);
 app.use("/api/findings", shodanEnrichmentRoutes);
@@ -93,6 +99,7 @@ app.use("/api/findings", aiFindingSuggestionRoutes);
 // "/12/triage", but the ordering makes that independent of Express internals.
 app.use("/api/findings", findingReadRoutes);
 app.use("/api/enrichment", enrichmentBatchRoutes);
+app.use("/api/enrichment", enrichmentUsageRoutes);
 app.use("/api/vulnerabilities", vulnerabilityEnrichmentRoutes);
 app.use("/api/vulnerability-enrichment", vulnerabilityEnrichmentBatchRoutes);
 // Phase 5. Registered AFTER caseRoutes so the two /api/cases routers compose in
