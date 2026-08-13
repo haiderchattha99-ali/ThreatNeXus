@@ -1212,6 +1212,76 @@ describeOrSkip("Phase 10A-2 — a backlog cannot starve the queue, and a crash c
     expect(after.claimToken).toBeNull();
   });
 
+  it("runs a whole tick — every pass, in order — and contacts nobody without credentials", async () => {
+    // runWorkerTick had no test at all: each pass was asserted on its own, and
+    // the only proof the TICK composes was a manual Docker rehearsal. That is
+    // the one thing a unit-level assertion cannot stand in for, because a pass
+    // that throws takes the entire loop down and every later pass with it.
+    //
+    // This is also the rehearsal's own invariant, made automatic: a worker with
+    // positive budgets and NO credentials must reach nobody and spend nothing.
+    const { job: targeted } = await createTargetedJob(IP.T_UNCONFIGURED);
+    const direct = await createDirectJob(IP.T_RECOVERY);
+    // An exhausted row and a settled run, so the two new passes have real work
+    // rather than trivially returning zero.
+    const exhausted = await prisma.providerLookupJob.create({
+      data: {
+        provider: "censys",
+        subjectType: "IPV4",
+        subjectValue: IP.T_STARVED,
+        queryIdentityHash: `p10a2-tick-exhausted-${IP.T_STARVED}`,
+        state: JOB_STATES.PENDING,
+        lane: "AUTOMATIC",
+        trigger: "RUN_DIRECT",
+        requestedAt: NOW,
+        activeLookupKey: `p10a2-tick-exhausted-${IP.T_STARVED}`,
+        maxAttempts: 1,
+        attemptCount: 1,
+      },
+    });
+
+    const { provider, state } = fakeTargetedProvider();
+    const summary = await worker.runWorkerTick({
+      prisma,
+      nowFn,
+      batchSize: 5,
+      leaseMs: 120000,
+      lookupMaxMs: 60000,
+      attemptStaleMs: 600000,
+      // Positive budgets, no credentials — the rehearsal's exact shape.
+      appConfig: {
+        ABUSEIPDB_API_KEY: "",
+        CENSYS_PAT: "",
+        ENRICHMENT_AUTOMATIC_DAILY_BUDGETS: { abuseipdb: 100, censys: 100 },
+        ENRICHMENT_MANUAL_DAILY_BUDGETS: { abuseipdb: 100, censys: 100 },
+      },
+      runtime: fakeRuntime(provider),
+      fetchImpl: () => {
+        throw new Error("the tick must not reach any transport without credentials");
+      },
+      audit: noopAudit,
+    });
+
+    // The tick completed — every pass ran and none of them threw.
+    expect(summary).toHaveProperty("exhaustedRetired");
+    expect(summary).toHaveProperty("runsReconciled");
+    expect(summary.exhaustedRetired).toBeGreaterThan(0);
+
+    // And nothing was spent, because nothing could have been asked.
+    expect(state.calls).toBe(0);
+    expect(await prisma.providerDailyUsage.count({ where: { provider: { in: ["censys", "abuseipdb"] } } })).toBe(0);
+    expect(
+      await prisma.providerLookupAttempt.count({
+        where: { lookupJobId: { in: [targeted.id, direct.id, exhausted.id] } },
+      })
+    ).toBe(0);
+
+    // The exhausted row was retired rather than left to occupy the scan.
+    const retired = await prisma.providerLookupJob.findUnique({ where: { id: exhausted.id } });
+    expect(retired.state).toBe(JOB_STATES.DEAD_LETTER);
+    expect(retired.terminalReasonCode).toBe("MAX_ATTEMPTS_EXHAUSTED");
+  });
+
   it("settles a run whose every job went terminal on a path with no run context", async () => {
     // Some terminalization paths have no run to refresh — a swept attempt, a
     // retired row, a job terminalized by an earlier crash. Without the general
