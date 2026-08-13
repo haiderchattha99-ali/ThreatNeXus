@@ -245,3 +245,82 @@ ADMIN vulnerability batch and the synchronous provider routes are outside its ac
 `enrichmentReconciliationService.reconcileDelegatedJobs()` exists, is tested, and is **not
 scheduled** by anything. Nothing in the application calls it. Scheduling it is Phase 10A-2 work and
 is gated on the runner-hook design recorded in `docs/ai/HANDOFF.md`.
+
+---
+
+## Phase 10A-2 — live enrichment execution
+
+**Default off, and it stays off unless you turn it on deliberately.** A plain
+`docker compose up` starts no worker, contacts no provider and writes no quota row. The `require`
+of the worker module sits *inside* the switch in `server.js`, so a disabled deployment does not even
+load it.
+
+### Turning it on locally
+
+Every Phase-10A-2 control is passed through `docker-compose.yml` from your environment, each
+defaulting to the safe value. To use your own gitignored `backend/.env`:
+
+```bash
+docker compose --env-file backend/.env up -d --build
+```
+
+`backend/.env` is gitignored and is read by nothing in this repository, by CI, or by any test.
+**Never write a real key or budget into `docker-compose.yml` or `.env.example`.**
+
+Live execution requires **all** of:
+
+```bash
+ENRICHMENT_WORKER_ENABLED=true
+AUTO_ENRICHMENT_ENABLED=true          # only if you also want ingestion to record runs
+CENSYS_PAT=...                        # the provider's own credential
+CENSYS_AUTOMATIC_DAILY_BUDGET=25      # a POSITIVE budget for the lane in use
+```
+
+Missing any one of them is a truthful recorded refusal, not a silent failure:
+
+| Missing | Result |
+|---|---|
+| the switch | no worker exists; jobs stay recorded and unexecuted |
+| the credential | job terminalizes `SKIPPED_NOT_CONFIGURED`, **before any quota is reserved** |
+| a positive budget | job terminalizes `SKIPPED_BUDGET`, with **zero** provider calls |
+
+**Ingestion never fails because of any of this.** Enrichment and orchestration are non-blocking by
+design: a report still ingests, findings are still created, and the enrichment block reports what
+happened.
+
+### Recommended demo budgets
+
+Use a **small positive** budget on one or two providers — for example
+`CENSYS_AUTOMATIC_DAILY_BUDGET=25` — rather than `unlimited`. A demonstration needs a handful of
+real answers, not an uncapped spend against a paid account. Automatic budgets default to `0`
+precisely so that turning the worker on cannot by itself spend anything.
+
+### Worker timing, and why it is cross-validated
+
+```
+ENRICHMENT_WORKER_POLL_INTERVAL_MS=15000
+ENRICHMENT_WORKER_BATCH_SIZE=5
+ENRICHMENT_WORKER_LEASE_SECONDS=120
+ENRICHMENT_LOOKUP_MAX_MS=60000
+ENRICHMENT_ATTEMPT_STALE_SECONDS=600
+```
+
+These are **not** independent. The application refuses to start if either rule is violated:
+
+```
+ENRICHMENT_WORKER_LEASE_SECONDS   >= ENRICHMENT_LOOKUP_MAX_MS + 30s
+ENRICHMENT_ATTEMPT_STALE_SECONDS  >= ENRICHMENT_LOOKUP_MAX_MS + 60s
+```
+
+Both are stated against `ENRICHMENT_LOOKUP_MAX_MS` — the worker's own end-to-end bound — and not
+against any provider's configured timeout. **No provider timeout actually bounds a lookup:** every
+provider clears its timeout as soon as the response *headers* arrive and reads the body afterwards,
+so a stalled body read runs unbounded. Without the worker's own bound, recovery could resolve an
+attempt whose call was still executing.
+
+### Rolling back
+
+Set `ENRICHMENT_WORKER_ENABLED=false` and restart. No worker is constructed, in-flight leases
+expire, and every Phase 10A-1 surface behaves exactly as before with
+`executionState: PAUSED_WORKER_DISABLED`. Already-persisted provider evidence stays — rollback stops
+future calls, it does not retract completed ones. No migration rollback is required.

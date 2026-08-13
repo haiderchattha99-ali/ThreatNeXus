@@ -24,6 +24,14 @@
 
 const { JOB_STATES } = require("./enrichmentDecisionCodes");
 const repository = require("./enrichmentOrchestrationRepository");
+// Re-deriving a run's state from its items after a job goes terminal. Imported
+// lazily inside the function that needs it: enrichmentRunService requires
+// config/env at call time, and a module-scope import would make every pure
+// unit test of this file depend on a fully configured environment.
+function refreshRunState(client, runId, now) {
+  // eslint-disable-next-line global-require
+  return require("./enrichmentRunService").refreshRunState(client, runId, now);
+}
 
 // A reconciliation pass is bounded. An unbounded scan would load an arbitrary
 // number of rows into memory and would make the pass's cost depend on table
@@ -43,6 +51,23 @@ const IOC_STATUS_TO_JOB_STATE = Object.freeze({
   FAILED: JOB_STATES.FAILED,
   UNSUPPORTED_INDICATOR: JOB_STATES.SKIPPED_UNSUPPORTED_SUBJECT,
   SKIPPED_DISABLED: JOB_STATES.SKIPPED_DISABLED,
+  // ---- Added in Phase 10A-2 (D-P10A2-08) ---------------------------------
+  // Both of these were MISSING, and their absence was a real defect, not a
+  // simplification. The original comment claimed a RATE_LIMITED delegate is
+  // "still working" — that is false against the code: TERMINAL_STATUSES is
+  // every status except PENDING (iocEnrichmentCacheRules.js:57), and
+  // resolveEnrichmentRetry COMPLETEs a rate-limited result as terminal
+  // evidence. So the delegate is finished and this map returned null forever,
+  // pinning the Phase-10 job in WAITING_ON_DELEGATE and holding its
+  // activeLookupKey — which permanently blocks every FUTURE ask about that
+  // subject. DEAD_LETTER had the same hole.
+  //
+  // RATE_LIMITED maps to FAILED because ProviderLookupJobState deliberately
+  // carries no RATE_LIMITED value and the honest meaning is "we have no
+  // answer" — never NO_RECORD, which would read as "nothing found".
+  RATE_LIMITED: JOB_STATES.FAILED,
+  // A processing failure, never evidence that an indicator is clean.
+  DEAD_LETTER: JOB_STATES.DEAD_LETTER,
 });
 
 // VulnerabilityJobStatus is a three-value enum. COMPLETED means the ADMIN
@@ -94,25 +119,62 @@ async function reconcileDelegatedJobs(options = {}) {
   });
 
   let reconciled = 0;
+  const refreshedRunIds = new Set();
   // eslint-disable-next-line no-restricted-syntax
   for (const job of jobs) {
     const state = resolveDelegateState(job);
     // eslint-disable-next-line no-continue
     if (!state) continue;
 
+    // GUARDED transition (Phase 10A-2). The previous unguarded `updateJob`
+    // would happily overwrite a job another process had already moved on;
+    // this matches zero rows and reports nothing reconciled instead.
+    //
+    // Releasing activeLookupKey is what lets the NEXT ask for this subject
+    // create fresh work. PostgreSQL treats multiple NULLs in a unique index
+    // as distinct, so the terminal row stays as history without blocking.
     // eslint-disable-next-line no-await-in-loop
-    await repository.updateJob(client, job.id, {
+    // Carry the DELEGATE's own durable evidence across, rather than only its
+    // verdict. The API derives the public `contacted` field from queriedAt, so
+    // a job that copied the state but not the timestamp reported a
+    // successfully contacted provider as contacted:false.
+    const delegate = job.iocEnrichment || job.vulnerabilityEnrichmentJob || null;
+    const transitioned = await repository.terminalizeDelegatedJob(client, {
+      id: job.id,
       state,
-      completedAt: now,
-      // Releasing activeLookupKey is what lets the NEXT ask for this subject
-      // create fresh work. PostgreSQL treats multiple NULLs in a unique index
-      // as distinct, so the terminal row stays as history without blocking.
-      activeLookupKey: null,
+      now,
+      queriedAt: delegate && delegate.queriedAt ? delegate.queriedAt : null,
+      freshUntil: delegate && delegate.expiresAt !== undefined ? delegate.expiresAt : undefined,
+      httpStatus: delegate && delegate.httpStatus !== undefined ? delegate.httpStatus : undefined,
+      errorCode: delegate && delegate.errorCode !== undefined ? delegate.errorCode : undefined,
+      retryAfterSeconds:
+        delegate && delegate.retryAfterSeconds !== undefined ? delegate.retryAfterSeconds : undefined,
     });
+    // eslint-disable-next-line no-continue
+    if (!transitioned) continue;
     reconciled += 1;
+
+    // A job going terminal changes what every run holding an item on it can
+    // truthfully report. A shared job may belong to many runs, and leaving any
+    // of them PENDING would misstate what is known. Previously nothing
+    // refreshed run state here at all, so even a successful delegate left its
+    // runs stale forever.
+    // eslint-disable-next-line no-await-in-loop
+    const runIds = await repository.listRunIdsForJob(client, job.id);
+    // eslint-disable-next-line no-restricted-syntax
+    for (const runId of runIds) {
+      // eslint-disable-next-line no-await-in-loop
+      await refreshRunState(client, runId, now);
+      refreshedRunIds.add(runId);
+    }
   }
 
-  return { scanned: jobs.length, reconciled, stillWaiting: jobs.length - reconciled };
+  return {
+    scanned: jobs.length,
+    reconciled,
+    stillWaiting: jobs.length - reconciled,
+    runsRefreshed: refreshedRunIds.size,
+  };
 }
 
 module.exports = {

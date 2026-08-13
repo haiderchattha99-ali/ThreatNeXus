@@ -52,10 +52,11 @@ const { resolveOrchestrationConfig } = require("./enrichmentOrchestrationConfig"
  */
 function resolveExecutionState(source) {
   const config = resolveOrchestrationConfig(source || process.env);
-  // The switch being ON does not make a worker exist — Phase 10A-1 ships none.
-  // Reporting "paused" in that case would imply one is merely idle.
+  // Phase 10A-2: the switch being ON now genuinely starts a worker, so ACTIVE
+  // is the truthful answer. NOT_IMPLEMENTED was retired with the milestone
+  // that shipped no worker (D-P10A2-03).
   return config.ENRICHMENT_WORKER_ENABLED
-    ? EXECUTION_STATES.NOT_IMPLEMENTED
+    ? EXECUTION_STATES.ACTIVE
     : EXECUTION_STATES.PAUSED_WORKER_DISABLED;
 }
 

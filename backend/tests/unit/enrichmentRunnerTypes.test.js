@@ -185,6 +185,15 @@ describe("enrichmentRunnerTypes — buildJobResult", () => {
         "nextAttemptAt",
         "attemptCount",
         "maxAttempts",
+        // Phase 10A-2. The targeted path's Phase-10 attempt ledger has to
+        // record WHICH kind of failure a negative result was: a provider that
+        // refused the request, one that broke, and one that was never reached
+        // are three different facts, and without these the ledger could only
+        // ever say TRANSPORT_ERROR. Additive and still closed — the ADMIN
+        // batch supplies none of them, and they default to null.
+        "httpStatus",
+        "errorCode",
+        "retryAfterSeconds",
       ].sort()
     );
     expect(Object.isFrozen(result)).toBe(true);

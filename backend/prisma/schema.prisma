@@ -3219,6 +3219,13 @@ enum AttemptOutcome {
   // name says so: the process died between reservation and finalization, and
   // contactedProvider is preserved exactly as it was recorded.
   ABANDONED
+  // Added in Phase 10A-2. The provider answered, and refused the request:
+  // a non-authentication 3xx/4xx, which every provider normalizes as
+  // status FAILED + errorCode PROVIDER_REJECTED. Distinct from SERVER_ERROR
+  // ("the provider broke") and from TRANSPORT_ERROR ("we never reached it") —
+  // without this value a Censys HTTP 400 could only be recorded as one of
+  // those two, and both would be false.
+  PROVIDER_REJECTED
 }
 
 // One Finding-scoped enrichment ask.

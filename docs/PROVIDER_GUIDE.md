@@ -219,3 +219,71 @@ asked and were refused".
 So: two concurrent identical requests collapse into one run; ten Findings on one IP share one job;
 and an AbuseIPDB-scoped run does **not** suppress a later Censys-scoped run. Collapsing these two
 into a single key is exactly the defect the v2.1 correction addendum exists to fix.
+
+---
+
+## Phase 10A-2 — live execution of recorded orchestration
+
+Phase 10A-1 recorded *intent* and executed nothing. Phase 10A-2 makes that intent executable,
+behind a switch that is off by default.
+
+| Provider | Executed by the worker? | How |
+|---|---|---|
+| Censys, GreyNoise, Shodan, Netlas | **Yes, directly** | the worker leases the `ProviderLookupJob` and calls the provider through that provider's existing execution service |
+| AbuseIPDB | **Yes, targeted** | the worker claims the *linked* canonical `IocEnrichment` row and drives the existing IOC runner |
+| NVD | **No** | still delegated to the ADMIN vulnerability batch |
+
+### Nothing is duplicated
+
+The worker reuses each provider's existing `buildProvider`, `toPersistedRow` and evidence table.
+There is no second HTTP adapter, no second result model, no second error vocabulary and no second
+evidence table anywhere in Phase 10.
+
+It deliberately does **not** call `execute<Provider>Lookup(findingId, …)`. That function is
+Finding-scoped and synchronous, while a `ProviderLookupJob` is subject-scoped and may be shared by
+many Findings — calling it would force the worker to pick one Finding out of several and re-derive
+an indicator from a Finding the job does not belong to.
+
+### Three independent controls, all of which must be satisfied
+
+A provider is called only when **all three** hold. Any one of them missing is a truthful, recorded
+refusal rather than a silent no-op:
+
+1. `ENRICHMENT_WORKER_ENABLED=true` — otherwise no worker exists at all;
+2. the provider's credential is configured — otherwise the job terminalizes
+   `SKIPPED_NOT_CONFIGURED` **before any quota is reserved**;
+3. a **positive** daily budget for that provider's lane — a zero budget refuses without issuing a
+   single database statement, and never calls anybody.
+
+### A provider result is always terminal
+
+Phase 10A-2 performs **no automatic retry of a provider outcome**. `SUCCESS` becomes `SUCCEEDED`,
+`NOT_FOUND` becomes `NO_RECORD`, and every negative status (`RATE_LIMITED`, `TIMEOUT`, `INVALID_KEY`,
+`FAILED`) becomes a terminal `FAILED` carrying `freshUntil` from the existing TTL policy.
+
+That matches the semantics the repository already had — a cached negative is real evidence of "no
+context available", governed by the TTL policy rather than by a retry budget. A stale answer is
+re-asked by creating a **new run** once `freshUntil` lapses, or immediately with `force` plus a
+written justification, which is a human decision to spend quota.
+
+### What happens when a worker dies mid-call
+
+The system distinguishes two cases and never guesses between them:
+
+* the process died **before** the request left — the attempt records
+  `contactedProvider = false`, and the job is safely returned to the queue;
+* the process died **at or after** transport hand-off — the attempt is finalized `ABANDONED` with
+  `contactedProvider = true`, and the job becomes `DEAD_LETTER` with
+  `terminalReasonCode = AMBIGUOUS_AFTER_CONTACT`. It is **never retried automatically**, because a
+  retry could double-charge a paid third party and a fabricated failure would invent an outcome no
+  provider gave.
+
+`DEAD_LETTER` + `AMBIGUOUS_AFTER_CONTACT` means exactly "we do not know". It is never rendered as a
+successful lookup, a failed lookup, or "no record found".
+
+### Quota accounting is deliberately conservative
+
+`ProviderDailyUsage` has no decrement and no refund path. Accounting may therefore **over**-count a
+call that was reserved but never sent; it can never **under**-count a call that was sent. For a paid
+third-party budget that is the only safe direction, and `ProviderLookupAttempt.contactedProvider`
+keeps the ledger honest about which case a row is.

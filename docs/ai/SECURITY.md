@@ -545,3 +545,77 @@ It also verifies the pinned ATT&CK catalogue checksum and runs the Phase 6.3 evi
 - **`backend/.env` on the development machine holds live provider keys.** It is correctly gitignored,
   has never been tracked, and is absent from history. It must never be read, printed, copied,
   transmitted or modified by an agent.
+
+---
+
+## Phase 10A-2 — live enrichment execution
+
+Phase 10A-1 executed nothing, so its security story was mostly about what it *could not* do. Phase
+10A-2 genuinely contacts third parties and spends money, so the controls below are load-bearing
+rather than precautionary.
+
+### Default-off, three times over
+
+1. `ENRICHMENT_WORKER_ENABLED=false` — and the `require` of the worker module sits **inside** that
+   switch in `server.js`, so a disabled deployment never loads it. The default-off claim is a
+   property of the process, not of a branch.
+2. Every `*_AUTOMATIC_DAILY_BUDGET` defaults to `0`. Enabling the worker cannot, by itself, spend a
+   single unit of automatic quota.
+3. A provider with no credential is refused **before any reservation**, so an incomplete deployment
+   cannot charge quota for a call it could never make.
+
+### Credentials
+
+Read from environment variables only, and only ever tested for **presence**
+(`isProviderCredentialConfigured` coerces to `Boolean`). No module returns, logs, interpolates or
+compares a key value. The tiered execution gate asserts statically that no module outside
+`enrichmentOrchestrationConfig.js` so much as mentions a provider key name.
+
+`backend/.env` is gitignored and is read by nothing in this repository, by CI, or by any test. CI
+sets every provider key to `''`. It was never opened during this milestone's development.
+
+### Audit is an allow-list, never a redaction pass
+
+Every worker audit payload names the fields it copies: provider, lane, `usageDate`, attempt number,
+closed outcome and error codes, `contactedProvider`, and counts. A field added to a result object
+later cannot leak through by default.
+
+Never audited, logged, or returned on any path: an API key or any prefix or length of one; a raw
+provider response body; a request or response header; an exception `message` or `stack`; a
+`claimToken`; `queryIdentityHash`, `activeLookupKey`, `requestScopeHash` or `idempotencyKey`.
+
+### Spending controls are enforced atomically, not advisorily
+
+A daily budget is enforced by a guarded compare-and-swap against the **live configured limit**, in
+the same transaction that writes the attempt ledger row. Concurrent workers cannot both take the
+last unit, and quota can never be charged without a ledger row explaining it. A mid-day budget
+change takes effect immediately, because the guard never reads the stored
+`limitAtLastReservation` — that column is history, not policy.
+
+There is **no refund path**, deliberately. Accounting may over-count a call that was reserved but
+never sent; it can never under-count a call that was sent. `contactedProvider` records which case a
+row is.
+
+### Duplicate outbound calls are prevented structurally
+
+The targeted AbuseIPDB path and the ordinary ADMIN batch contend on the **same** database
+compare-and-swap for the same row, so at most one of them can call the provider for it. Once a
+request has been handed to the transport, a non-expiring hold makes that row unclaimable by anyone
+until a path that *knows* the outcome clears it. A lease that merely expires is not enough: the
+window between lease expiry and recovery is exactly where a duplicate charge would occur.
+
+### Honest uncertainty
+
+The system claims exactly-once **database finalization** and single-owner execution. It does **not**
+claim exactly-once network delivery, and no system with a non-transactional third party can. A crash
+at or after transport hand-off is recorded as `ABANDONED` / `AMBIGUOUS_AFTER_CONTACT` — a terminal,
+queryable, audited "we do not know" — and is never retried automatically and never rendered as
+success, failure, or "no record found".
+
+### Not fixed here, and recorded rather than absorbed
+
+No provider's configured timeout bounds its `lookup()`: each clears its timeout when response
+*headers* arrive and reads the body afterwards. Phase 10A-2 bounds the call at its own call site,
+which is what its recovery machinery requires, but the ADMIN batch and the four synchronous expert
+endpoints remain unbounded on a stalled body read. Fixing that means changing five shared, merged
+provider modules and belongs in its own ticket under its own review.

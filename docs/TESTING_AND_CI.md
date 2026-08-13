@@ -185,3 +185,54 @@ regression — but if the SAME test fails on a second independent run, treat it 
   `LIVE_*_SMOKE=1` variable, never in any CI job.
 - The two mutation/concurrency evaluator gates — manual `workflow_dispatch` only.
 - Any deployment step — CI validates; it does not deploy anything anywhere.
+
+---
+
+## Phase 10A-2 — execution tests
+
+### No test may contact a live provider
+
+The rule is unchanged and now has more surface to cover. Direct providers are exercised through an
+**injected `fetchImpl`**, which runs the real provider parsing and the real normalized result model
+while contacting nobody. Stubbing the provider itself would prove nothing about the code that runs
+in production.
+
+`eval:phase7` remains the backstop: it replaces `fetch` with a throwing counter and asserts the
+count is zero across the whole pipeline. CI additionally sets every provider key to `''`.
+
+### The tiered execution gate
+
+`tests/unit/enrichmentOrchestrationInertness.test.js` no longer asserts that the whole
+orchestration package is inert — Phase 10A-2's purpose is to execute. It is **tiered** instead, and
+each module belongs to exactly one tier:
+
+| Tier | Modules | May do |
+|---|---|---|
+| CORE | 11 | decide and persist orchestration state. No provider import, no outbound call, no attempt/usage write, no timer |
+| LEDGER | `enrichmentQuotaService` | write attempt and usage rows. Still no provider |
+| EXECUTION | `enrichmentDirectExecutionService`, `enrichmentTargetedIocService` | resolve and call providers |
+| WORKER | `enrichmentWorker` | schedule |
+
+The file list is **exact**, so a new module cannot appear in any tier without a deliberate edit to
+the gate — and a `fetch(` added to any CORE module still fails, even if no test executes that line.
+`setInterval` is forbidden everywhere, including the worker: ticks must not overlap.
+
+### Real PostgreSQL is required for the execution suite
+
+`tests/integration/phase10a2Execution.test.js` self-skips unless **`TEST_DATABASE_URL`** is set.
+
+> **Trap worth knowing.** The real-PostgreSQL suites gate on `TEST_DATABASE_URL`, *not*
+> `DATABASE_URL`. Set only the latter and roughly 200 tests silently skip while the run still
+> reports green — you can "prove" the concurrency and quota guarantees with the concurrency and
+> quota tests switched off. Always set both.
+
+### Scope of the shipped suite
+
+The execution suite covers the **seven binding guarantees** plus quota atomicity, claim races,
+ordering, ambiguity and targeted selection — 21 real-PostgreSQL cases.
+
+Deliberately **not** covered, by explicit decision: the per-status permutation matrix
+(404 / 429 / 5xx / timeout / malformed body / network failure, for each of the five providers).
+Status mapping is covered by unit-level assertions on `resolveAttemptOutcome` rather than by an
+end-to-end case per status per provider. If a provider's normalization changes, that mapping is
+where a regression would surface.

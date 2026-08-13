@@ -41,7 +41,7 @@
 // candidates per call.
 
 const { ENRICHMENT_STATUS } = require("./iocEnrichmentTypes");
-const { IocEnrichmentValidationError } = require("./iocEnrichmentCacheRules");
+const { IocEnrichmentValidationError, ENRICHMENT_TERMINAL_REASON } = require("./iocEnrichmentCacheRules");
 const {
   listPendingCandidates,
   claimPendingJob,
@@ -218,7 +218,7 @@ async function applyRetryDecision({ prisma, now, retryPolicy, record, claimToken
  * returns a closed job result for every path, including cancellation and
  * unexpected exceptions.
  */
-async function processClaimedJob({ prisma, providerRegistry, now, ttlPolicy, retryPolicy, signal, record, claimToken }) {
+async function processClaimedJob({ prisma, providerRegistry, now, ttlPolicy, retryPolicy, signal, record, claimToken, hooks = null }) {
   const base = {
     enrichmentId: record.id,
     provider: record.provider,
@@ -242,6 +242,21 @@ async function processClaimedJob({ prisma, providerRegistry, now, ttlPolicy, ret
   }
   if (!provider || typeof provider.lookup !== "function") {
     return { job: await applyFailure(FAILURE_CLASS.UNKNOWN_PROVIDER), cancelled: false };
+  }
+
+  // Phase 10A-2 seam. The hook runs on the statement IMMEDIATELY preceding the
+  // provider call, which is what lets a caller mark its own attempt IN_FLIGHT
+  // (and place the contact hold) at the exact instant the request becomes
+  // possible. The ordinary ADMIN batch passes no hooks and reaches
+  // provider.lookup with nothing added to its path.
+  if (hooks && typeof hooks.beforeLookup === "function") {
+    try {
+      await hooks.beforeLookup({ record });
+    } catch {
+      // A hook that throws has not marked the attempt, so no request may be
+      // sent: treat it exactly like any other local fault before contact.
+      return { job: await applyFailure(FAILURE_CLASS.PROVIDER_PROGRAMMER_ERROR), cancelled: false };
+    }
   }
 
   // Exactly one provider call for this claimed job, outside any transaction.
@@ -452,6 +467,241 @@ async function runEnrichmentBatch(options) {
   return buildBatchSummary({ requestedBatchSize: batchSize, candidateCount: candidates.length, cancelled, results });
 }
 
+/**
+ * Phase 10A-2 — processes ONE explicitly named IOC job.
+ *
+ * ===========================================================================
+ * WHY THIS EXISTS, AND WHAT IT DELIBERATELY DOES NOT DO
+ * ===========================================================================
+ * The ordinary batch above LISTS candidates and works through them. Phase 10
+ * must not do that: a targeted pass may only touch the canonical row a
+ * Phase-10 job actually links, and widening into the batch's candidate set is
+ * precisely the failure binding guarantee 1 forbids. So this entry point takes
+ * an explicit `enrichmentId` and never calls listPendingCandidates.
+ *
+ * It shares the SAME claimPendingJob compare-and-swap the ADMIN batch uses.
+ * That is the whole of guarantee 7: the two paths contend on one lock for one
+ * row, so exactly one of them can ever call the provider for it.
+ *
+ * `signal` is intentionally absent from the parameter list. The ADMIN batch
+ * re-checks cancellation AFTER the provider returns and releases the claim
+ * with a refund — correct there, but on a contacted row that is exactly the
+ * duplicate charge Phase 10 exists to prevent (D-P10A2-07). A targeted caller
+ * drains instead of aborting.
+ *
+ * @param {{prisma: object, providerRegistry: object, now: Date,
+ *   ttlPolicy: Function, retryPolicy: Function, leaseMs: number,
+ *   enrichmentId: number, hooks?: {authorize?: Function, beforeLookup?: Function}}} options
+ * @returns {Promise<object>} a closed job result, exactly like the batch's
+ */
+async function runTargetedEnrichmentJob(options = {}) {
+  const { prisma, providerRegistry, now, ttlPolicy, leaseMs, enrichmentId, lookupMaxMs, hooks = null } = options;
+
+  let claim;
+  try {
+    claim = await claimPendingJob(enrichmentId, { client: prisma, now, leaseMs });
+  } catch {
+    return buildJobResult({
+      enrichmentId,
+      provider: null,
+      indicatorType: null,
+      indicator: null,
+      outcome: RUNNER_OUTCOME.CLAIM_FAILED,
+    });
+  }
+
+  // Lost the race, already terminal, not retry-eligible, budget spent, or
+  // held by the contact sentinel. Nothing is reserved and nobody is called.
+  if (!claim) {
+    return buildJobResult({
+      enrichmentId,
+      provider: null,
+      indicatorType: null,
+      indicator: null,
+      outcome: RUNNER_OUTCOME.TARGET_NOT_CLAIMABLE,
+    });
+  }
+
+  const { record, claimToken } = claim;
+  const base = {
+    enrichmentId: record.id,
+    provider: record.provider,
+    indicatorType: record.indicatorType,
+    indicator: record.indicator,
+  };
+
+  const attemptFields = { attemptCount: record.attemptCount, maxAttempts: record.maxAttempts };
+  const releaseAndReturn = async (outcome) => {
+    // Refund: this claim consumed one unit of the attempt budget for an
+    // attempt that never happened. Safe on every pre-contact path, and ONLY
+    // on a pre-contact path — see the ambiguity branch below.
+    const released = await safeRelease(prisma, record.id, claimToken, null, true);
+    return buildJobResult({
+      ...base,
+      ...attemptFields,
+      outcome: released ? outcome : RUNNER_OUTCOME.RELEASE_FAILED,
+    });
+  };
+
+  // --- Resolve the provider BEFORE anything is charged ---------------------
+  // A provider that cannot be resolved or is not configured is a LOCAL fault.
+  // Discovering it after reservation would spend a unit of real budget on a
+  // call that could never have happened.
+  let provider;
+  try {
+    provider = providerRegistry.resolve(record.provider);
+  } catch {
+    provider = null;
+  }
+  if (!provider || typeof provider.lookup !== "function") {
+    return releaseAndReturn(RUNNER_OUTCOME.UNKNOWN_PROVIDER);
+  }
+
+  // A side-effect-free credential/configuration check, supplied by the caller
+  // because only it knows the application configuration. Without this the
+  // provider's own lookup() would report SKIPPED_DISABLED — but only AFTER
+  // quota had been reserved and the attempt marked as contacted.
+  if (hooks && typeof hooks.resolveDescriptor === "function") {
+    let descriptor;
+    try {
+      descriptor = await hooks.resolveDescriptor({ record });
+    } catch {
+      descriptor = { ok: false };
+    }
+    if (!descriptor || descriptor.ok !== true) {
+      return releaseAndReturn(RUNNER_OUTCOME.NOT_CONFIGURED_BEFORE_LOOKUP);
+    }
+  }
+
+  // --- Reserve quota, still before any call --------------------------------
+  if (hooks && typeof hooks.authorize === "function") {
+    let decision;
+    try {
+      decision = await hooks.authorize({ record, claimToken });
+    } catch {
+      decision = { proceed: false, reasonCode: "AUTHORIZE_FAILED" };
+    }
+    if (!decision || decision.proceed !== true) {
+      return releaseAndReturn(RUNNER_OUTCOME.REFUSED_BEFORE_LOOKUP);
+    }
+  }
+
+  // --- The contact transition ----------------------------------------------
+  // Marks the attempt IN_FLIGHT and places the non-expiring hold, together.
+  // It MUST report success: if the lease was lost while quota was being
+  // reserved, the guards match zero rows and another owner may already be
+  // calling this provider. Proceeding then would be the duplicate call the
+  // whole design exists to prevent.
+  if (hooks && typeof hooks.beforeLookup === "function") {
+    let contacted = false;
+    try {
+      contacted = await hooks.beforeLookup({ record, claimToken });
+    } catch {
+      contacted = false;
+    }
+    if (contacted !== true) {
+      // Nothing was sent. The quota unit is retained (there is no refund
+      // path), but no provider is called and no ambiguity is recorded.
+      return releaseAndReturn(RUNNER_OUTCOME.CONTACT_TRANSITION_LOST);
+    }
+  }
+
+  // Every post-contact uncertainty ends here, and all of them end the same
+  // way. The claim is NOT released: releasing writes nextAttemptAt, which
+  // would clear the contact hold and re-open the duplicate-call window.
+  //
+  // But the hold alone is not enough either. It only FREEZES the row — still
+  // PENDING, still holding activeCacheKey, blocking every future ask about
+  // this subject until some later sweep happens to run. A terminal row can
+  // never be claimed again, so terminalizing is what actually closes the
+  // window. Guarded on THIS worker's claim token, so a completion that did
+  // commit, or a row another owner has taken, is left exactly as it is.
+  const ambiguousAndReturn = async () => {
+    await safeDeadLetter(prisma, record.id, claimToken, ENRICHMENT_TERMINAL_REASON.AMBIGUOUS_AFTER_CONTACT, now);
+    return buildJobResult({
+      ...base,
+      ...attemptFields,
+      outcome: RUNNER_OUTCOME.AMBIGUOUS_AFTER_CONTACT,
+    });
+  };
+
+  // --- Exactly one bounded provider call -----------------------------------
+  // Bounded HERE as well as on the direct path: no provider's own timeout
+  // bounds lookup(), because each clears its timeout when response headers
+  // arrive and reads the body afterwards. Without a bound, a stalled body
+  // read runs until the stale sweep resolves an attempt that is still live.
+  let result;
+  try {
+    result = await raceWithBound(provider.lookup(buildLookupInput(record, now, undefined)), lookupMaxMs);
+  } catch {
+    // The request was already handed to the transport, so what the provider
+    // did with it is unknowable.
+    return ambiguousAndReturn();
+  }
+
+  if (!result || result.status === ENRICHMENT_STATUS.PENDING) {
+    // A provider contract violation, but the request WAS sent.
+    return ambiguousAndReturn();
+  }
+
+  let ttl;
+  try {
+    ttl = ttlPolicy({ status: result.status, queriedAt: result.queriedAt, retryAfterSeconds: result.retryAfterSeconds });
+  } catch {
+    return ambiguousAndReturn();
+  }
+
+  let completion;
+  try {
+    completion = await completeClaimedJob(
+      { id: record.id, claimToken, result, expiresAt: ttl.expiresAt },
+      { client: prisma }
+    );
+  } catch {
+    // The write may or may not have committed, and the call definitely
+    // happened. Uncertain in both directions — and if it DID commit, the
+    // guarded dead-letter finds a non-PENDING row and leaves it alone.
+    return ambiguousAndReturn();
+  }
+
+  if (completion.outcome === COMPLETION_OUTCOME.NOT_CLAIM_OWNER) {
+    return buildJobResult({ ...base, ...attemptFields, outcome: RUNNER_OUTCOME.STALE_CLAIM_ON_COMPLETION });
+  }
+
+  return buildJobResult({
+    ...base,
+    outcome: RUNNER_OUTCOME.COMPLETED,
+    terminalStatus: completion.record.status,
+    queriedAt: completion.record.queriedAt,
+    expiresAt: completion.record.expiresAt,
+    attemptCount: completion.record.attemptCount,
+    maxAttempts: completion.record.maxAttempts,
+    httpStatus: result.httpStatus ?? null,
+    errorCode: result.errorInfo ? result.errorInfo.code : null,
+    retryAfterSeconds: result.retryAfterSeconds ?? null,
+  });
+}
+
+/**
+ * The worker's own end-to-end bound on one lookup. `lookupMaxMs` omitted means
+ * unbounded, which is what the ordinary ADMIN batch has always done.
+ */
+async function raceWithBound(promise, lookupMaxMs) {
+  if (!Number.isInteger(lookupMaxMs) || lookupMaxMs <= 0) return promise;
+  let timer = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error("lookup exceeded the worker's bound")), lookupMaxMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 module.exports = {
   runEnrichmentBatch,
+  runTargetedEnrichmentJob,
 };

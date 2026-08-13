@@ -101,7 +101,18 @@ generic `data` object.
 `executionState` is a closed vocabulary:
 
 * `PAUSED_WORKER_DISABLED` — `ENRICHMENT_WORKER_ENABLED=false` (the default).
-* `NOT_IMPLEMENTED` — the switch is on, but Phase 10A-1 ships no worker, so nothing will run.
+* `ACTIVE` — the switch is on and a worker will pick eligible work up.
+
+> **Amended by Phase 10A-2 (`DECISIONS.md` D-P10A2-03).** This section previously read
+> `NOT_IMPLEMENTED` — "the switch is on, but Phase 10A-1 ships no worker, so nothing will run".
+> That was true while no worker existed and is false now, so the value is **retired** rather than
+> left in a closed vocabulary it can no longer truthfully take. This is the **only** change Phase
+> 10A-2 makes to any field on this page: route paths, status codes, `outcome`, `run`, `items`, the
+> summary shape and the upload block's exact six keys are all unchanged.
+>
+> NVD's continued non-execution is deliberately **not** expressed here. `executionState` is a
+> deployment-level fact about whether a worker exists; NVD is a per-provider fact, carried by
+> `SKIP_REASONS.DELEGATE_BATCH_REQUIRED` and the summary's `source: VULNERABILITY_ENRICHMENT`.
 
 ### `consideredProviders.noSubject` is durably recorded
 

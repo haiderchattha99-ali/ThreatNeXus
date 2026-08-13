@@ -188,3 +188,93 @@ contention — not from any logic defect. It is confirmed non-systemic every tim
 same files pass cleanly when re-run alone or in a smaller batch. CI's own GitHub Actions runners have not
 exhibited this — it has only been observed on local developer-machine runs. If a CI run itself ever shows
 this pattern, re-running the job is the correct first response before treating it as a regression.
+
+## Enrichment worker (Phase 10A-2)
+
+### Is it running?
+
+```bash
+docker compose logs backend | grep -i "enrichment worker"
+```
+
+Silence means it is **off**, which is the default and the correct state unless someone deliberately
+enabled it. When on you will see `Enrichment worker started (ENRICHMENT_WORKER_ENABLED=true)`.
+
+Per-tick activity is in the audit trail rather than the logs:
+
+```sql
+SELECT action, COUNT(*) FROM "AuditLog"
+WHERE action LIKE 'enrichment.worker.%' OR action LIKE 'enrichment.lookup.%'
+GROUP BY action ORDER BY 2 DESC;
+```
+
+### How much quota has been spent?
+
+```sql
+SELECT provider, lane, "usageDate", "reservedCount", "limitAtLastReservation"
+FROM "ProviderDailyUsage" ORDER BY "usageDate" DESC, provider;
+```
+
+`reservedCount` counts **reservations**, which is deliberately conservative: a call reserved but
+never sent is still counted, because there is no refund path and over-counting a paid budget is the
+only safe direction. To see which reservations actually reached a provider:
+
+```sql
+SELECT provider, lane, outcome, "contactedProvider", COUNT(*)
+FROM "ProviderLookupAttempt" GROUP BY 1,2,3,4 ORDER BY 5 DESC;
+```
+
+The ADMIN `GET /api/enrichment/usage` endpoint reports the same data with explicit scope metadata:
+coverage is `PARTIAL`, because the synchronous expert endpoints and the two ADMIN batches are not
+Phase-10 reservations and are not counted. No total provider-call figure is fabricated.
+
+### A job is stuck and I want to know why
+
+```sql
+SELECT id, provider, state, "terminalReasonCode", "attemptCount", "activeLookupKey"
+FROM "ProviderLookupJob" WHERE state NOT IN ('SUCCEEDED','NO_RECORD') ORDER BY id DESC LIMIT 20;
+```
+
+| What you see | What it means |
+|---|---|
+| `PENDING`, worker off | Correct. Nothing will run until the worker is enabled. |
+| `SKIPPED_NOT_CONFIGURED` | The provider has no credential. **No quota was spent.** |
+| `SKIPPED_BUDGET` | The daily budget refused it. **No provider was called.** |
+| `WAITING_ON_DELEGATE` | AbuseIPDB/NVD. The ADMIN batch or the targeted pass still owns the work. |
+| `DEAD_LETTER` + `AMBIGUOUS_AFTER_CONTACT` | **We do not know** whether the provider answered. See below. |
+
+### `AMBIGUOUS_AFTER_CONTACT` — what to do
+
+A worker died at or after handing a request to the transport. Whether the provider received,
+processed and **charged** for that call is unknowable from inside this system, so the job is
+terminal and is deliberately **not** retried.
+
+For AbuseIPDB the linked `IocEnrichment` row is also driven terminal, which is what stops the
+ordinary ADMIN batch from re-calling the same indicator later.
+
+This is a human decision, not an automatic one. If you want the answer, create a **new run** with
+`force` and a written justification — that is an explicit choice to spend quota again, and it is
+recorded as one.
+
+### A contacted row is held and no worker is running
+
+If a worker died after contacting a provider and no worker has run since, that one `IocEnrichment`
+row stays unclaimable (its `nextAttemptAt` carries a far-future sentinel) and the ADMIN batch will
+skip it. **This is deliberate:** freezing one row is safer than double-calling a paid third party
+when we cannot establish what happened. Starting a worker resolves it on the next tick.
+
+To find them:
+
+```sql
+SELECT id, indicator, status, "nextAttemptAt" FROM "IocEnrichment"
+WHERE "nextAttemptAt" > now() + interval '1 year';
+```
+
+### Turning it off
+
+```bash
+ENRICHMENT_WORKER_ENABLED=false docker compose up -d
+```
+
+No worker is constructed. In-flight leases expire on their own. Already-persisted evidence stays —
+this stops future calls, it does not retract completed ones.

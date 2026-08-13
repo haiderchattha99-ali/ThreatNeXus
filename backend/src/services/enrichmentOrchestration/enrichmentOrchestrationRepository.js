@@ -215,6 +215,362 @@ async function updateJob(client, jobId, data) {
   return client.providerLookupJob.update({ where: { id: jobId }, data });
 }
 
+// --- Phase 10A-2 execution -------------------------------------------------
+//
+// Every statement below is a GUARDED single statement whose WHERE names the
+// state it expects. That guard IS the concurrency control, exactly as
+// iocEnrichmentRepository.js's header explains: at READ COMMITTED PostgreSQL
+// row-locks the target for the duration of the UPDATE and re-evaluates the
+// WHERE against the winner's committed row, so a loser matches zero rows
+// instead of overwriting the winner's work.
+//
+// `claimToken` is the ONLY completion credential. `updatedAt` is never used as
+// a concurrency version token — that mistake is already recorded and withdrawn
+// in STATUS.md for P1-T4.
+
+const crypto = require("node:crypto");
+
+const NON_TERMINAL_DIRECT_STATES = Object.freeze(["PENDING"]);
+
+/**
+ * Bounded, deterministically ordered direct-execution candidates.
+ *
+ * RETRY_WAIT is deliberately absent: Phase 10A-2 never retries a provider
+ * OUTCOME (D-P10A2-06), so no job ever enters that state and listing it would
+ * imply a retry path that does not exist.
+ */
+async function listDirectCandidates(client, { providers, asOf, take }) {
+  return client.providerLookupJob.findMany({
+    where: {
+      trigger: "RUN_DIRECT",
+      provider: { in: providers },
+      state: { in: [...NON_TERMINAL_DIRECT_STATES] },
+      OR: [{ claimToken: null }, { leaseExpiresAt: { lte: asOf } }],
+      // Budget-exhausted rows are EXCLUDED here rather than claimed and
+      // refused. claimLookupJob would refuse them anyway, so including them
+      // burns scan windows on rows that can never be claimed — and with a
+      // bounded scan, enough of them at the head of the queue starve every
+      // eligible job behind them forever. They are retired by their own
+      // bounded pass (listExhaustedDirectJobs) instead.
+      //
+      // A Prisma FIELD REFERENCE, so the comparison is column-to-column in
+      // SQL rather than a constant read in JavaScript first.
+      attemptCount: { lt: client.providerLookupJob.fields.maxAttempts },
+    },
+    orderBy: [{ requestedAt: "asc" }, { id: "asc" }],
+    take,
+  });
+}
+
+/**
+ * Targeted AbuseIPDB candidates — Phase-10 jobs whose LINKED canonical row is
+ * actually claimable right now.
+ *
+ * The relation filter mirrors every gate claimPendingJob will apply. Without
+ * it, the same head-of-queue jobs whose delegates are leased, retry-gated or
+ * budget-exhausted are re-selected on every tick, every claim loses, and later
+ * eligible work is never reached.
+ *
+ * `provider` is matched by POSITIVE equality rather than by excluding nvd: a
+ * negative filter silently admits any provider added later, whereas this
+ * structurally excludes everything that is not AbuseIPDB.
+ */
+async function listTargetedDelegateCandidates(client, { asOf, take, skip = 0 }) {
+  return client.providerLookupJob.findMany({
+    where: {
+      trigger: "RUN_DELEGATED",
+      provider: "abuseipdb",
+      state: "WAITING_ON_DELEGATE",
+      iocEnrichmentId: { not: null },
+      iocEnrichment: {
+        is: {
+          status: "PENDING",
+          AND: [
+            { OR: [{ claimToken: null }, { leaseExpiresAt: { lte: asOf } }] },
+            { OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: asOf } }] },
+            // The budget gate claimPendingJob also applies. Omitting it made
+            // this filter claim to "mirror every gate" while still returning
+            // rows that can never be claimed, which starves everything behind
+            // them once a bounded scan fills with exhausted delegates.
+            { attemptCount: { lt: client.iocEnrichment.fields.maxAttempts } },
+          ],
+        },
+      },
+    },
+    orderBy: [{ requestedAt: "asc" }, { id: "asc" }],
+    take,
+    skip,
+    include: { iocEnrichment: true },
+  });
+}
+
+/**
+ * Atomically leases one direct job AND consumes one unit of its attempt
+ * budget, in the SAME statement — so two racers can never both count an
+ * attempt for the same lease.
+ *
+ * `maxAttempts` is read first and used as a constant in the WHERE. That is
+ * safe because it is immutable for a row's life, while `attemptCount` is
+ * re-evaluated by PostgreSQL at update time against the winner's committed
+ * row — the identical reasoning claimPendingJob documents.
+ *
+ * @returns {Promise<{record: object, claimToken: string}|null>} null for every
+ *   loser: already leased, already terminal, or budget exhausted.
+ */
+async function claimLookupJob(client, id, { now, leaseMs }) {
+  const existing = await client.providerLookupJob.findUnique({ where: { id } });
+  if (!existing || !NON_TERMINAL_DIRECT_STATES.includes(existing.state)) return null;
+  const maxAttempts = Number.isInteger(existing.maxAttempts) ? existing.maxAttempts : 0;
+
+  const claimToken = crypto.randomUUID();
+
+  const { count } = await client.providerLookupJob.updateMany({
+    where: {
+      id,
+      state: { in: [...NON_TERMINAL_DIRECT_STATES] },
+      attemptCount: { lt: maxAttempts },
+      OR: [{ claimToken: null }, { leaseExpiresAt: { lte: now } }],
+    },
+    data: {
+      state: "LEASED",
+      claimToken,
+      claimedAt: now,
+      leaseExpiresAt: new Date(now.getTime() + leaseMs),
+      lastAttemptAt: now,
+      attemptCount: { increment: 1 },
+    },
+  });
+  if (count === 0) return null;
+
+  const record = await client.providerLookupJob.findUnique({ where: { id } });
+  // Ownership is never assumed from a local variable alone.
+  if (!record || record.claimToken !== claimToken) return null;
+  return { record, claimToken };
+}
+
+/**
+ * Drives a claimed direct job to a terminal state, guarded by its claim token.
+ *
+ * `activeLookupKey: null` is the load-bearing field: it is what releases the
+ * work identity so a FUTURE ask about this subject can create fresh work.
+ * PostgreSQL treats multiple NULLs in a unique index as distinct, so the
+ * terminal row stays as history without blocking anything.
+ *
+ * @returns {Promise<boolean>} true when THIS call performed the transition
+ */
+async function terminalizeClaimedJob(client, { id, claimToken, state, now, evidence, freshUntil, httpStatus, errorCode, retryAfterSeconds, terminalReasonCode, contacted = true }) {
+  const { count } = await client.providerLookupJob.updateMany({
+    where: { id, state: "LEASED", claimToken },
+    data: {
+      state,
+      completedAt: now,
+      // `queriedAt` is what the API derives the public `contacted` field from,
+      // so it must be written ONLY when a provider was genuinely asked. A
+      // pre-call outcome — an unresolvable provider, a missing credential —
+      // is terminal without contact, and stamping it here reported
+      // `contacted: true` for a call that never happened.
+      ...(contacted ? { queriedAt: now } : {}),
+      freshUntil: freshUntil ?? null,
+      activeLookupKey: null,
+      claimToken: null,
+      claimedAt: null,
+      leaseExpiresAt: null,
+      httpStatus: httpStatus ?? null,
+      errorCode: errorCode ?? null,
+      retryAfterSeconds: retryAfterSeconds ?? null,
+      terminalReasonCode: terminalReasonCode ?? null,
+      ...(state === "DEAD_LETTER" ? { deadLetteredAt: now } : {}),
+      ...(evidence || {}),
+    },
+  });
+  return count === 1;
+}
+
+/**
+ * Refuses a claimed direct job for budget in ONE statement: terminalize,
+ * refund the attempt, and clear the lease and the work identity together.
+ *
+ * Deliberately not "release, then terminalize". That ordering leaves a window
+ * in which another worker can claim the released job and call the provider
+ * before the first worker records the refusal.
+ */
+async function refuseClaimedJobForBudget(client, { id, claimToken, now }) {
+  const { count } = await client.providerLookupJob.updateMany({
+    where: { id, state: "LEASED", claimToken },
+    data: {
+      state: "SKIPPED_BUDGET",
+      completedAt: now,
+      activeLookupKey: null,
+      claimToken: null,
+      claimedAt: null,
+      leaseExpiresAt: null,
+      // The attempt never happened — no provider was contacted and no quota
+      // was reserved — so the budget unit this claim consumed is given back.
+      attemptCount: { decrement: 1 },
+    },
+  });
+  return count === 1;
+}
+
+/**
+ * Transitions a WAITING_ON_DELEGATE job to a terminal state, guarded on that
+ * state. Used by reconciliation, by targeted budget refusal, and by ambiguity
+ * resolution — none of which holds a Phase-10 claim token, because the
+ * targeted path never leases the Phase-10 job (D-P10A2-05).
+ */
+async function terminalizeDelegatedJob(client, { id, state, now, terminalReasonCode, queriedAt, freshUntil, httpStatus, errorCode, retryAfterSeconds }) {
+  const { count } = await client.providerLookupJob.updateMany({
+    where: { id, state: "WAITING_ON_DELEGATE" },
+    data: {
+      state,
+      completedAt: now,
+      activeLookupKey: null,
+      terminalReasonCode: terminalReasonCode ?? null,
+      // Carried from the DELEGATE's own durable row, not invented here. The
+      // API derives the public `contacted` field from queriedAt, so a
+      // successfully contacted delegated job that copied nothing reported
+      // `contacted: false` — the exact inverse of the truth.
+      ...(queriedAt ? { queriedAt } : {}),
+      ...(freshUntil !== undefined ? { freshUntil } : {}),
+      ...(httpStatus !== undefined ? { httpStatus } : {}),
+      ...(errorCode !== undefined ? { errorCode } : {}),
+      ...(retryAfterSeconds !== undefined ? { retryAfterSeconds } : {}),
+      ...(state === "DEAD_LETTER" ? { deadLetteredAt: now } : {}),
+    },
+  });
+  return count === 1;
+}
+
+/**
+ * Direct jobs that have spent their attempt budget and can never be claimed.
+ *
+ * They are excluded from the candidate query precisely so they cannot starve
+ * it, which means something else has to retire them or they sit non-terminal
+ * forever holding activeLookupKey. This is that something.
+ */
+async function listExhaustedDirectJobs(client, { asOf, take }) {
+  return client.providerLookupJob.findMany({
+    where: {
+      trigger: "RUN_DIRECT",
+      state: { in: [...NON_TERMINAL_DIRECT_STATES] },
+      attemptCount: { gte: client.providerLookupJob.fields.maxAttempts },
+      OR: [{ claimToken: null }, { leaseExpiresAt: { lte: asOf } }],
+    },
+    orderBy: [{ requestedAt: "asc" }, { id: "asc" }],
+    take,
+  });
+}
+
+/**
+ * Retires an exhausted, unleased direct job. Guarded so a job another worker
+ * is actively processing cannot be retired out from under it.
+ */
+async function retireExhaustedDirectJob(client, { id, now }) {
+  const { count } = await client.providerLookupJob.updateMany({
+    where: {
+      id,
+      state: { in: [...NON_TERMINAL_DIRECT_STATES] },
+      attemptCount: { gte: client.providerLookupJob.fields.maxAttempts },
+      OR: [{ claimToken: null }, { leaseExpiresAt: { lte: now } }],
+    },
+    data: {
+      state: "DEAD_LETTER",
+      completedAt: now,
+      deadLetteredAt: now,
+      terminalReasonCode: "MAX_ATTEMPTS_EXHAUSTED",
+      activeLookupKey: null,
+      claimToken: null,
+      claimedAt: null,
+      leaseExpiresAt: null,
+    },
+  });
+  return count === 1;
+}
+
+/**
+ * Runs whose every item's job is terminal but whose own state is not.
+ *
+ * A job can go terminal on a path that has no run context to refresh — a
+ * stale-attempt sweep, an ambiguity retirement — so without this pass such a
+ * run reports PENDING forever while all of its work has finished.
+ */
+async function listStaleNonTerminalRuns(client, { take }) {
+  return client.findingEnrichmentRun.findMany({
+    where: {
+      state: { in: ["PENDING", "RUNNING"] },
+      // `some` as well as `every`, and not for symmetry: Prisma's `every` is
+      // vacuously TRUE for a run with no items, and recomputeRunState maps an
+      // empty item set to the terminal SKIPPED. Without this guard a run whose
+      // items are not yet visible could be settled out from under its own
+      // creation. A run with no items is also not what this pass exists for.
+      items: {
+        some: {},
+        every: { OR: [{ lookupJobId: null }, { lookupJob: { is: { completedAt: { not: null } } } }] },
+      },
+    },
+    orderBy: { id: "asc" },
+    take,
+    select: { id: true },
+  });
+}
+
+/**
+ * Direct jobs whose lease has expired, for stale-claim recovery. The owning
+ * attempt is included because the lease alone cannot decide what to do: a
+ * contacted attempt must never be requeued.
+ */
+async function listExpiredDirectLeases(client, { asOf, take }) {
+  return client.providerLookupJob.findMany({
+    where: { state: "LEASED", leaseExpiresAt: { lte: asOf } },
+    orderBy: { leaseExpiresAt: "asc" },
+    take,
+    include: { attempts: { orderBy: { attemptNumber: "desc" }, take: 1 } },
+  });
+}
+
+/**
+ * Returns an expired-lease job to the queue. `attemptCount` is NOT refunded:
+ * the attempt genuinely happened, and refunding it would let a job that
+ * crashes reliably retry forever.
+ */
+async function releaseExpiredDirectLease(client, { id, claimToken, exhausted, now }) {
+  const { count } = await client.providerLookupJob.updateMany({
+    where: { id, state: "LEASED", claimToken },
+    data: exhausted
+      ? {
+          state: "DEAD_LETTER",
+          completedAt: now,
+          deadLetteredAt: now,
+          terminalReasonCode: "MAX_ATTEMPTS_EXHAUSTED",
+          activeLookupKey: null,
+          claimToken: null,
+          claimedAt: null,
+          leaseExpiresAt: null,
+        }
+      : {
+          state: "PENDING",
+          claimToken: null,
+          claimedAt: null,
+          leaseExpiresAt: null,
+        },
+  });
+  return count === 1;
+}
+
+/**
+ * The distinct run ids holding an item that points at one job. Used to refresh
+ * every affected run after a job goes terminal — a shared job can belong to
+ * many runs, and leaving any of them stale would misreport what is known.
+ */
+async function listRunIdsForJob(client, jobId) {
+  const rows = await client.findingEnrichmentRunItem.findMany({
+    where: { lookupJobId: jobId },
+    select: { runId: true },
+    distinct: ["runId"],
+  });
+  return rows.map((row) => row.runId);
+}
+
 // --- Delegate rows ---------------------------------------------------------
 //
 // There is deliberately NO delegate lookup here. Finding-or-creating a delegate
@@ -256,4 +612,18 @@ module.exports = {
   listJobsInState,
   updateJob,
   listDailyUsage,
+  // Phase 10A-2 execution
+  NON_TERMINAL_DIRECT_STATES,
+  listDirectCandidates,
+  listTargetedDelegateCandidates,
+  claimLookupJob,
+  terminalizeClaimedJob,
+  refuseClaimedJobForBudget,
+  terminalizeDelegatedJob,
+  listExpiredDirectLeases,
+  releaseExpiredDirectLease,
+  listRunIdsForJob,
+  listExhaustedDirectJobs,
+  retireExhaustedDirectJob,
+  listStaleNonTerminalRuns,
 };

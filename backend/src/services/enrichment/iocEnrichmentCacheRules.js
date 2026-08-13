@@ -91,6 +91,14 @@ const ENRICHMENT_TERMINAL_REASON = Object.freeze({
   // The row was found already at/over its budget before an attempt could
   // start — the sweep path for a job stranded by an earlier crash.
   MAX_ATTEMPTS_EXHAUSTED: "MAX_ATTEMPTS_EXHAUSTED",
+  // Added in Phase 10A-2. The process died at or after the moment the request
+  // was handed to the transport, so whether the provider received, processed
+  // and CHARGED for it is unknowable from inside this system. The row is
+  // retired rather than retried: a retry could double-charge a paid third
+  // party, and a fabricated failure would invent an outcome no provider gave.
+  // Deliberately NOT one of the MAX_ATTEMPTS_* codes — the attempt budget is
+  // irrelevant here, because one ambiguous contact is already enough to stop.
+  AMBIGUOUS_AFTER_CONTACT: "AMBIGUOUS_AFTER_CONTACT",
 });
 
 const ENRICHMENT_TERMINAL_REASON_VALUES = Object.freeze(Object.values(ENRICHMENT_TERMINAL_REASON));
