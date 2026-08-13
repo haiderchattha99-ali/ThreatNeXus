@@ -91,6 +91,27 @@ const RUNNER_OUTCOME = Object.freeze({
   // constructed and provider.lookup was never reached; the claim was released
   // and its attempt-budget unit refunded, because no attempt took place.
   REFUSED_BEFORE_LOOKUP: "REFUSED_BEFORE_LOOKUP",
+  // The provider has no credential configured. Discovered by a side-effect-
+  // free descriptor check AFTER the claim and BEFORE any reservation, so an
+  // incomplete deployment cannot spend a unit of real budget on a call that
+  // could never have been made. The claim is released and refunded.
+  NOT_CONFIGURED_BEFORE_LOOKUP: "NOT_CONFIGURED_BEFORE_LOOKUP",
+  // The guarded contact transition (attempt -> IN_FLIGHT plus the contact
+  // hold) matched zero rows, which means this worker no longer owns the lease
+  // — most likely it expired while quota was being reserved. Another owner
+  // may already be calling the provider, so this worker must not. Nothing was
+  // sent.
+  CONTACT_TRANSITION_LOST: "CONTACT_TRANSITION_LOST",
+  // The request reached the transport and no durable answer followed: the
+  // worker's bound fired, the provider threw, it violated its contract, or
+  // the completion write's outcome is unknown. What the provider did with the
+  // request is UNKNOWABLE from here.
+  //
+  // The claim is deliberately NOT released. Releasing writes nextAttemptAt,
+  // which would clear the non-expiring contact hold and make the row
+  // claimable again — re-opening the duplicate-call window. The caller
+  // terminalizes both rows instead, and nothing is ever retried automatically.
+  AMBIGUOUS_AFTER_CONTACT: "AMBIGUOUS_AFTER_CONTACT",
   // The explicitly named job could not be claimed at all: already terminal,
   // lost to another worker, not yet retry-eligible, budget exhausted, or held
   // by the contact sentinel. Distinct from SKIPPED_NOT_CLAIMED, which follows
@@ -297,6 +318,14 @@ function buildJobResult({
   nextAttemptAt = null,
   attemptCount = null,
   maxAttempts = null,
+  // Phase 10A-2, targeted path only. The Phase-10 attempt ledger has to record
+  // WHICH kind of failure a negative result was — a provider that refused the
+  // request, one that broke, and one that was never reached are three
+  // different facts. Without these the ledger could only ever say
+  // TRANSPORT_ERROR. Additive: the ADMIN batch supplies none of them.
+  httpStatus = null,
+  errorCode = null,
+  retryAfterSeconds = null,
 }) {
   if (!RUNNER_OUTCOME_VALUES.includes(outcome)) {
     throw new EnrichmentRunnerValidationError(`buildJobResult: unknown outcome "${String(outcome)}"`);
@@ -334,6 +363,11 @@ function buildJobResult({
     nextAttemptAt: cloneDateOrNull(nextAttemptAt),
     attemptCount: Number.isInteger(attemptCount) ? attemptCount : null,
     maxAttempts: Number.isInteger(maxAttempts) ? maxAttempts : null,
+    httpStatus: Number.isInteger(httpStatus) ? httpStatus : null,
+    // A closed provider error code, never free text — the same rule
+    // failureClass follows above.
+    errorCode: typeof errorCode === "string" ? errorCode : null,
+    retryAfterSeconds: Number.isInteger(retryAfterSeconds) ? retryAfterSeconds : null,
   });
 }
 

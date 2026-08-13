@@ -134,10 +134,21 @@ async function reconcileDelegatedJobs(options = {}) {
     // create fresh work. PostgreSQL treats multiple NULLs in a unique index
     // as distinct, so the terminal row stays as history without blocking.
     // eslint-disable-next-line no-await-in-loop
+    // Carry the DELEGATE's own durable evidence across, rather than only its
+    // verdict. The API derives the public `contacted` field from queriedAt, so
+    // a job that copied the state but not the timestamp reported a
+    // successfully contacted provider as contacted:false.
+    const delegate = job.iocEnrichment || job.vulnerabilityEnrichmentJob || null;
     const transitioned = await repository.terminalizeDelegatedJob(client, {
       id: job.id,
       state,
       now,
+      queriedAt: delegate && delegate.queriedAt ? delegate.queriedAt : null,
+      freshUntil: delegate && delegate.expiresAt !== undefined ? delegate.expiresAt : undefined,
+      httpStatus: delegate && delegate.httpStatus !== undefined ? delegate.httpStatus : undefined,
+      errorCode: delegate && delegate.errorCode !== undefined ? delegate.errorCode : undefined,
+      retryAfterSeconds:
+        delegate && delegate.retryAfterSeconds !== undefined ? delegate.retryAfterSeconds : undefined,
     });
     // eslint-disable-next-line no-continue
     if (!transitioned) continue;

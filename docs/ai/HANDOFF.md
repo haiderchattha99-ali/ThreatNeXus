@@ -141,7 +141,65 @@ test.
   `resolveAttemptOutcome`.
 - `RETRY_WAIT` is now an unused enum value; no push wakeup; one provider call in flight per process.
 
+## The final independent review happened, and its P1 checklist is now closed
+
+The final Codex implementation review returned **NOT APPROVED FOR PR — 0 P0, 11 P1, 1 P2**. The
+writer began applying the corrections and its account hit a spend limit mid-fix; a second Claude
+session took the lease over (`bad84451` → `2243577d`) from the live dirty worktree without
+restarting, re-designing or re-reviewing anything.
+
+**No correction changed the approved architecture.** Every one implements contract v3 as written, so
+no second independent review was required and none was performed.
+
+| # | P1 finding | Correction |
+|---|---|---|
+| 1 | Targeted lookup had no worker-level bound | `raceWithBound` in the runner; `lookupMaxMs` threaded through the service and the worker's targeted pass |
+| 2 | Descriptor resolved after reservation; attempt number not durable | `hooks.resolveDescriptor` runs after the claim and before `authorize`; ledger numbers come from the claimed canonical row's `attemptCount` |
+| 3 | Contact transition non-atomic and unchecked | one transaction, both guards must match exactly one row; `CONTACT_TRANSITION_LOST`; post-contact failures never reach the retry policy |
+| 4 | `FINISHED attempt ⇒ terminal job` not maintained | direct ambiguity and post-call writes are single guarded transactions (`StaleClaimError` rolls back); the sweep's finalize+terminalize merged; recovery no longer requeues a contacted `FINISHED` attempt, it terminalizes the job |
+| 5 | Targeted success skipped Risk v1 | `recalculateRiskSafely` → the existing `recalculateAfterEnrichment` boundary, isolated so a risk failure cannot disturb the enrichment result |
+| 6 | Terminal jobs left runs non-terminal | both direct pre-call branches refresh their runs; new bounded `reconcileRunStates` pass after the sweep |
+| 7 | `contacted` false in both directions | `terminalizeClaimedJob({contacted})` stamps `queriedAt` only on a real call; reconciliation carries the delegate's own `queriedAt` across |
+| 8 | Targeted outcomes and diagnostics wrong | `resolveTargetedOutcome` splits `FAILED` on stored evidence; `httpStatus`/`errorCode`/`retryAfterSeconds` carried end to end |
+| 9 | Exhausted rows starved both passes | budget gate added to both candidate queries; new bounded `retireExhaustedDirectJobs` retirement pass |
+| 10 | Binding API contract not amended | `PHASE-10A1-API-CONTRACT.md` retires `NOT_IMPLEMENTED` for `ACTIVE`, citing D-P10A2-03 |
+| 11 | Core suite never ran the targeted path | 12 new end-to-end cases driving the real service through an injected registry |
+| 12 (P2) | Inertness gate did not police the worker tier | worker tier now under the same provider prohibition, plus a list-independent check that only execution modules may call `.lookup(` |
+
+### A real defect the new tests caught
+
+The ambiguity path called `deadLetterUnleasedJob` on the canonical row — which requires **no live
+lease**, while that row's lease is still held by the very worker running the code. It matched zero
+rows every time, so the row stayed `PENDING` forever, frozen by its contact hold and blocking every
+future ask about that subject. Terminalization moved into the runner, the only place holding the
+claim token, as a guarded `deadLetterClaimedJob`. No duplicate call was ever possible either way —
+the hold prevented that — but the intended containment simply was not happening.
+
+`listStaleNonTerminalRuns` also needed `items: { some: {} }`: Prisma's `every` is vacuously true for
+a run with no items, and an empty item set recomputes to the terminal `SKIPPED`.
+
+### Evidence at the corrected tip
+
+| Gate | Result |
+|---|---|
+| Core-guarantee suite | **33/33** real PostgreSQL (was 21) |
+| Full backend suite, real PG | **3495 passed, 0 failed, 2 skipped** on a clean run |
+| Nine core evaluators | **all PASS**, including the Risk v1 locked-contract fingerprint |
+| Risk v1 implementation | `backend/src/services/risk/` **empty diff** |
+| Prisma schema / migrations | **unchanged by this correction set** — no file under `prisma/` is in the diff |
+| Hygiene (CI's three checks) · `git diff --check` | clean |
+| `backend/.env` | never opened, read, printed or referenced |
+| Primary checkout | **untouched** — still `5fe93d2`; every git command used `git -C` |
+
+**Local full-suite runs are contention-flaky and always have been.** Across four runs the failing set
+was different every time and never included a new test: `vulnerabilityReleaseWorkflow`,
+`vulnerabilityCoreConcurrency`, `riskScoringConcurrency` and `phase10a1Orchestration`. All four pass
+in isolation — **11/11, 19/19, 15/15, 10/10**. `phase10a1Orchestration` is the one worth naming: it
+asserts `providerLookupAttempt.count()` and `providerDailyUsage.count()` **globally, unscoped**, so
+any suite that legitimately executes trips it whenever vitest schedules the files concurrently. That
+is a pre-existing defect in merged 10A-1 test code and was deliberately **not** rewritten here.
+
 ## Next action
 
-Await the final independent Codex implementation review, resolve any P0/P1, push, wait for CI at the
-final tip, release the lease. **Do not open a PR, do not merge `main`, do not start Phase 10B.**
+Confirm CI is green at the corrected tip, then open the PR. **Do not merge `main`, do not start
+Phase 10B.**

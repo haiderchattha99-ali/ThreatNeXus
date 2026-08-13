@@ -133,6 +133,16 @@ class LookupTimeoutError extends Error {
   }
 }
 
+// Thrown inside the post-call transaction purely to roll it back when a
+// guarded statement matched zero rows. Never escapes as a failure of the
+// lookup itself — the caller reports a stale claim, not a provider error.
+class StaleClaimError extends Error {
+  constructor() {
+    super("guarded write matched no row");
+    this.name = "StaleClaimError";
+  }
+}
+
 /**
  * Runs one lookup under the WORKER'S OWN end-to-end bound.
  *
@@ -184,12 +194,18 @@ async function executeDirectJob(input) {
       state: JOB_STATES.SKIPPED_NOT_CONFIGURED,
       now,
       terminalReasonCode: descriptor.reason,
+      // No provider was asked, so no queriedAt is stamped and the API's
+      // public `contacted` field stays false — which is the truth.
+      contacted: false,
     });
     await audit("enrichment.job.terminalized", {
       provider: job.provider,
       state: JOB_STATES.SKIPPED_NOT_CONFIGURED,
       terminalReasonCode: descriptor.reason,
     });
+    // A terminal job changes what every owning run can truthfully report. A
+    // run whose only item ended here would otherwise sit PENDING forever.
+    await refreshRunsForJob(prisma, job.id, now);
     return { outcome: "SKIPPED_NOT_CONFIGURED", jobState: JOB_STATES.SKIPPED_NOT_CONFIGURED, attemptOutcome: null, charged: false };
   }
 
@@ -209,13 +225,15 @@ async function executeDirectJob(input) {
     // ONE guarded statement terminalizes, refunds and clears the lease
     // together. "Release, then terminalize" would leave a window in which
     // another worker claims the released job and calls the provider.
-    await repository.refuseClaimedJobForBudget(prisma, { id: job.id, claimToken, now: nowFn() });
+    const refusedAt = nowFn();
+    await repository.refuseClaimedJobForBudget(prisma, { id: job.id, claimToken, now: refusedAt });
     await audit("enrichment.lookup.refused", {
       provider: job.provider,
       lane: job.lane,
       usageDate: reservation.usageDate,
       reasonCode: reservation.reasonCode,
     });
+    await refreshRunsForJob(prisma, job.id, refusedAt);
     return { outcome: "SKIPPED_BUDGET", jobState: JOB_STATES.SKIPPED_BUDGET, attemptOutcome: null, charged: false };
   }
 
@@ -258,13 +276,27 @@ async function executeDirectJob(input) {
     // so what the provider did with it is UNKNOWABLE from here. Recording a
     // failure would fabricate an outcome; retrying could double-charge.
     const now = nowFn();
-    await quota.finalizeAttempt(prisma, attempt.id, { outcome: OUTCOMES.ABANDONED, now });
-    await repository.terminalizeClaimedJob(prisma, {
-      id: job.id,
-      claimToken,
-      state: JOB_STATES.DEAD_LETTER,
-      now,
-      terminalReasonCode: "AMBIGUOUS_AFTER_CONTACT",
+    // ONE transaction. Split apart, a crash between them leaves a FINISHED
+    // attempt beside a still-LEASED job, and recovery would requeue that job
+    // for a second paid call to answer a question we already asked.
+    await prisma.$transaction(async (tx) => {
+      await tx.providerLookupAttempt.updateMany({
+        where: { id: attempt.id, state: { in: [...quota.UNFINISHED_ATTEMPT_STATES] } },
+        data: { state: quota.ATTEMPT_STATES.FINISHED, outcome: OUTCOMES.ABANDONED, finishedAt: now },
+      });
+      await tx.providerLookupJob.updateMany({
+        where: { id: job.id, state: JOB_STATES.LEASED, claimToken },
+        data: {
+          state: JOB_STATES.DEAD_LETTER,
+          completedAt: now,
+          deadLetteredAt: now,
+          terminalReasonCode: "AMBIGUOUS_AFTER_CONTACT",
+          activeLookupKey: null,
+          claimToken: null,
+          claimedAt: null,
+          leaseExpiresAt: null,
+        },
+      });
     });
     await audit("enrichment.lookup.ambiguous", {
       provider: job.provider,
@@ -290,39 +322,66 @@ async function executeDirectJob(input) {
     retryAfterSeconds: result.retryAfterSeconds ?? null,
   });
 
-  await prisma.$transaction(async (tx) => {
-    const row = await tx[descriptor.entry.model].create({
-      data: service.toPersistedRow(result),
+  try {
+    await prisma.$transaction(async (tx) => {
+      const row = await tx[descriptor.entry.model].create({
+        data: service.toPersistedRow(result),
+      });
+      const finalized = await tx.providerLookupAttempt.updateMany({
+        where: { id: attempt.id, state: { in: [...quota.UNFINISHED_ATTEMPT_STATES] } },
+        data: {
+          state: quota.ATTEMPT_STATES.FINISHED,
+          outcome: attemptOutcome,
+          finishedAt: now,
+          httpStatus: result.httpStatus ?? null,
+          errorCode: result.errorInfo ? result.errorInfo.code : null,
+          retryAfterSeconds: result.retryAfterSeconds ?? null,
+        },
+      });
+      // Both guards must match, or none of this may stand. A concurrent sweep
+      // could have finalized the attempt, or the lease could have been
+      // reclaimed mid-call — in either case committing the evidence row alone
+      // would leave an orphan with no ledger entry and no job pointing at it.
+      if (finalized.count !== 1) throw new StaleClaimError();
+      const transitioned = await tx.providerLookupJob.updateMany({
+        where: { id: job.id, state: JOB_STATES.LEASED, claimToken },
+        data: {
+          state: jobState,
+          completedAt: now,
+          queriedAt: result.queriedAt || queriedAt,
+          freshUntil: ttl.expiresAt,
+          activeLookupKey: null,
+          claimToken: null,
+          claimedAt: null,
+          leaseExpiresAt: null,
+          httpStatus: result.httpStatus ?? null,
+          errorCode: result.errorInfo ? result.errorInfo.code : null,
+          retryAfterSeconds: result.retryAfterSeconds ?? null,
+          [descriptor.entry.fk]: row.id,
+        },
+      });
+      if (transitioned.count !== 1) throw new StaleClaimError();
     });
-    await tx.providerLookupAttempt.updateMany({
-      where: { id: attempt.id, state: { in: [...quota.UNFINISHED_ATTEMPT_STATES] } },
-      data: {
-        state: quota.ATTEMPT_STATES.FINISHED,
-        outcome: attemptOutcome,
-        finishedAt: now,
-        httpStatus: result.httpStatus ?? null,
-        errorCode: result.errorInfo ? result.errorInfo.code : null,
-        retryAfterSeconds: result.retryAfterSeconds ?? null,
-      },
+  } catch (error) {
+    // Only a guard mismatch is handled here. Everything else — a genuine
+    // database failure — keeps propagating exactly as it did before, and the
+    // stale sweep resolves the attempt it leaves unfinished.
+    if (!(error instanceof StaleClaimError)) throw error;
+    // The whole transaction rolled back, so no evidence row, no ledger entry
+    // and no job transition survive: nothing is orphaned. Ownership of this
+    // row has moved on — a sweep finalized the attempt, or the lease was
+    // reclaimed — and whoever holds it now is responsible for its terminal
+    // state. This worker does NOT release, retry, or write an outcome: the
+    // call already happened and was charged, and re-asking is the duplicate
+    // this design exists to prevent.
+    await audit("enrichment.lookup.stale_claim", {
+      provider: job.provider,
+      lane: job.lane,
+      attemptNumber: attempt.attemptNumber,
+      contactedProvider: true,
     });
-    await tx.providerLookupJob.updateMany({
-      where: { id: job.id, state: JOB_STATES.LEASED, claimToken },
-      data: {
-        state: jobState,
-        completedAt: now,
-        queriedAt: result.queriedAt || queriedAt,
-        freshUntil: ttl.expiresAt,
-        activeLookupKey: null,
-        claimToken: null,
-        claimedAt: null,
-        leaseExpiresAt: null,
-        httpStatus: result.httpStatus ?? null,
-        errorCode: result.errorInfo ? result.errorInfo.code : null,
-        retryAfterSeconds: result.retryAfterSeconds ?? null,
-        [descriptor.entry.fk]: row.id,
-      },
-    });
-  });
+    return { outcome: "STALE_CLAIM", jobState: null, attemptOutcome: null, charged: true };
+  }
 
   await audit("enrichment.lookup.finalized", {
     provider: job.provider,

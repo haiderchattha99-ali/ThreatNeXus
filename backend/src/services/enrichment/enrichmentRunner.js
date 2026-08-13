@@ -41,7 +41,7 @@
 // candidates per call.
 
 const { ENRICHMENT_STATUS } = require("./iocEnrichmentTypes");
-const { IocEnrichmentValidationError } = require("./iocEnrichmentCacheRules");
+const { IocEnrichmentValidationError, ENRICHMENT_TERMINAL_REASON } = require("./iocEnrichmentCacheRules");
 const {
   listPendingCandidates,
   claimPendingJob,
@@ -495,7 +495,7 @@ async function runEnrichmentBatch(options) {
  * @returns {Promise<object>} a closed job result, exactly like the batch's
  */
 async function runTargetedEnrichmentJob(options = {}) {
-  const { prisma, providerRegistry, now, ttlPolicy, retryPolicy, leaseMs, enrichmentId, hooks = null } = options;
+  const { prisma, providerRegistry, now, ttlPolicy, leaseMs, enrichmentId, lookupMaxMs, hooks = null } = options;
 
   let claim;
   try {
@@ -530,8 +530,50 @@ async function runTargetedEnrichmentJob(options = {}) {
     indicator: record.indicator,
   };
 
-  // Authorization runs AFTER the claim (so a lost race leaks no budget) and
-  // BEFORE any provider is resolved or called (so a refusal costs nothing).
+  const attemptFields = { attemptCount: record.attemptCount, maxAttempts: record.maxAttempts };
+  const releaseAndReturn = async (outcome) => {
+    // Refund: this claim consumed one unit of the attempt budget for an
+    // attempt that never happened. Safe on every pre-contact path, and ONLY
+    // on a pre-contact path — see the ambiguity branch below.
+    const released = await safeRelease(prisma, record.id, claimToken, null, true);
+    return buildJobResult({
+      ...base,
+      ...attemptFields,
+      outcome: released ? outcome : RUNNER_OUTCOME.RELEASE_FAILED,
+    });
+  };
+
+  // --- Resolve the provider BEFORE anything is charged ---------------------
+  // A provider that cannot be resolved or is not configured is a LOCAL fault.
+  // Discovering it after reservation would spend a unit of real budget on a
+  // call that could never have happened.
+  let provider;
+  try {
+    provider = providerRegistry.resolve(record.provider);
+  } catch {
+    provider = null;
+  }
+  if (!provider || typeof provider.lookup !== "function") {
+    return releaseAndReturn(RUNNER_OUTCOME.UNKNOWN_PROVIDER);
+  }
+
+  // A side-effect-free credential/configuration check, supplied by the caller
+  // because only it knows the application configuration. Without this the
+  // provider's own lookup() would report SKIPPED_DISABLED — but only AFTER
+  // quota had been reserved and the attempt marked as contacted.
+  if (hooks && typeof hooks.resolveDescriptor === "function") {
+    let descriptor;
+    try {
+      descriptor = await hooks.resolveDescriptor({ record });
+    } catch {
+      descriptor = { ok: false };
+    }
+    if (!descriptor || descriptor.ok !== true) {
+      return releaseAndReturn(RUNNER_OUTCOME.NOT_CONFIGURED_BEFORE_LOOKUP);
+    }
+  }
+
+  // --- Reserve quota, still before any call --------------------------------
   if (hooks && typeof hooks.authorize === "function") {
     let decision;
     try {
@@ -540,31 +582,123 @@ async function runTargetedEnrichmentJob(options = {}) {
       decision = { proceed: false, reasonCode: "AUTHORIZE_FAILED" };
     }
     if (!decision || decision.proceed !== true) {
-      // Refund: this claim consumed one unit of the attempt budget for an
-      // attempt that never happened. No provider was constructed and
-      // provider.lookup was never reached.
-      const released = await safeRelease(prisma, record.id, claimToken, null, true);
-      return buildJobResult({
-        ...base,
-        outcome: released ? RUNNER_OUTCOME.REFUSED_BEFORE_LOOKUP : RUNNER_OUTCOME.RELEASE_FAILED,
-        attemptCount: record.attemptCount,
-        maxAttempts: record.maxAttempts,
-      });
+      return releaseAndReturn(RUNNER_OUTCOME.REFUSED_BEFORE_LOOKUP);
     }
   }
 
-  const outcome = await processClaimedJob({
-    prisma,
-    providerRegistry,
-    now,
-    ttlPolicy,
-    retryPolicy,
-    signal: undefined,
-    record,
-    claimToken,
-    hooks,
+  // --- The contact transition ----------------------------------------------
+  // Marks the attempt IN_FLIGHT and places the non-expiring hold, together.
+  // It MUST report success: if the lease was lost while quota was being
+  // reserved, the guards match zero rows and another owner may already be
+  // calling this provider. Proceeding then would be the duplicate call the
+  // whole design exists to prevent.
+  if (hooks && typeof hooks.beforeLookup === "function") {
+    let contacted = false;
+    try {
+      contacted = await hooks.beforeLookup({ record, claimToken });
+    } catch {
+      contacted = false;
+    }
+    if (contacted !== true) {
+      // Nothing was sent. The quota unit is retained (there is no refund
+      // path), but no provider is called and no ambiguity is recorded.
+      return releaseAndReturn(RUNNER_OUTCOME.CONTACT_TRANSITION_LOST);
+    }
+  }
+
+  // Every post-contact uncertainty ends here, and all of them end the same
+  // way. The claim is NOT released: releasing writes nextAttemptAt, which
+  // would clear the contact hold and re-open the duplicate-call window.
+  //
+  // But the hold alone is not enough either. It only FREEZES the row — still
+  // PENDING, still holding activeCacheKey, blocking every future ask about
+  // this subject until some later sweep happens to run. A terminal row can
+  // never be claimed again, so terminalizing is what actually closes the
+  // window. Guarded on THIS worker's claim token, so a completion that did
+  // commit, or a row another owner has taken, is left exactly as it is.
+  const ambiguousAndReturn = async () => {
+    await safeDeadLetter(prisma, record.id, claimToken, ENRICHMENT_TERMINAL_REASON.AMBIGUOUS_AFTER_CONTACT, now);
+    return buildJobResult({
+      ...base,
+      ...attemptFields,
+      outcome: RUNNER_OUTCOME.AMBIGUOUS_AFTER_CONTACT,
+    });
+  };
+
+  // --- Exactly one bounded provider call -----------------------------------
+  // Bounded HERE as well as on the direct path: no provider's own timeout
+  // bounds lookup(), because each clears its timeout when response headers
+  // arrive and reads the body afterwards. Without a bound, a stalled body
+  // read runs until the stale sweep resolves an attempt that is still live.
+  let result;
+  try {
+    result = await raceWithBound(provider.lookup(buildLookupInput(record, now, undefined)), lookupMaxMs);
+  } catch {
+    // The request was already handed to the transport, so what the provider
+    // did with it is unknowable.
+    return ambiguousAndReturn();
+  }
+
+  if (!result || result.status === ENRICHMENT_STATUS.PENDING) {
+    // A provider contract violation, but the request WAS sent.
+    return ambiguousAndReturn();
+  }
+
+  let ttl;
+  try {
+    ttl = ttlPolicy({ status: result.status, queriedAt: result.queriedAt, retryAfterSeconds: result.retryAfterSeconds });
+  } catch {
+    return ambiguousAndReturn();
+  }
+
+  let completion;
+  try {
+    completion = await completeClaimedJob(
+      { id: record.id, claimToken, result, expiresAt: ttl.expiresAt },
+      { client: prisma }
+    );
+  } catch {
+    // The write may or may not have committed, and the call definitely
+    // happened. Uncertain in both directions — and if it DID commit, the
+    // guarded dead-letter finds a non-PENDING row and leaves it alone.
+    return ambiguousAndReturn();
+  }
+
+  if (completion.outcome === COMPLETION_OUTCOME.NOT_CLAIM_OWNER) {
+    return buildJobResult({ ...base, ...attemptFields, outcome: RUNNER_OUTCOME.STALE_CLAIM_ON_COMPLETION });
+  }
+
+  return buildJobResult({
+    ...base,
+    outcome: RUNNER_OUTCOME.COMPLETED,
+    terminalStatus: completion.record.status,
+    queriedAt: completion.record.queriedAt,
+    expiresAt: completion.record.expiresAt,
+    attemptCount: completion.record.attemptCount,
+    maxAttempts: completion.record.maxAttempts,
+    httpStatus: result.httpStatus ?? null,
+    errorCode: result.errorInfo ? result.errorInfo.code : null,
+    retryAfterSeconds: result.retryAfterSeconds ?? null,
   });
-  return outcome.job;
+}
+
+/**
+ * The worker's own end-to-end bound on one lookup. `lookupMaxMs` omitted means
+ * unbounded, which is what the ordinary ADMIN batch has always done.
+ */
+async function raceWithBound(promise, lookupMaxMs) {
+  if (!Number.isInteger(lookupMaxMs) || lookupMaxMs <= 0) return promise;
+  let timer = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error("lookup exceeded the worker's bound")), lookupMaxMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 module.exports = {

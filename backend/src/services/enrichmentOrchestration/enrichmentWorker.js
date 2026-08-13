@@ -19,9 +19,13 @@
 //                                reached a terminal state rolls its job
 //                                FORWARD instead of being swept as ambiguous
 //   3. stale-attempt sweep       resolve attempts whose worker is gone
-//   4. run-state reconciliation  runs whose jobs all went terminal
-//   5. direct pass               up to batchSize SUCCESSFUL claims
-//   6. targeted pass             same, over linked AbuseIPDB delegates
+//   4. exhausted retirement      retire direct rows that have spent their
+//                                attempt budget, so they cannot occupy the
+//                                bounded scan that eligible work needs
+//   5. run-state reconciliation  runs whose jobs all went terminal on a path
+//                                that had no run context of its own
+//   6. direct pass               up to batchSize SUCCESSFUL claims
+//   7. targeted pass             same, over linked AbuseIPDB delegates
 //
 // Step 2 before step 3 is a correctness requirement. Reversed, a crash between
 // the delegate's terminal write and the Phase-10 attempt's finalization would
@@ -98,8 +102,44 @@ async function recoverStaleClaims({ prisma, now, take, audit }) {
   // eslint-disable-next-line no-restricted-syntax
   for (const job of jobs) {
     const latest = job.attempts && job.attempts[0];
-    // eslint-disable-next-line no-continue
-    if (latest && latest.contactedProvider === true && latest.state !== quota.ATTEMPT_STATES.FINISHED) continue;
+    if (latest && latest.contactedProvider === true) {
+      // A contacted attempt is NEVER requeued, whatever state it is in.
+      //
+      // Unfinished, the ambiguity sweep owns it. FINISHED beside a job still
+      // holding its lease means the post-call transaction's job transition was
+      // lost — a crash in the one window the atomic writes cannot cover, since
+      // the attempt row proves the provider was already asked. Requeuing here
+      // would buy the same answer twice. Nothing else would ever resolve such a
+      // job either: the sweep only looks at UNFINISHED attempts, so it would
+      // hold its lease and activeLookupKey forever. Terminalize it instead.
+      if (latest.state === quota.ATTEMPT_STATES.FINISHED) {
+        // eslint-disable-next-line no-await-in-loop
+        const { count } = await prisma.providerLookupJob.updateMany({
+          where: { id: job.id, state: JOB_STATES.LEASED, claimToken: job.claimToken },
+          data: {
+            state: JOB_STATES.DEAD_LETTER,
+            completedAt: now,
+            deadLetteredAt: now,
+            terminalReasonCode: "AMBIGUOUS_AFTER_CONTACT",
+            activeLookupKey: null,
+            claimToken: null,
+            claimedAt: null,
+            leaseExpiresAt: null,
+          },
+        });
+        if (count === 1) {
+          // eslint-disable-next-line no-await-in-loop
+          await audit("enrichment.lookup.ambiguous", {
+            provider: job.provider,
+            attemptNumber: latest.attemptNumber,
+            contactedProvider: true,
+          });
+          // eslint-disable-next-line no-await-in-loop
+          await targetedExecution.refreshRuns(prisma, job.id, now);
+        }
+      }
+      continue; // eslint-disable-line no-continue
+    }
 
     const exhausted = job.attemptCount >= job.maxAttempts;
     // eslint-disable-next-line no-await-in-loop
@@ -151,51 +191,79 @@ async function sweepStaleAttempts({ prisma, now, staleBefore, take, audit }) {
       continue; // eslint-disable-line no-continue
     }
 
-    // eslint-disable-next-line no-await-in-loop
-    await quota.finalizeAttempt(prisma, attempt.id, { outcome: quota.ATTEMPT_OUTCOMES.ABANDONED, now });
-    swept += 1;
-
     if (attempt.contactedProvider !== true) {
       // Died between reservation and the call: no request reached the
-      // provider, so the job is safely re-queued by stale-claim recovery.
+      // provider, so the job is safely re-queued by stale-claim recovery and
+      // the attempt can be finalized on its own.
+      // eslint-disable-next-line no-await-in-loop
+      await quota.finalizeAttempt(prisma, attempt.id, { outcome: quota.ATTEMPT_OUTCOMES.ABANDONED, now });
+      swept += 1;
       continue; // eslint-disable-line no-continue
     }
 
     // Ambiguous. Terminal, and never retried.
+    //
+    // ONE transaction. Finalizing the attempt first and terminalizing the job
+    // afterwards leaves a crash window in which a FINISHED attempt sits beside
+    // a still-LEASED job — the exact state that would let recovery requeue a
+    // question the provider has already been asked and charged for.
+    // eslint-disable-next-line no-await-in-loop
+    const contained = await prisma
+      .$transaction(async (tx) => {
+        const finalized = await quota.finalizeAttempt(tx, attempt.id, {
+          outcome: quota.ATTEMPT_OUTCOMES.ABANDONED,
+          now,
+        });
+        if (!finalized) return false;
+        if (job && job.trigger === "RUN_DELEGATED") {
+          return repository.terminalizeDelegatedJob(tx, {
+            id: job.id,
+            state: JOB_STATES.DEAD_LETTER,
+            now,
+            terminalReasonCode: "AMBIGUOUS_AFTER_CONTACT",
+          });
+        }
+        if (job) {
+          const { count } = await tx.providerLookupJob.updateMany({
+            where: { id: job.id, state: JOB_STATES.LEASED },
+            data: {
+              state: JOB_STATES.DEAD_LETTER,
+              completedAt: now,
+              deadLetteredAt: now,
+              terminalReasonCode: "AMBIGUOUS_AFTER_CONTACT",
+              activeLookupKey: null,
+              claimToken: null,
+              claimedAt: null,
+              leaseExpiresAt: null,
+            },
+          });
+          return count === 1;
+        }
+        // An attempt with no job left to terminalize: finalizing it is the
+        // whole of the work, and it committed.
+        return true;
+      })
+      // A guard that matched nothing rolls the whole thing back. The attempt
+      // stays unfinished and the next tick sweeps it again — idempotent, and
+      // it never invents a terminal state it could not prove.
+      .catch(() => false);
+
+    if (!contained) continue; // eslint-disable-line no-continue
+    swept += 1;
     ambiguous += 1;
-    if (job && job.trigger === "RUN_DELEGATED") {
+
+    if (job && job.trigger === "RUN_DELEGATED" && delegate) {
+      // Close the duplicate-call window for good: the contact hold is
+      // non-expiring, and only a terminal row can never be claimed again.
+      // Outside the transaction deliberately — if this write is lost the hold
+      // still stands, so the row remains unclaimable either way.
       // eslint-disable-next-line no-await-in-loop
-      await repository.terminalizeDelegatedJob(prisma, {
-        id: job.id,
-        state: JOB_STATES.DEAD_LETTER,
-        now,
-        terminalReasonCode: "AMBIGUOUS_AFTER_CONTACT",
-      });
-      if (delegate) {
-        // Close the duplicate-call window for good: the contact hold is
-        // non-expiring, and only a terminal row can never be claimed again.
-        // eslint-disable-next-line no-await-in-loop
-        await deadLetterUnleasedJob(
-          { id: delegate.id, reasonCode: "AMBIGUOUS_AFTER_CONTACT" },
-          { client: prisma, now }
-        );
-      }
-    } else if (job) {
-      // eslint-disable-next-line no-await-in-loop
-      await prisma.providerLookupJob.updateMany({
-        where: { id: job.id, state: JOB_STATES.LEASED },
-        data: {
-          state: JOB_STATES.DEAD_LETTER,
-          completedAt: now,
-          deadLetteredAt: now,
-          terminalReasonCode: "AMBIGUOUS_AFTER_CONTACT",
-          activeLookupKey: null,
-          claimToken: null,
-          claimedAt: null,
-          leaseExpiresAt: null,
-        },
-      });
+      await deadLetterUnleasedJob(
+        { id: delegate.id, reasonCode: "AMBIGUOUS_AFTER_CONTACT" },
+        { client: prisma, now }
+      );
     }
+
     // eslint-disable-next-line no-await-in-loop
     await audit("enrichment.lookup.ambiguous", {
       provider: attempt.provider,
@@ -203,9 +271,73 @@ async function sweepStaleAttempts({ prisma, now, staleBefore, take, audit }) {
       attemptNumber: attempt.attemptNumber,
       contactedProvider: true,
     });
+    // A job driven terminal here has no run context of its own to refresh, so
+    // without this its owning runs report PENDING forever.
+    if (job) {
+      // eslint-disable-next-line no-await-in-loop
+      await targetedExecution.refreshRuns(prisma, job.id, now);
+    }
   }
 
   return { swept, ambiguous };
+}
+
+/**
+ * Retires direct jobs that have spent their attempt budget.
+ *
+ * They are excluded from the candidate query on purpose — claimLookupJob would
+ * refuse them anyway, so leaving them in it burns bounded scan windows on rows
+ * that can never be claimed, and enough of them at the head of the queue
+ * starves every eligible job behind them forever. Excluding them alone would
+ * strand them non-terminal, still holding activeLookupKey, so this pass is the
+ * other half of that fix rather than an optional tidy-up.
+ *
+ * Bounded like every other pass: a backlog is worked off over several ticks,
+ * never in one unbounded walk.
+ */
+async function retireExhaustedDirectJobs({ prisma, now, take, audit }) {
+  const jobs = await repository.listExhaustedDirectJobs(prisma, { asOf: now, take });
+  let retired = 0;
+  // eslint-disable-next-line no-restricted-syntax
+  for (const job of jobs) {
+    // eslint-disable-next-line no-await-in-loop
+    const done = await repository.retireExhaustedDirectJob(prisma, { id: job.id, now });
+    // Lost to another worker between the scan and the write.
+    if (!done) continue; // eslint-disable-line no-continue
+    retired += 1;
+    // eslint-disable-next-line no-await-in-loop
+    await audit("enrichment.job.terminalized", {
+      provider: job.provider,
+      state: JOB_STATES.DEAD_LETTER,
+      terminalReasonCode: "MAX_ATTEMPTS_EXHAUSTED",
+    });
+    // eslint-disable-next-line no-await-in-loop
+    await targetedExecution.refreshRuns(prisma, job.id, now);
+  }
+  return retired;
+}
+
+/**
+ * Settles runs whose every job is terminal but whose own state is not.
+ *
+ * Each terminalization path refreshes the runs it knows about, but some paths
+ * have no run context at all — an attempt swept by a worker that never saw the
+ * run, a row retired by the pass above, a job terminalized by an earlier
+ * crash. Without a general pass those runs report PENDING forever while all of
+ * their work has finished. Idempotent: a run already terminal is not selected.
+ */
+async function reconcileRunStates({ prisma, now, take }) {
+  // eslint-disable-next-line global-require
+  const { refreshRunState } = require("./enrichmentRunService");
+  const runs = await repository.listStaleNonTerminalRuns(prisma, { take });
+  let refreshed = 0;
+  // eslint-disable-next-line no-restricted-syntax
+  for (const run of runs) {
+    // eslint-disable-next-line no-await-in-loop
+    await refreshRunState(prisma, run.id, now);
+    refreshed += 1;
+  }
+  return refreshed;
 }
 
 /** One bounded direct pass, counted in SUCCESSFUL claims. */
@@ -260,7 +392,7 @@ async function runDirectPass({ prisma, nowFn, batchSize, leaseMs, lookupMaxMs, a
 }
 
 /** One bounded targeted pass, counted in SUCCESSFUL claims. */
-async function runTargetedPass({ prisma, nowFn, batchSize, leaseMs, runtime, appConfig, audit }) {
+async function runTargetedPass({ prisma, nowFn, batchSize, leaseMs, lookupMaxMs, runtime, appConfig, audit }) {
   const candidates = await repository.listTargetedDelegateCandidates(prisma, {
     asOf: nowFn(),
     take: batchSize * MAX_SCAN_MULTIPLIER,
@@ -284,7 +416,16 @@ async function runTargetedPass({ prisma, nowFn, batchSize, leaseMs, runtime, app
       nowFn,
       limit: budgets[job.provider],
       leaseMs,
+      // The worker's OWN end-to-end bound. No provider's internal timeout
+      // bounds lookup() — each clears it when response headers arrive and
+      // reads the body afterwards — so without this a stalled body read runs
+      // until the stale sweep resolves an attempt that is still live.
+      lookupMaxMs,
       runtime,
+      // Carries the credential configuration the side-effect-free descriptor
+      // check reads BEFORE quota is reserved. Omitted, an unconfigured
+      // deployment would spend real budget reaching a disabled provider.
+      appConfig,
       audit,
     });
     // A lost claim is not an execution — it must not consume a slot that a
@@ -337,6 +478,21 @@ async function runWorkerTick(input) {
     audit,
   });
 
+  const exhaustedRetired = await retireExhaustedDirectJobs({
+    prisma,
+    now: nowFn(),
+    take: batchSize * MAX_SCAN_MULTIPLIER,
+    audit,
+  });
+
+  // AFTER everything that can drive a job terminal in this tick, so a run
+  // settled here needs no second tick to report the truth.
+  const runsReconciled = await reconcileRunStates({
+    prisma,
+    now: nowFn(),
+    take: batchSize * MAX_SCAN_MULTIPLIER,
+  });
+
   const direct = await runDirectPass({
     prisma,
     nowFn,
@@ -353,6 +509,7 @@ async function runWorkerTick(input) {
     nowFn,
     batchSize,
     leaseMs,
+    lookupMaxMs,
     runtime,
     appConfig,
     audit,
@@ -364,6 +521,8 @@ async function runWorkerTick(input) {
     runsRefreshed: reconciliation.runsRefreshed || 0,
     staleAttemptsSwept: sweep.swept,
     ambiguousTerminated: sweep.ambiguous,
+    exhaustedRetired,
+    runsReconciled,
     directClaimed: direct.claimed,
     directCompleted: direct.completed,
     targetedClaimed: targeted.executed,
@@ -465,6 +624,8 @@ module.exports = {
   buildAuditor,
   recoverStaleClaims,
   sweepStaleAttempts,
+  retireExhaustedDirectJobs,
+  reconcileRunStates,
   runDirectPass,
   runTargetedPass,
   runWorkerTick,

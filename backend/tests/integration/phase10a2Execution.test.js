@@ -57,6 +57,23 @@ const IP = Object.freeze({
   TARGETED: "198.51.100.197",
   UNRELATED: "198.51.100.198",
   SENTINEL: "198.51.100.199",
+  // The targeted end-to-end cases. One IP per case: these tests assert on
+  // exact rows, and sharing an indicator between them would couple their
+  // cleanup and hide a leak.
+  T_UNCONFIGURED: "198.51.100.180",
+  // NOT .181 — phase10a1IngestionDefaultOff owns that one and ingests a real
+  // Finding with occurrences against it. Cross-suite collision in the shared
+  // test database is the recurring bug class in this repository.
+  T_BUDGET: "198.51.100.179",
+  T_SUCCESS: "198.51.100.182",
+  T_BOUND: "198.51.100.183",
+  T_THROW: "198.51.100.184",
+  T_CONTENDED: "198.51.100.185",
+  T_REJECTED: "198.51.100.186",
+  T_SERVER: "198.51.100.187",
+  T_ATTEMPT_NO: "198.51.100.188",
+  T_STARVED: "198.51.100.189",
+  T_RECOVERY: "198.51.100.190",
 });
 const ALL_IPS = Object.freeze(Object.values(IP));
 
@@ -96,6 +113,35 @@ async function cleanup() {
     await prisma.providerLookupAttempt.deleteMany({ where: { lookupJobId: { in: jobIds } } });
     await prisma.findingEnrichmentRunItem.deleteMany({ where: { lookupJobId: { in: jobIds } } });
     await prisma.providerLookupJob.deleteMany({ where: { id: { in: jobIds } } });
+  }
+  // Runs and their items reference both a Finding and a job, so they have to
+  // go before either. Ordered by foreign key, never by TRUNCATE CASCADE.
+  //
+  // Scoped to the two indicators this suite creates Findings for — NOT to
+  // every IP it touches. A wider net deletes Findings that other suites
+  // ingested (with occurrences, ownership and triage hanging off them), which
+  // both breaks them and fails here on their foreign keys.
+  const findings = await prisma.finding.findMany({
+    where: { indicatorValue: { in: [IP.T_SUCCESS, IP.T_STARVED] } },
+    select: { id: true },
+  });
+  const findingIds = findings.map((row) => row.id);
+  if (findingIds.length) {
+    await prisma.findingEnrichmentRunItem.deleteMany({ where: { findingId: { in: findingIds } } });
+    await prisma.findingEnrichmentRun.deleteMany({ where: { findingId: { in: findingIds } } });
+    // A score owns its factor contributions — that is the whole point of Risk
+    // v1's explainability — so they go first.
+    const scores = await prisma.riskScore.findMany({
+      where: { findingId: { in: findingIds } },
+      select: { id: true },
+    });
+    if (scores.length) {
+      await prisma.riskFactorContribution.deleteMany({
+        where: { riskScoreId: { in: scores.map((row) => row.id) } },
+      });
+    }
+    await prisma.riskScore.deleteMany({ where: { findingId: { in: findingIds } } });
+    await prisma.finding.deleteMany({ where: { id: { in: findingIds } } });
   }
   await prisma.iocEnrichment.deleteMany({ where: { indicator: { in: [...ALL_IPS] } } });
   await prisma.censysEnrichment.deleteMany({ where: { indicator: { in: [...ALL_IPS] } } });
@@ -631,5 +677,603 @@ describe("Phase 10A-2 — worker configuration refuses unsafe timing", () => {
   it("exposes a worker that starts nothing merely by being imported", () => {
     expect(typeof worker.startEnrichmentWorker).toBe("function");
     expect(typeof worker.runWorkerTick).toBe("function");
+  });
+});
+
+// ===========================================================================
+// The targeted path, end to end
+// ===========================================================================
+// The independent implementation review found that the sections above execute
+// the DIRECT service end to end but exercise only the targeted path's
+// SELECTION primitives — executeTargetedJob() itself was never called. Every
+// guarantee could therefore read green for direct execution while the targeted
+// path violated ordering, bounding, the contact hold, the ledger or Risk v1.
+//
+// These cases close that hole. They drive the real service through an injected
+// provider registry, so the real claim, the real quota reservation, the real
+// contact transaction and the real finalization all run. NOTHING here reaches
+// a live provider: the only lookup() in play is defined in this file.
+
+const targetedExecution = require("../../src/services/enrichmentOrchestration/enrichmentTargetedIocService");
+const { buildEnrichmentRuntime } = require("../../src/services/enrichment/enrichmentRuntime");
+const {
+  createEnrichmentResult,
+  ENRICHMENT_STATUS,
+  PROVIDER_ERROR_CODES,
+} = require("../../src/services/enrichment/iocEnrichmentTypes");
+
+const CONFIGURED = Object.freeze({ ABUSEIPDB_API_KEY: "fake-abuseipdb-key-for-tests" });
+const UNCONFIGURED = Object.freeze({ ABUSEIPDB_API_KEY: "" });
+
+/**
+ * An offline AbuseIPDB-shaped provider. It counts its own calls, because
+ * "exactly one provider call" is the guarantee most of these cases exist to
+ * prove and it cannot be asserted from the database alone.
+ */
+function fakeTargetedProvider({
+  status = ENRICHMENT_STATUS.SUCCESS,
+  errorCode = null,
+  httpStatus = null,
+  retryAfterSeconds = null,
+  delayMs = 0,
+  throwAfterContact = false,
+  onCall = null,
+} = {}) {
+  const state = { calls: 0 };
+  const provider = {
+    name: "abuseipdb",
+    async lookup(input) {
+      state.calls += 1;
+      if (onCall) await onCall(input);
+      if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+      if (throwAfterContact) throw new Error("socket hang up");
+      return createEnrichmentResult({
+        provider: "abuseipdb",
+        indicatorType: input.indicatorType,
+        indicator: input.indicator,
+        status,
+        queriedAt: input.asOf instanceof Date ? input.asOf : new Date(),
+        data: status === ENRICHMENT_STATUS.SUCCESS ? { abuseConfidenceScore: 42, totalReports: 7 } : null,
+        httpStatus,
+        retryAfterSeconds,
+        errorInfo: errorCode ? { code: errorCode, message: null } : null,
+      });
+    },
+  };
+  return { provider, state };
+}
+
+/** A runtime whose registry resolves every name to this one fake provider. */
+function fakeRuntime(provider) {
+  return buildEnrichmentRuntime({ providerRegistry: Object.freeze({ resolve: () => provider }) });
+}
+
+/** A linked delegate + Phase-10 job, exactly as the schedule service builds one. */
+async function createTargetedJob(indicator, { maxAttempts = 3, lane = "AUTOMATIC" } = {}) {
+  const delegate = await iocRepository.createPendingJob(
+    { provider: "abuseipdb", indicatorType: "IPV4", indicator, queryParams: { maxAgeInDays: 90 } },
+    { client: prisma, requestedAt: NOW, maxAttempts }
+  );
+  const job = await prisma.providerLookupJob.create({
+    data: {
+      provider: "abuseipdb",
+      subjectType: "IPV4",
+      subjectValue: indicator,
+      queryIdentityHash: `p10a2-t-${indicator}`,
+      state: JOB_STATES.WAITING_ON_DELEGATE,
+      lane,
+      trigger: "RUN_DELEGATED",
+      requestedAt: NOW,
+      activeLookupKey: `p10a2-t-${indicator}`,
+      maxAttempts,
+      iocEnrichmentId: delegate.id,
+    },
+  });
+  return { delegate, job };
+}
+
+describeOrSkip("Phase 10A-2 — the targeted path, executed end to end", () => {
+  beforeAll(async () => {
+    prisma = new PrismaClient({ datasources: { db: { url: TEST_DATABASE_URL } } });
+    await prisma.$connect();
+  });
+  afterAll(async () => {
+    await cleanup();
+    await prisma.$disconnect();
+  });
+  beforeEach(cleanup);
+
+  it("spends NOTHING and calls nobody when the provider has no credential", async () => {
+    // The credential check is side-effect-free and runs after the claim but
+    // BEFORE the reservation. Ordered the other way — which is how this was
+    // first written — an incomplete deployment reserves real budget, creates a
+    // ledger row and marks it contacted, all to reach a provider that reports
+    // SKIPPED_DISABLED from inside its own lookup().
+    const { delegate, job } = await createTargetedJob(IP.T_UNCONFIGURED);
+    const { provider, state } = fakeTargetedProvider();
+
+    const result = await targetedExecution.executeTargetedJob({
+      prisma,
+      job,
+      nowFn,
+      limit: 5,
+      leaseMs: 120000,
+      lookupMaxMs: 60000,
+      runtime: fakeRuntime(provider),
+      appConfig: UNCONFIGURED,
+      audit: noopAudit,
+    });
+
+    expect(state.calls).toBe(0);
+    expect(result.outcome).toBe(JOB_STATES.SKIPPED_NOT_CONFIGURED);
+
+    // No unit of real budget, and no ledger row claiming an attempt happened.
+    expect(await prisma.providerDailyUsage.count({ where: { provider: "abuseipdb" } })).toBe(0);
+    expect(await prisma.providerLookupAttempt.count({ where: { lookupJobId: job.id } })).toBe(0);
+
+    const after = await prisma.providerLookupJob.findUnique({ where: { id: job.id } });
+    expect(after.state).toBe(JOB_STATES.SKIPPED_NOT_CONFIGURED);
+    // The public `contacted` field is derived from queriedAt. Nobody was
+    // asked, so it must stay null.
+    expect(after.queriedAt).toBeNull();
+    expect(after.activeLookupKey).toBeNull();
+
+    // The claim was released AND refunded: no attempt took place.
+    const canonical = await prisma.iocEnrichment.findUnique({ where: { id: delegate.id } });
+    expect(canonical.attemptCount).toBe(0);
+    expect(canonical.claimToken).toBeNull();
+  });
+
+  it("performs ZERO provider calls when the budget refuses", async () => {
+    const { job } = await createTargetedJob(IP.T_BUDGET);
+    const { provider, state } = fakeTargetedProvider();
+
+    const result = await targetedExecution.executeTargetedJob({
+      prisma,
+      job,
+      nowFn,
+      limit: 0, // refused
+      leaseMs: 120000,
+      lookupMaxMs: 60000,
+      runtime: fakeRuntime(provider),
+      appConfig: CONFIGURED,
+      audit: noopAudit,
+    });
+
+    expect(state.calls).toBe(0);
+    expect(result.outcome).toBe(JOB_STATES.SKIPPED_BUDGET);
+    expect(await prisma.providerDailyUsage.count({ where: { provider: "abuseipdb" } })).toBe(0);
+
+    const after = await prisma.providerLookupJob.findUnique({ where: { id: job.id } });
+    expect(after.state).toBe(JOB_STATES.SKIPPED_BUDGET);
+    expect(after.queriedAt).toBeNull();
+  });
+
+  it("completes end to end: one call, a truthful ledger, a contacted job, and a rescored Finding", async () => {
+    // The single case that proves the whole ordering actually works, rather
+    // than proving each refusal path in isolation.
+    const finding = await prisma.finding.create({
+      data: {
+        indicatorValue: IP.T_SUCCESS,
+        port: 3389,
+        protocol: "TCP",
+        reportType: "ACCESSIBLE_RDP",
+        firstSeen: NOW,
+        lastSeen: NOW,
+      },
+    });
+
+    const { delegate, job } = await createTargetedJob(IP.T_SUCCESS);
+    const { provider, state } = fakeTargetedProvider({ status: ENRICHMENT_STATUS.SUCCESS });
+
+    const result = await targetedExecution.executeTargetedJob({
+      prisma,
+      job,
+      nowFn,
+      limit: 5,
+      leaseMs: 120000,
+      lookupMaxMs: 60000,
+      runtime: fakeRuntime(provider),
+      appConfig: CONFIGURED,
+      audit: noopAudit,
+    });
+
+    expect(state.calls).toBe(1);
+    expect(result.outcome).toBe("COMPLETED");
+
+    // The DELEGATE is the source of truth for what the provider answered.
+    const canonical = await prisma.iocEnrichment.findUnique({ where: { id: delegate.id } });
+    expect(canonical.status).toBe("SUCCESS");
+    expect(canonical.queriedAt).not.toBeNull();
+
+    // The Phase-10 ledger records the same call, once.
+    const attempts = await prisma.providerLookupAttempt.findMany({ where: { lookupJobId: job.id } });
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0].state).toBe(quota.ATTEMPT_STATES.FINISHED);
+    expect(attempts[0].outcome).toBe(quota.ATTEMPT_OUTCOMES.SUCCESS);
+    expect(attempts[0].contactedProvider).toBe(true);
+
+    // Reconciliation carried the delegate's OWN queriedAt across, so the API's
+    // public `contacted` field reports the truth instead of its inverse.
+    const after = await prisma.providerLookupJob.findUnique({ where: { id: job.id } });
+    expect(after.queriedAt).not.toBeNull();
+    expect(after.completedAt).not.toBeNull();
+    expect(after.activeLookupKey).toBeNull();
+
+    // The Risk v1 boundary the ADMIN path already uses was invoked. This
+    // asserts only that a score now exists — never how it was computed, which
+    // is the evaluator's job and must not change.
+    expect(await prisma.riskScore.count({ where: { findingId: finding.id } })).toBeGreaterThan(0);
+  });
+
+  it("numbers the ledger from the CLAIMED canonical row, not from the never-incremented job", async () => {
+    // The Phase-10 job is deliberately never leased and never incremented
+    // (D-P10A2-05), so `job.attemptCount + 1` is always 1 — and a second
+    // attempt then collides with the (lookupJobId, attemptNumber) unique,
+    // which the authorization catch would misreport as a budget refusal.
+    const { delegate, job } = await createTargetedJob(IP.T_ATTEMPT_NO);
+    // A prior attempt that already happened.
+    await prisma.iocEnrichment.update({ where: { id: delegate.id }, data: { attemptCount: 1 } });
+
+    const { provider } = fakeTargetedProvider({ status: ENRICHMENT_STATUS.SUCCESS });
+    await targetedExecution.executeTargetedJob({
+      prisma,
+      job,
+      nowFn,
+      limit: 5,
+      leaseMs: 120000,
+      lookupMaxMs: 60000,
+      runtime: fakeRuntime(provider),
+      appConfig: CONFIGURED,
+      audit: noopAudit,
+    });
+
+    const attempts = await prisma.providerLookupAttempt.findMany({ where: { lookupJobId: job.id } });
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0].attemptNumber).toBe(2);
+    // And the Phase-10 job really was never leased.
+    const after = await prisma.providerLookupJob.findUnique({ where: { id: job.id } });
+    expect(after.claimToken).toBeNull();
+  });
+
+  it("bounds its own lookup, and a bound that fires is AMBIGUOUS rather than a fabricated failure", async () => {
+    // No provider's internal timeout bounds lookup(): each clears it when
+    // response headers arrive and reads the body afterwards. Unbounded, a
+    // stalled body read runs until the stale sweep resolves an attempt that is
+    // still live.
+    const { delegate, job } = await createTargetedJob(IP.T_BOUND);
+    const { provider, state } = fakeTargetedProvider({ delayMs: 400 });
+
+    const result = await targetedExecution.executeTargetedJob({
+      prisma,
+      job,
+      nowFn,
+      limit: 5,
+      leaseMs: 120000,
+      lookupMaxMs: 40, // shorter than the provider's delay
+      runtime: fakeRuntime(provider),
+      appConfig: CONFIGURED,
+      audit: noopAudit,
+    });
+
+    expect(state.calls).toBe(1);
+    expect(result.outcome).toBe("AMBIGUOUS");
+
+    const attempts = await prisma.providerLookupAttempt.findMany({ where: { lookupJobId: job.id } });
+    expect(attempts[0].outcome).toBe(quota.ATTEMPT_OUTCOMES.ABANDONED);
+    expect(attempts[0].contactedProvider).toBe(true);
+
+    const after = await prisma.providerLookupJob.findUnique({ where: { id: job.id } });
+    expect(after.state).toBe(JOB_STATES.DEAD_LETTER);
+    expect(after.terminalReasonCode).toBe("AMBIGUOUS_AFTER_CONTACT");
+
+    // The canonical row is terminal too. Only a terminal row can never be
+    // claimed again, which is what actually closes the duplicate-call window
+    // — the non-expiring hold alone would merely freeze it.
+    const canonical = await prisma.iocEnrichment.findUnique({ where: { id: delegate.id } });
+    expect(canonical.status).not.toBe("PENDING");
+  });
+
+  it("treats a throw AFTER contact as ambiguous, and never releases the row for a retry", async () => {
+    const { delegate, job } = await createTargetedJob(IP.T_THROW);
+    const { provider, state } = fakeTargetedProvider({ throwAfterContact: true });
+
+    const result = await targetedExecution.executeTargetedJob({
+      prisma,
+      job,
+      nowFn,
+      limit: 5,
+      leaseMs: 120000,
+      lookupMaxMs: 60000,
+      runtime: fakeRuntime(provider),
+      appConfig: CONFIGURED,
+      audit: noopAudit,
+    });
+
+    expect(state.calls).toBe(1);
+    expect(result.outcome).toBe("AMBIGUOUS");
+
+    // The ordinary retry policy would have released the claim with a delay,
+    // and releasing writes nextAttemptAt — clearing the contact hold and
+    // making the row claimable for a SECOND paid call. It must not run here.
+    const canonical = await prisma.iocEnrichment.findUnique({ where: { id: delegate.id } });
+    expect(canonical.status).not.toBe("PENDING");
+
+    // Nothing may re-select it.
+    const candidates = await repository.listTargetedDelegateCandidates(prisma, { asOf: new Date(), take: 50 });
+    expect(candidates.map((row) => row.subjectValue)).not.toContain(IP.T_THROW);
+  });
+
+  it("never calls the provider when the ADMIN batch already holds the canonical claim", async () => {
+    // Targeted execution and the ADMIN batch contend on the SAME
+    // compare-and-swap, which is what makes "no double execution" structural.
+    const { delegate, job } = await createTargetedJob(IP.T_CONTENDED);
+    const admin = await iocRepository.claimPendingJob(delegate.id, {
+      client: prisma,
+      now: new Date(),
+      leaseMs: 600000,
+    });
+    expect(admin).not.toBeNull();
+
+    const { provider, state } = fakeTargetedProvider();
+    const result = await targetedExecution.executeTargetedJob({
+      prisma,
+      job,
+      nowFn,
+      limit: 5,
+      leaseMs: 120000,
+      lookupMaxMs: 60000,
+      runtime: fakeRuntime(provider),
+      appConfig: CONFIGURED,
+      audit: noopAudit,
+    });
+
+    expect(state.calls).toBe(0);
+    expect(["TARGET_NOT_CLAIMABLE", "CLAIM_FAILED"]).toContain(result.outcome);
+    expect(await prisma.providerDailyUsage.count({ where: { provider: "abuseipdb" } })).toBe(0);
+    expect(await prisma.providerLookupAttempt.count({ where: { lookupJobId: job.id } })).toBe(0);
+
+    // Still waiting on its delegate: reconciliation finishes it once whoever
+    // DID execute reaches a terminal state.
+    const after = await prisma.providerLookupJob.findUnique({ where: { id: job.id } });
+    expect(after.state).toBe(JOB_STATES.WAITING_ON_DELEGATE);
+  });
+
+  it("records a non-authentication 4xx as PROVIDER_REJECTED, not as a transport failure", async () => {
+    // "The provider refused our request", "the provider broke" and "we never
+    // reached it" are three different facts. Collapsing them all into
+    // TRANSPORT_ERROR makes the ledger say something untrue.
+    const { job } = await createTargetedJob(IP.T_REJECTED);
+    const { provider } = fakeTargetedProvider({
+      status: ENRICHMENT_STATUS.FAILED,
+      errorCode: PROVIDER_ERROR_CODES.PROVIDER_REJECTED,
+      httpStatus: 400,
+    });
+
+    await targetedExecution.executeTargetedJob({
+      prisma,
+      job,
+      nowFn,
+      limit: 5,
+      leaseMs: 120000,
+      lookupMaxMs: 60000,
+      runtime: fakeRuntime(provider),
+      appConfig: CONFIGURED,
+      audit: noopAudit,
+    });
+
+    const attempts = await prisma.providerLookupAttempt.findMany({ where: { lookupJobId: job.id } });
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0].outcome).toBe(quota.ATTEMPT_OUTCOMES.PROVIDER_REJECTED);
+    expect(attempts[0].httpStatus).toBe(400);
+    expect(attempts[0].errorCode).toBe(PROVIDER_ERROR_CODES.PROVIDER_REJECTED);
+  });
+
+  it("records a 5xx as SERVER_ERROR", async () => {
+    const { job } = await createTargetedJob(IP.T_SERVER);
+    const { provider } = fakeTargetedProvider({
+      status: ENRICHMENT_STATUS.FAILED,
+      errorCode: PROVIDER_ERROR_CODES.PROVIDER_UNAVAILABLE,
+      httpStatus: 503,
+    });
+
+    await targetedExecution.executeTargetedJob({
+      prisma,
+      job,
+      nowFn,
+      limit: 5,
+      leaseMs: 120000,
+      lookupMaxMs: 60000,
+      runtime: fakeRuntime(provider),
+      appConfig: CONFIGURED,
+      audit: noopAudit,
+    });
+
+    const attempts = await prisma.providerLookupAttempt.findMany({ where: { lookupJobId: job.id } });
+    expect(attempts[0].outcome).toBe(quota.ATTEMPT_OUTCOMES.SERVER_ERROR);
+    expect(attempts[0].httpStatus).toBe(503);
+  });
+});
+
+describeOrSkip("Phase 10A-2 — a backlog cannot starve the queue, and a crash cannot re-buy an answer", () => {
+  beforeAll(async () => {
+    prisma = new PrismaClient({ datasources: { db: { url: TEST_DATABASE_URL } } });
+    await prisma.$connect();
+  });
+  afterAll(async () => {
+    await cleanup();
+    await prisma.$disconnect();
+  });
+  beforeEach(cleanup);
+
+  it("retires budget-exhausted rows instead of letting them occupy every scan window", async () => {
+    // The scan is bounded at MAX_SCAN_MULTIPLIER pages on purpose. Exhausted
+    // rows can never be claimed, so leaving them in the candidate query lets
+    // enough of them at the head of the queue starve every eligible job behind
+    // them forever — the queue looks busy and nothing ever runs.
+    const exhausted = [];
+    for (let i = 0; i < worker.MAX_SCAN_MULTIPLIER + 1; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      const row = await prisma.providerLookupJob.create({
+        data: {
+          provider: "censys",
+          subjectType: "IPV4",
+          subjectValue: IP.T_STARVED,
+          queryIdentityHash: `p10a2-exhausted-${i}`,
+          state: JOB_STATES.PENDING,
+          lane: "AUTOMATIC",
+          trigger: "RUN_DIRECT",
+          // Older than the eligible row, so they sort ahead of it.
+          requestedAt: new Date(NOW.getTime() - 100000 + i),
+          activeLookupKey: `p10a2-exhausted-${i}`,
+          maxAttempts: 1,
+          attemptCount: 1, // spent
+        },
+      });
+      exhausted.push(row.id);
+    }
+    const eligible = await createDirectJob(IP.DIRECT);
+
+    // The exhausted rows are already excluded from selection...
+    const candidates = await repository.listDirectCandidates(prisma, {
+      providers: directExecution.DIRECT_PROVIDER_NAMES,
+      asOf: new Date(),
+      take: worker.MAX_SCAN_MULTIPLIER, // a single page: they would fill it
+    });
+    expect(candidates.map((row) => row.id)).toContain(eligible.id);
+    exhausted.forEach((id) => expect(candidates.map((row) => row.id)).not.toContain(id));
+
+    // ...and the retirement pass is the other half: excluded rows must not sit
+    // non-terminal forever holding their work identity.
+    const retired = await worker.retireExhaustedDirectJobs({
+      prisma,
+      now: new Date(),
+      take: 50,
+      audit: noopAudit,
+    });
+    expect(retired).toBe(exhausted.length);
+
+    const rows = await prisma.providerLookupJob.findMany({ where: { id: { in: exhausted } } });
+    rows.forEach((row) => {
+      expect(row.state).toBe(JOB_STATES.DEAD_LETTER);
+      expect(row.terminalReasonCode).toBe("MAX_ATTEMPTS_EXHAUSTED");
+      expect(row.activeLookupKey).toBeNull();
+    });
+  });
+
+  it("does NOT requeue a contacted attempt that already finished, and terminalizes its job instead", async () => {
+    // The crash window the atomic post-call transaction cannot cover: the
+    // attempt row proves the provider was already asked and charged, but the
+    // job's terminal transition was lost. Requeuing here buys the same answer
+    // twice. Nothing else would resolve it either — the sweep looks only at
+    // UNFINISHED attempts — so it would hold its lease forever.
+    const job = await prisma.providerLookupJob.create({
+      data: {
+        provider: "censys",
+        subjectType: "IPV4",
+        subjectValue: IP.T_RECOVERY,
+        queryIdentityHash: `p10a2-recovery-${IP.T_RECOVERY}`,
+        state: JOB_STATES.LEASED,
+        lane: "AUTOMATIC",
+        trigger: "RUN_DIRECT",
+        requestedAt: NOW,
+        activeLookupKey: `p10a2-recovery-${IP.T_RECOVERY}`,
+        maxAttempts: 3,
+        attemptCount: 1,
+        claimToken: "stale-claim-token-for-recovery",
+        claimedAt: new Date(NOW.getTime() - 600000),
+        leaseExpiresAt: new Date(NOW.getTime() - 300000), // long expired
+      },
+    });
+    await prisma.providerLookupAttempt.create({
+      data: {
+        lookupJobId: job.id,
+        provider: "censys",
+        lane: "AUTOMATIC",
+        attemptNumber: 1,
+        usageDate: new Date("2026-08-12T00:00:00.000Z"),
+        state: quota.ATTEMPT_STATES.FINISHED,
+        outcome: quota.ATTEMPT_OUTCOMES.SUCCESS,
+        contactedProvider: true,
+        startedAt: NOW,
+        fetchStartedAt: NOW,
+        finishedAt: NOW,
+      },
+    });
+
+    await worker.recoverStaleClaims({ prisma, now: new Date(), take: 50, audit: noopAudit });
+
+    const after = await prisma.providerLookupJob.findUnique({ where: { id: job.id } });
+    // Never returned to the queue.
+    expect(after.state).not.toBe(JOB_STATES.PENDING);
+    expect(after.state).toBe(JOB_STATES.DEAD_LETTER);
+    expect(after.terminalReasonCode).toBe("AMBIGUOUS_AFTER_CONTACT");
+    expect(after.activeLookupKey).toBeNull();
+    expect(after.claimToken).toBeNull();
+  });
+
+  it("settles a run whose every job went terminal on a path with no run context", async () => {
+    // Some terminalization paths have no run to refresh — a swept attempt, a
+    // retired row, a job terminalized by an earlier crash. Without the general
+    // pass those runs report PENDING forever while all their work has finished.
+    const finding = await prisma.finding.create({
+      data: {
+        indicatorValue: IP.T_STARVED,
+        port: 3389,
+        protocol: "TCP",
+        reportType: "ACCESSIBLE_RDP",
+        firstSeen: NOW,
+        lastSeen: NOW,
+      },
+    });
+    const job = await prisma.providerLookupJob.create({
+      data: {
+        provider: "censys",
+        subjectType: "IPV4",
+        subjectValue: IP.T_STARVED,
+        queryIdentityHash: `p10a2-run-${IP.T_STARVED}`,
+        state: JOB_STATES.DEAD_LETTER,
+        lane: "AUTOMATIC",
+        trigger: "RUN_DIRECT",
+        requestedAt: NOW,
+        completedAt: NOW,
+        deadLetteredAt: NOW,
+        terminalReasonCode: "AMBIGUOUS_AFTER_CONTACT",
+        maxAttempts: 3,
+      },
+    });
+    const run = await prisma.findingEnrichmentRun.create({
+      data: {
+        findingId: finding.id,
+        trigger: "MANUAL",
+        state: "PENDING",
+        requestedAt: NOW,
+        requestScopeHash: `p10a2-scope-${IP.T_STARVED}`,
+        idempotencyKey: `p10a2-idem-${IP.T_STARVED}`,
+        items: {
+          create: [
+            {
+              findingId: finding.id,
+              provider: "censys",
+              subjectType: "IPV4",
+              subjectValue: IP.T_STARVED,
+              decision: "ELIGIBLE",
+              lookupJobId: job.id,
+            },
+          ],
+        },
+      },
+    });
+
+    const refreshed = await worker.reconcileRunStates({ prisma, now: new Date(), take: 50 });
+    expect(refreshed).toBeGreaterThan(0);
+
+    const after = await prisma.findingEnrichmentRun.findUnique({ where: { id: run.id } });
+    expect(after.state).not.toBe("PENDING");
+    expect(after.completedAt).not.toBeNull();
+
+    // Idempotent: a second pass must not select an already-terminal run.
+    const second = await worker.reconcileRunStates({ prisma, now: new Date(), take: 50 });
+    expect(second).toBe(0);
   });
 });

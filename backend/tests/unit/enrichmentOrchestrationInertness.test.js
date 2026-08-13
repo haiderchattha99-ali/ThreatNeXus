@@ -172,6 +172,49 @@ describe("Phase 10A-2 execution gate — every module is in exactly one tier", (
     expect(sourcesFor(files, LEDGER_MODULES)).toHaveLength(1);
   });
 
+  it("keeps the WORKER module away from every provider", () => {
+    // The worker SCHEDULES execution; it does not perform it. Without this the
+    // gate declared "only execution modules may contact providers" while
+    // checking that claim against the CORE and LEDGER tiers only — so a direct
+    // provider import or a `.lookup()` added to the worker would have passed
+    // it. The worker is where a future "just call it here" shortcut is most
+    // tempting, which is exactly why it needs the same prohibition.
+    // eslint-disable-next-line no-restricted-syntax
+    for (const file of sourcesFor(files, WORKER_MODULES)) {
+      const code = codeOnly(file.source);
+      // eslint-disable-next-line no-restricted-syntax
+      for (const forbidden of [...FORBIDDEN_IMPORT_PATTERNS, ...FORBIDDEN_CALL_PATTERNS]) {
+        if (forbidden.pattern.test(code)) {
+          throw new Error(`${file.name} is the WORKER module and contains ${forbidden.label}`);
+        }
+      }
+    }
+    expect(sourcesFor(files, WORKER_MODULES)).toHaveLength(1);
+  });
+
+  it("confines provider contact to the named EXECUTION modules, whatever files exist", () => {
+    // The tier tests above check an EXPLICIT list of module names, so a file
+    // added later belongs to no tier and is scanned by none of them. This one
+    // is the other way round: whatever the package contains, any file that
+    // calls `.lookup(` must be in the execution tier. A new module cannot
+    // quietly acquire execution privileges.
+    //
+    // Only the direct service matches today. The targeted path reaches its
+    // provider through the SHARED runner in services/enrichment/, which is
+    // outside this package — deliberately, because that runner is the same
+    // compare-and-swap the ADMIN batch contends on (D-P10A2-05).
+    const callers = files
+      .filter((file) => /\.lookup\s*\(/.test(codeOnly(file.source)))
+      .map((file) => file.name);
+    // eslint-disable-next-line no-restricted-syntax
+    for (const name of callers) {
+      if (!EXECUTION_MODULES.includes(name)) {
+        throw new Error(`${name} calls .lookup( but is not an EXECUTION module`);
+      }
+    }
+    expect(callers).toContain("enrichmentDirectExecutionService.js");
+  });
+
   it("allows no raw SQL anywhere in the package", () => {
     // The reservation guard is a compare-and-swap through Prisma, not raw SQL
     // (D-P10A2-02). This package introduces no first raw statement.

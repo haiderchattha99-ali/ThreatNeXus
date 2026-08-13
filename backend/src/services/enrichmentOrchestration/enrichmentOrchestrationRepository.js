@@ -246,6 +246,16 @@ async function listDirectCandidates(client, { providers, asOf, take }) {
       provider: { in: providers },
       state: { in: [...NON_TERMINAL_DIRECT_STATES] },
       OR: [{ claimToken: null }, { leaseExpiresAt: { lte: asOf } }],
+      // Budget-exhausted rows are EXCLUDED here rather than claimed and
+      // refused. claimLookupJob would refuse them anyway, so including them
+      // burns scan windows on rows that can never be claimed — and with a
+      // bounded scan, enough of them at the head of the queue starve every
+      // eligible job behind them forever. They are retired by their own
+      // bounded pass (listExhaustedDirectJobs) instead.
+      //
+      // A Prisma FIELD REFERENCE, so the comparison is column-to-column in
+      // SQL rather than a constant read in JavaScript first.
+      attemptCount: { lt: client.providerLookupJob.fields.maxAttempts },
     },
     orderBy: [{ requestedAt: "asc" }, { id: "asc" }],
     take,
@@ -278,6 +288,11 @@ async function listTargetedDelegateCandidates(client, { asOf, take, skip = 0 }) 
           AND: [
             { OR: [{ claimToken: null }, { leaseExpiresAt: { lte: asOf } }] },
             { OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: asOf } }] },
+            // The budget gate claimPendingJob also applies. Omitting it made
+            // this filter claim to "mirror every gate" while still returning
+            // rows that can never be claimed, which starves everything behind
+            // them once a bounded scan fills with exhausted delegates.
+            { attemptCount: { lt: client.iocEnrichment.fields.maxAttempts } },
           ],
         },
       },
@@ -343,13 +358,18 @@ async function claimLookupJob(client, id, { now, leaseMs }) {
  *
  * @returns {Promise<boolean>} true when THIS call performed the transition
  */
-async function terminalizeClaimedJob(client, { id, claimToken, state, now, evidence, freshUntil, httpStatus, errorCode, retryAfterSeconds, terminalReasonCode }) {
+async function terminalizeClaimedJob(client, { id, claimToken, state, now, evidence, freshUntil, httpStatus, errorCode, retryAfterSeconds, terminalReasonCode, contacted = true }) {
   const { count } = await client.providerLookupJob.updateMany({
     where: { id, state: "LEASED", claimToken },
     data: {
       state,
       completedAt: now,
-      queriedAt: now,
+      // `queriedAt` is what the API derives the public `contacted` field from,
+      // so it must be written ONLY when a provider was genuinely asked. A
+      // pre-call outcome — an unresolvable provider, a missing credential —
+      // is terminal without contact, and stamping it here reported
+      // `contacted: true` for a call that never happened.
+      ...(contacted ? { queriedAt: now } : {}),
       freshUntil: freshUntil ?? null,
       activeLookupKey: null,
       claimToken: null,
@@ -398,7 +418,7 @@ async function refuseClaimedJobForBudget(client, { id, claimToken, now }) {
  * resolution — none of which holds a Phase-10 claim token, because the
  * targeted path never leases the Phase-10 job (D-P10A2-05).
  */
-async function terminalizeDelegatedJob(client, { id, state, now, terminalReasonCode }) {
+async function terminalizeDelegatedJob(client, { id, state, now, terminalReasonCode, queriedAt, freshUntil, httpStatus, errorCode, retryAfterSeconds }) {
   const { count } = await client.providerLookupJob.updateMany({
     where: { id, state: "WAITING_ON_DELEGATE" },
     data: {
@@ -406,10 +426,92 @@ async function terminalizeDelegatedJob(client, { id, state, now, terminalReasonC
       completedAt: now,
       activeLookupKey: null,
       terminalReasonCode: terminalReasonCode ?? null,
+      // Carried from the DELEGATE's own durable row, not invented here. The
+      // API derives the public `contacted` field from queriedAt, so a
+      // successfully contacted delegated job that copied nothing reported
+      // `contacted: false` — the exact inverse of the truth.
+      ...(queriedAt ? { queriedAt } : {}),
+      ...(freshUntil !== undefined ? { freshUntil } : {}),
+      ...(httpStatus !== undefined ? { httpStatus } : {}),
+      ...(errorCode !== undefined ? { errorCode } : {}),
+      ...(retryAfterSeconds !== undefined ? { retryAfterSeconds } : {}),
       ...(state === "DEAD_LETTER" ? { deadLetteredAt: now } : {}),
     },
   });
   return count === 1;
+}
+
+/**
+ * Direct jobs that have spent their attempt budget and can never be claimed.
+ *
+ * They are excluded from the candidate query precisely so they cannot starve
+ * it, which means something else has to retire them or they sit non-terminal
+ * forever holding activeLookupKey. This is that something.
+ */
+async function listExhaustedDirectJobs(client, { asOf, take }) {
+  return client.providerLookupJob.findMany({
+    where: {
+      trigger: "RUN_DIRECT",
+      state: { in: [...NON_TERMINAL_DIRECT_STATES] },
+      attemptCount: { gte: client.providerLookupJob.fields.maxAttempts },
+      OR: [{ claimToken: null }, { leaseExpiresAt: { lte: asOf } }],
+    },
+    orderBy: [{ requestedAt: "asc" }, { id: "asc" }],
+    take,
+  });
+}
+
+/**
+ * Retires an exhausted, unleased direct job. Guarded so a job another worker
+ * is actively processing cannot be retired out from under it.
+ */
+async function retireExhaustedDirectJob(client, { id, now }) {
+  const { count } = await client.providerLookupJob.updateMany({
+    where: {
+      id,
+      state: { in: [...NON_TERMINAL_DIRECT_STATES] },
+      attemptCount: { gte: client.providerLookupJob.fields.maxAttempts },
+      OR: [{ claimToken: null }, { leaseExpiresAt: { lte: now } }],
+    },
+    data: {
+      state: "DEAD_LETTER",
+      completedAt: now,
+      deadLetteredAt: now,
+      terminalReasonCode: "MAX_ATTEMPTS_EXHAUSTED",
+      activeLookupKey: null,
+      claimToken: null,
+      claimedAt: null,
+      leaseExpiresAt: null,
+    },
+  });
+  return count === 1;
+}
+
+/**
+ * Runs whose every item's job is terminal but whose own state is not.
+ *
+ * A job can go terminal on a path that has no run context to refresh — a
+ * stale-attempt sweep, an ambiguity retirement — so without this pass such a
+ * run reports PENDING forever while all of its work has finished.
+ */
+async function listStaleNonTerminalRuns(client, { take }) {
+  return client.findingEnrichmentRun.findMany({
+    where: {
+      state: { in: ["PENDING", "RUNNING"] },
+      // `some` as well as `every`, and not for symmetry: Prisma's `every` is
+      // vacuously TRUE for a run with no items, and recomputeRunState maps an
+      // empty item set to the terminal SKIPPED. Without this guard a run whose
+      // items are not yet visible could be settled out from under its own
+      // creation. A run with no items is also not what this pass exists for.
+      items: {
+        some: {},
+        every: { OR: [{ lookupJobId: null }, { lookupJob: { is: { completedAt: { not: null } } } }] },
+      },
+    },
+    orderBy: { id: "asc" },
+    take,
+    select: { id: true },
+  });
 }
 
 /**
@@ -521,4 +623,7 @@ module.exports = {
   listExpiredDirectLeases,
   releaseExpiredDirectLease,
   listRunIdsForJob,
+  listExhaustedDirectJobs,
+  retireExhaustedDirectJob,
+  listStaleNonTerminalRuns,
 };
