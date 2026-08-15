@@ -103,6 +103,16 @@ export const findingService = {
   getFinding: (id) => apiClient.get(`/findings/${id}`),
 }
 
+// Phase 10B — the Phase 10 enrichment ORCHESTRATION read/trigger surface
+// (docs/ai/PHASE-10A1-API-CONTRACT.md), distinct from findingService.getFinding's
+// legacy single-provider `enrichment` field. A pure read (getSummary) plus the
+// one write this contract defines (createRun) — no new backend route is added.
+export const findingEnrichmentOrchestrationService = {
+  getSummary: (findingId) => apiClient.get(`/findings/${findingId}/enrichment/summary`),
+  createRun: (findingId, body) => apiClient.post(`/findings/${findingId}/enrichment/runs`, body || {}),
+  getRun: (findingId, runId) => apiClient.get(`/findings/${findingId}/enrichment/runs/${runId}`),
+}
+
 // The canonical, evidence-backed report-ingestion contract.
 //
 // POST /api/reports/upload is the ONLY route that runs the real pipeline:
