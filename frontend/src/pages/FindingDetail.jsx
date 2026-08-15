@@ -32,6 +32,7 @@ import { FiArrowLeft, FiRefreshCw } from 'react-icons/fi'
 import { findingService } from '../services/api'
 import { FindingTriagePanel } from '../components/FindingTriagePanel'
 import { FindingAiAssistPanel } from '../components/FindingAiAssistPanel'
+import { FindingEnrichmentPanel } from '../components/FindingEnrichmentPanel'
 import {
   PageHeader,
   Panel,
@@ -469,6 +470,10 @@ export const FindingDetail = () => {
             </EmptyState>
           )}
         </Panel>
+      </Box>
+
+      <Box sx={{ mb: 2 }}>
+        <FindingEnrichmentPanel findingId={finding.id} />
       </Box>
 
       <Box sx={{ mb: 2 }}>

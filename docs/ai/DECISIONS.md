@@ -19,6 +19,7 @@ repository.
 | D-P10A2-07 | 2026-08-12 | Accepted | The contact guard: a contacted `IocEnrichment` row is made unclaimable via `nextAttemptAt` until its ambiguity is resolved | TNX-P10A2-LIVE-ENRICHMENT-EXECUTION |
 | D-P10A2-08 | 2026-08-12 | Accepted | Amend `IOC_STATUS_TO_JOB_STATE` to map every terminal delegate status, and refresh run state after reconciliation | TNX-P10A2-LIVE-ENRICHMENT-EXECUTION |
 | D-P10A2-09 | 2026-08-12 | Accepted | The Phase-10 worker imposes its own end-to-end bound on `lookup()`; the five shared provider modules are left unchanged | TNX-P10A2-LIVE-ENRICHMENT-EXECUTION |
+| D-P10B-01 | 2026-08-13 | Accepted | Phase 10B V1 scope frozen: analyst enrichment visibility on the existing Phase 10 read model, additive-only, no backend/execution/Risk-v1 change | TNX-P10B-ENRICHMENT-VISIBILITY |
 
 > **Revision note (2026-08-12).** The internal independent Codex design review returned
 > **NOT READY** (12×P1, 1×P2, 1×P3, no P0) against contract v1. All fourteen findings were verified
@@ -459,3 +460,58 @@ This exception is now spent. **All future work on this repository must begin in 
 worktree using the normal start / checkpoint / handoff writer-lock protocol.** A future agent that
 finds a dirty tree must stop and review, not repeat this exception — the authorization was for one
 named checkpoint, not a precedent.
+
+---
+
+## D-P10B-01 — Phase 10B V1 scope frozen
+
+**Status:** Accepted. Ticket `TNX-P10B-ENRICHMENT-VISIBILITY`.
+
+### Context
+
+No canonical Phase 10B specification exists anywhere in this repository or in the sibling planning
+repo: `docs/ai/DECISIONS.md`, `HANDOFF.md`, `STATE.yaml` and `PHASE-10A2-RUNNER-CONTRACT.md` all say
+"Phase 10B not started" but define nothing, and the `phase-10-planning` worktree is detached at an
+unrelated older commit. Rather than invent a specification from a chat prompt, this ticket derived
+the smallest analyst-facing surface directly from the already-approved, binding
+`PHASE-10A1-API-CONTRACT.md` read model and implemented it. This entry freezes exactly what was
+built and verified, so a future session has one canonical place to check before assuming more (or
+less) exists than actually does.
+
+### Decision
+
+Phase 10B V1 is, in full:
+
+- A new `FindingEnrichmentPanel` on the Finding detail screen, reading
+  `GET /api/findings/:id/enrichment/summary` — all six known providers always represented, the
+  closed status vocabulary (`NO_SUBJECT` / `NOT_REQUESTED` / `PENDING` / `COMPLETED` /
+  `UNAVAILABLE` / `SKIPPED`, each with its own label) never collapsed into a shared look, a stale
+  `COMPLETED` answer visibly marked stale rather than shown as current, and NVD's verified-CVE
+  subjects each rendered as their own row.
+- The existing, capability-gated `POST /api/findings/:id/enrichment/runs` action ("Request
+  enrichment"), gated in the UI on `trigger:finding-enrichment` — UX only. Verified against
+  `backend/tests/integration/phase10a1RouteAuthorization.test.js` (real HTTP against the mounted
+  app, only Prisma stubbed) that the server independently enforces the identical matrix: ADMIN/
+  ANALYST allowed, REVIEWER/VIEWER refused 403 with nothing recorded, unauthenticated refused 401,
+  `force=true` grants no bypass. This UI adds no new authorization surface — see `STATE.yaml`
+  validation evidence for the run.
+- A manual "Check status" action against `GET /api/findings/:id/enrichment/runs/:runId`. `contacted`
+  is rendered directly from that response's own stored boolean, never inferred from any other field.
+- `executionState` (`PAUSED_WORKER_DISABLED` / `ACTIVE`) shown beside the request control, so a
+  recorded request is never presented as an executed one.
+
+Explicitly, deliberately **not** in V1 (backlog if a future ticket needs them):
+
+- No `force`/`justification` UI on the trigger action.
+- No live polling of a run's progress — "Check status" is a single explicit action.
+- No provider-configuration UI (credentials, budgets).
+- No merge with, or removal of, the pre-existing legacy "IP reputation context" panel (the
+  single-provider AbuseIPDB cache view) — both coexist; see the UI/UX review's finding on this.
+- No backend route, controller, service, migration, or Risk v1 change of any kind — zero diff under
+  `backend/`.
+
+### Consequence
+
+A future session extending enrichment visibility should treat this entry, not the mid-turn prompts
+that produced it, as the record of what V1 actually is. Any of the deferred items above becomes its
+own ticket rather than silent scope creep on this one.

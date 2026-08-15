@@ -1,205 +1,152 @@
-# Handoff: TNX-P10A2-LIVE-ENRICHMENT-EXECUTION
+# Handoff: TNX-P10B-ENRICHMENT-VISIBILITY
 
 - From: claude
-- Branch: `feat/phase-10a2-live-enrichment-execution`
-- Worktree: `F:\AI-Worktrees\ThreatNeXus\phase-10a2`
-- Starting commit: `4879097` (origin/main, PR #20 merge — the required ancestor)
-- Checkpoints: `25b8f83` (contract) → `c6ab49a` (implementation) → `b890353` (tests)
-- Updated: 2026-08-12
+- Branch: `feat/phase-10b-enrichment-visibility`
+- Worktree: `F:\AI-Worktrees\ThreatNeXus\phase-10b`
+- Starting commit: `78f2a69` (origin/main, PR #21 merge — Phase 10A-2)
+- Updated: 2026-08-13
+- Status: **in_progress — Tier-2 first stop boundary (ground → implement → STOP)**
 
 ## What this delivers
 
-The **mandatory pre-10A-2 blocker** recorded in the previous handoff is discharged. The targeted
-runner/hook contract was designed, independently reviewed **twice** before any execution code
-existed, amended after each review, and then implemented.
+Analyst-facing visibility into the Phase 10 enrichment orchestration read
+model that Phase 10A-1 defined and Phase 10A-2 made executable. No backend
+route was added — this consumes the three existing routes in
+`docs/ai/PHASE-10A1-API-CONTRACT.md` exactly as specified:
 
-Phase 10A-1 recorded intent and executed nothing. Phase 10A-2 makes that intent executable, behind
-a switch that is off by default, for Censys / GreyNoise / Shodan / Netlas directly and AbuseIPDB
-through a targeted hook into the canonical IOC workflow. **NVD is deliberately not executed** and
-still requires the ADMIN vulnerability batch.
+- `GET /api/findings/:id/enrichment/summary` — the primary read. One row per
+  known provider (always all six), never omitted, with a closed status
+  vocabulary (`NO_SUBJECT` / `NOT_REQUESTED` / `PENDING` / `COMPLETED` /
+  `UNAVAILABLE` / `SKIPPED`) that never collapses two different truths into
+  one look. A stale `COMPLETED` answer keeps its own `StaleNotice` rather than
+  reading as current.
+- `POST /api/findings/:id/enrichment/runs` — the one write, capability-gated
+  on `trigger:finding-enrichment` (UX only; the backend re-checks it). Shows
+  the outcome (`CREATED` / `ALREADY_RUNNING` / `SKIPPED`) and the recorded
+  items, including `contacted` — read **directly from the backend's own
+  stored boolean**, never inferred from a status.
+- `GET /api/findings/:id/enrichment/runs/:runId` — a manual "Check status"
+  refresh for the last request. No auto-polling.
 
-## The design gate earned its place — read this before changing anything
+`executionState` (`PAUSED_WORKER_DISABLED` / `ACTIVE`) is always shown next to
+the request control, so "recorded" is never presented as "executed".
 
-The first review returned **NOT READY** with 12 P1, 1 P2, 1 P3. Every finding was verified against
-the repository and **all fourteen were substantiated; none was invented.** The bounded re-check
-resolved 10 and narrowed the rest to four concrete corrections.
+## A mistake this session made and corrected — read before trusting `cd` in this repo
 
-**Three of the findings are latent defects in already-merged Phase 10A-1 code** that were harmless
-only because nothing executed:
+Initial edits landed **directly in the primary checkout**
+(`C:\Users\LENOVO\Desktop\ThreatNeXus`), which the ticket explicitly said not
+to touch (it holds protected, uncommitted Phase 9 work). This was caught via
+`git status` before anything was committed or pushed.
 
-1. **`IOC_STATUS_TO_JOB_STATE` omitted the terminal statuses `RATE_LIMITED` and `DEAD_LETTER`.**
-   Its comment claimed a rate-limited delegate is "still working". That is false against the code:
-   `TERMINAL_STATUSES` is every status except `PENDING` (`iocEnrichmentCacheRules.js:57`) and
-   `resolveEnrichmentRetry` COMPLETEs it. Such a delegate pinned its Phase-10 job in
-   `WAITING_ON_DELEGATE` and held `activeLookupKey` **forever**, permanently blocking every future
-   ask about that subject. `reconcileDelegatedJobs` also never called `refreshRunState` and used an
-   unguarded `updateJob`. All three are fixed.
-2. **`resolveEnrichmentRetry` returns `COMPLETE` for every terminal status**, so any design
-   requiring `RETRY_WAIT` for `RATE_LIMITED` is unimplementable without changing the branch the
-   ADMIN batch shares. Phase 10A-2 adopts the existing semantics instead (D-P10A2-06).
-3. **`AttemptOutcome` had no `PROVIDER_REJECTED`**, which every provider emits for non-auth
-   3xx/4xx — a Censys HTTP 400 could only be recorded as `SERVER_ERROR` or `TRANSPORT_ERROR`, both
-   false. Added in migration 25.
+While recovering, a second instance of the **documented `cd`-into-worktree
+hazard** ([[threatnexus_worktree_cd_hazard]] in project memory) reproduced
+live: a `cd "F:\...\phase-10b" && git checkout origin/main -- <path>` command
+executed with `pwd` still resolving to the **primary checkout**, staging an
+unintended change there. Neither incident touched the pre-existing Phase 9
+dirty paths, and nothing was ever committed or pushed, so recovery was a pure
+local revert:
 
-And a fourth, found in the re-check: **no provider's timeout bounds its `lookup()`.** Every provider
-clears its timeout as soon as response *headers* arrive and reads the body afterwards
-(`censysProvider.js:139/182`, `greyNoiseProvider.js:117/160`). A stalled body read runs unbounded,
-so the stale sweep could have resolved an attempt that was **still executing**.
+```
+git -C "C:\Users\LENOVO\Desktop\ThreatNeXus" checkout HEAD -- frontend/src/services/api.js frontend/src/pages/FindingDetail.jsx
+rm <the 3 new files that had been created there>
+```
 
-## The duplicate-charge window, and why the fix is a sentinel
+Verified after: `git -C <primary> status --porcelain -- frontend/src` empty,
+and the full `git status --porcelain --branch` matches the exact session-start
+snapshot (only the pre-existing Phase 9 paths). **From that point on, every
+shell command paired `cd <dir> && pwd && <command>` in one call**, or used
+`git -C <dir>` exclusively, and `pwd`'s output was checked before trusting any
+result. A future writer in this repository should do the same rather than
+trust that a preceding `cd` in an earlier tool call still holds — it does not
+reliably persist here.
 
-The IOC lease is 120s; any stale sweep is minutes later. So the ADMIN batch could reclaim and
-**re-call** a row whose first request was still unresolved — a duplicate charge against a paid
-third party, which binding guarantee 7 forbids.
+## Why there is no canonical Phase 10B contract document
 
-v2 proposed a *duration* guard with the ordering `lease < stale < guard`. That was also wrong, and
-the re-check was right to reject it: **an ordering of durations bounds how long things last, not
-when recovery runs.** If no worker runs for longer than the guard, it lapses and the duplicate
-happens anyway.
+Origin/main's `docs/ai/DECISIONS.md`, `HANDOFF.md`, `STATE.yaml` and
+`PHASE-10A2-RUNNER-CONTRACT.md` all say "Phase 10B not started" but none
+define its scope, and the `phase-10-planning` worktree (detached at an older
+commit) has nothing matching "10B" either. Scope for this ticket was derived
+directly from the **binding, already-approved** `PHASE-10A1-API-CONTRACT.md`
+read model — the smallest surface that makes the merged Phase 10A-2 work
+visible to an analyst — rather than invented from the mid-turn prompt alone.
 
-v3 uses a **non-expiring sentinel** written into `nextAttemptAt`, reusing a gate `claimPendingJob`
-already applies (`iocEnrichmentRepository.js:286`). It is cleared only by a path that *knows* the
-outcome: `completeClaimedJob` on a terminal result, or the ambiguity sweep driving the row terminal.
-**`claimPendingJob` itself is unmodified**, so the ADMIN batch is byte-identical on every other row.
+## What this panel deliberately does NOT do
 
-Relatedly, the targeted path passes **no `AbortSignal`** into the runner: the ADMIN runner re-checks
-cancellation *after* the provider returns and releases the claim **with a refund**, which on a
-contacted row is exactly the duplicate this exists to prevent. Shutdown drains instead.
+- Does not touch `backend/src/services/enrichmentOrchestration/` or any
+  Phase 10A-2 worker/quota code — zero backend diff.
+- Does not merge with or replace the pre-existing "IP reputation context"
+  panel (the legacy single-provider AbuseIPDB cache view) — both stay, each
+  honest about which pipeline produced its evidence.
+- Does not expose `force`/`justification` on the trigger action, a job id, a
+  delegate id, or any of the fields `enrichmentRunReadService.js` explicitly
+  forbids serializing.
+- Does not poll or auto-trigger a provider call. "Check status" is a manual,
+  explicit analyst action, same as "Request enrichment".
 
-## Load-bearing decisions
+## Validation this session ran
 
-| ID | Decision |
-|---|---|
-| D-P10A2-01 | Delegate-linkage invariant promoted to a database CHECK (migration 25) |
-| D-P10A2-02 | Quota reservation is a guarded `updateMany` CAS, not raw SQL |
-| D-P10A2-03 | `executionState` `NOT_IMPLEMENTED` → `ACTIVE`, across five places together |
-| D-P10A2-04 | An ambiguous crash after contact is terminal and manual-review only |
-| D-P10A2-05 | Targeted AbuseIPDB never leases the Phase-10 job — the canonical claim is the only lease |
-| D-P10A2-06 | A provider result is always terminal; no automatic retry of an outcome |
-| D-P10A2-07 | The non-expiring contact sentinel |
-| D-P10A2-08 | Reconciliation must map every terminal delegate status |
-| D-P10A2-09 | The worker bounds its own lookup; the five shared provider modules are untouched |
-
-## Evidence
-
-| Gate | Result |
-|---|---|
-| `prisma format` / `validate` / `generate` | pass |
-| `migrate deploy` from zero | **25/25** |
-| `migrate diff --exit-code` | **no drift** |
-| New execution suite | **21/21** real-PostgreSQL |
-| Unit suite | **2427 passed** (108 files) |
-| Full backend suite, real PG | **3428 passed, 54 skipped, 1 failed** — see below |
-| Nine core evaluators | **all PASS** |
-| Risk v1 | `backend/src/services/risk/` **empty diff**; `eval:risk` PASS |
-| Frontend | lint (pre-existing warnings), **169 passed**, build clean, bundle clean |
-| Hygiene (CI's three checks) | clean · `git diff --check` clean |
-| `docker compose config` | valid |
-| Rehearsal — worker **disabled** | healthy stack, **no worker line**, **0** attempts / usage / jobs |
-| Rehearsal — worker **enabled** | worker starts; **0 usage, 0 attempts** with positive budgets but empty keys; backend healthy |
-| `backend/.env` | never opened, read, printed or referenced |
-| Primary checkout | **untouched** — still `5fe93d2`; every git command used `git -C` |
-
-**The one failure is not a regression.** `vulnerabilityCoreConcurrency` passes **19/19 in
-isolation** and exercises only vulnerability-queue code this branch never modified — the documented
-local contention flake class, same family as `vulnerabilityReleaseWorkflow` which also failed on the
-untouched baseline.
-
-## Two tests were corrected, not deleted
-
-One required `RATE_LIMITED` to be treated as "still working" — it pinned the defect above. One
-pinned the retired `NOT_IMPLEMENTED`. Both now assert the corrected behaviour and say why.
-
-The 10A-1 inertness gate was **re-tiered rather than removed**: 11 core modules stay fully inert, the
-ledger may write attempt/usage rows but cannot reach a provider, only two named modules may call
-`lookup()`, and only the worker may schedule. The module list is exact, so a new file cannot acquire
-execution privileges without a deliberate edit, and a `fetch(` added to any core module still fails.
-
-## A real bug the tests caught
-
-The ambiguity sweep passed `terminalReasonCode: "PROVIDER_FAILURE"`, outside the closed
-`ENRICHMENT_TERMINAL_REASON` vocabulary, which would have **thrown at runtime on the exact path that
-exists to contain an ambiguous outcome**. Fixed by adding `AMBIGUOUS_AFTER_CONTACT` — deliberately
-not a `MAX_ATTEMPTS_*` code, because the attempt budget is irrelevant when one ambiguous contact is
-already enough to stop.
-
-The new CHECK constraint also rejected one of the suite's own fixtures that tried to create an
-unlinked `RUN_DELEGATED` job. The fixture was wrong; the constraint was right. That refusal is now a
-test.
+- 34/34 focused frontend tests (18 new + 16 pre-existing on the same page),
+  run from the worktree with vitest's own root banner checked
+  (`F:/AI-Worktrees/ThreatNeXus/phase-10b/frontend`).
+- `oxlint` clean on all 5 changed/added files.
+- `vite build` clean.
+- `git diff --stat` on `api.js`: **10 insertions, 0 deletions** — confirmed
+  additive-only, `reportIngestionService` and every other export untouched.
+- No backend file touched; no Prisma/migration touched; no Risk v1 file
+  touched.
 
 ## Honest gaps
 
-- **A contacted row can be held indefinitely** if a worker dies after contact and none runs again.
-  Deliberate: freezing one row is safer than double-calling a paid third party when we cannot
-  establish what happened. Visible, and self-resolves when a worker next runs.
-- **The pre-existing unbounded body read is not fixed** for the ADMIN batch or the four expert
-  endpoints. Phase 10A-2 bounds only its own call site (D-P10A2-09). Recommended for its own ticket
-  under its own review, because it changes shared merged code.
-- **The full 47-case test matrix was scoped down to core guarantees by explicit user decision.**
-  The per-status permutation matrix (404 / 429 / 5xx / timeout / malformed / network, for each of
-  five providers) is **not** covered end to end; status mapping is asserted at unit level on
-  `resolveAttemptOutcome`.
-- `RETRY_WAIT` is now an unused enum value; no push wakeup; one provider call in flight per process.
+- No backend/Chromium/E2E pass — only component tests against a mocked API
+  client. Recommended before delivery.
+- Full CI-equivalent gate (backend suite, evaluators, Docker rehearsal) not
+  run — not required for this frontend-only, additive-API-consuming change at
+  this stop boundary, but still owed before PR/delivery.
+- `force`/justification UI, and live polling of a run's progress, are
+  deliberately out of scope — backlog items if an analyst asks for them.
 
-## The final independent review happened, and its P1 checklist is now closed
+## Tier-2 verification stage (second stop boundary)
 
-The final Codex implementation review returned **NOT APPROVED FOR PR — 0 P0, 11 P1, 1 P2**. The
-writer began applying the corrections and its account hit a spend limit mid-fix; a second Claude
-session took the lease over (`bad84451` → `2243577d`) from the live dirty worktree without
-restarting, re-designing or re-reviewing anything.
+Completed on continuation, per the Tier-2 lifecycle's second half
+(`verify → review if required → deliver → STOP`):
 
-**No correction changed the approved architecture.** Every one implements contract v3 as written, so
-no second independent review was required and none was performed.
+- **Server-side authorization independently re-verified**, not just trusted
+  from the earlier draft: read `enrichmentOrchestrationRoutes.js` +
+  `lib/roles.js` (POST is gated on `TRIGGER_FINDING_ENRICHMENT`, ADMIN+ANALYST
+  only) and actually ran `phase10a1RouteAuthorization.test.js` — 52/52 passing
+  real-HTTP tests, confirming ADMIN/ANALYST 202, REVIEWER/VIEWER 403 with
+  nothing recorded, unauthenticated 401, `force=true` grants no bypass. The
+  frontend's `trigger:finding-enrichment` gate matches this exactly. No new
+  authorization surface — Tier-2 classification stands.
+- **One read-only `uiux-pro-reviewer` pass** against the panel, the mount
+  point, and the 9 questions in the ticket brief. Found and fixed: a **P1**
+  (all 3 `Panel` renders used `titleLevel="h3"` while every sibling panel on
+  the page uses the default `h2`, breaking screen-reader section navigation —
+  dropped the override) and a **P2** (the "Lookup state" cell showed "Not yet
+  queued" for permanently policy-skipped items, implying eventual queuing that
+  will never happen — now shows `—` for any non-`ELIGIBLE` decision, matching
+  the existing Contacted column's convention). P3 items are inherited Phase-10A
+  backend read-model decisions this panel correctly and honestly surfaces, not
+  fixable here.
+- **Component tests re-run after the fixes**: 19/19 `FindingEnrichmentPanel` +
+  16/16 `FindingAiAssistPanel`, no regressions. `oxlint` and `vite build`
+  re-run clean.
+- **New**: ran the existing `frontend/e2e/findingEnrichment.spec.js` Chromium
+  suite against the real stack (dockerized postgres+backend, seeded demo data,
+  production preview build) — **8/8 passing**. Hit and fixed one environment
+  false-failure along the way: Playwright's default `baseURL` is
+  `http://127.0.0.1:4173`, not `http://localhost:4173`; a manually-set
+  `CORS_ORIGIN=http://localhost:4173` silently blocked every browser fetch
+  (status `-1`) even though `curl` to the same endpoint worked. Diagnosed via
+  the Playwright trace's `0-trace.network` file, fixed by matching the origin,
+  and recorded in `F:/Ismail-AI-Dev-Team/memory/ENGINEERING-LESSONS.md` so a
+  future session doesn't lose time rediscovering it.
+- **Writer-lease gap recorded, not rebuilt**: `.ai-team/WRITER_LOCK.json` still
+  does not exist for this repo (same gap since Phase 8B) — logged as a
+  standing cross-project backlog item in the same `ENGINEERING-LESSONS.md`
+  rather than being silently re-noted per session.
 
-| # | P1 finding | Correction |
-|---|---|---|
-| 1 | Targeted lookup had no worker-level bound | `raceWithBound` in the runner; `lookupMaxMs` threaded through the service and the worker's targeted pass |
-| 2 | Descriptor resolved after reservation; attempt number not durable | `hooks.resolveDescriptor` runs after the claim and before `authorize`; ledger numbers come from the claimed canonical row's `attemptCount` |
-| 3 | Contact transition non-atomic and unchecked | one transaction, both guards must match exactly one row; `CONTACT_TRANSITION_LOST`; post-contact failures never reach the retry policy |
-| 4 | `FINISHED attempt ⇒ terminal job` not maintained | direct ambiguity and post-call writes are single guarded transactions (`StaleClaimError` rolls back); the sweep's finalize+terminalize merged; recovery no longer requeues a contacted `FINISHED` attempt, it terminalizes the job |
-| 5 | Targeted success skipped Risk v1 | `recalculateRiskSafely` → the existing `recalculateAfterEnrichment` boundary, isolated so a risk failure cannot disturb the enrichment result |
-| 6 | Terminal jobs left runs non-terminal | both direct pre-call branches refresh their runs; new bounded `reconcileRunStates` pass after the sweep |
-| 7 | `contacted` false in both directions | `terminalizeClaimedJob({contacted})` stamps `queriedAt` only on a real call; reconciliation carries the delegate's own `queriedAt` across |
-| 8 | Targeted outcomes and diagnostics wrong | `resolveTargetedOutcome` splits `FAILED` on stored evidence; `httpStatus`/`errorCode`/`retryAfterSeconds` carried end to end |
-| 9 | Exhausted rows starved both passes | budget gate added to both candidate queries; new bounded `retireExhaustedDirectJobs` retirement pass |
-| 10 | Binding API contract not amended | `PHASE-10A1-API-CONTRACT.md` retires `NOT_IMPLEMENTED` for `ACTIVE`, citing D-P10A2-03 |
-| 11 | Core suite never ran the targeted path | 12 new end-to-end cases driving the real service through an injected registry |
-| 12 (P2) | Inertness gate did not police the worker tier | worker tier now under the same provider prohibition, plus a list-independent check that only execution modules may call `.lookup(` |
-
-### A real defect the new tests caught
-
-The ambiguity path called `deadLetterUnleasedJob` on the canonical row — which requires **no live
-lease**, while that row's lease is still held by the very worker running the code. It matched zero
-rows every time, so the row stayed `PENDING` forever, frozen by its contact hold and blocking every
-future ask about that subject. Terminalization moved into the runner, the only place holding the
-claim token, as a guarded `deadLetterClaimedJob`. No duplicate call was ever possible either way —
-the hold prevented that — but the intended containment simply was not happening.
-
-`listStaleNonTerminalRuns` also needed `items: { some: {} }`: Prisma's `every` is vacuously true for
-a run with no items, and an empty item set recomputes to the terminal `SKIPPED`.
-
-### Evidence at the corrected tip
-
-| Gate | Result |
-|---|---|
-| Core-guarantee suite | **33/33** real PostgreSQL (was 21) |
-| Full backend suite, real PG | **3495 passed, 0 failed, 2 skipped** on a clean run |
-| Nine core evaluators | **all PASS**, including the Risk v1 locked-contract fingerprint |
-| Risk v1 implementation | `backend/src/services/risk/` **empty diff** |
-| Prisma schema / migrations | **unchanged by this correction set** — no file under `prisma/` is in the diff |
-| Hygiene (CI's three checks) · `git diff --check` | clean |
-| `backend/.env` | never opened, read, printed or referenced |
-| Primary checkout | **untouched** — still `5fe93d2`; every git command used `git -C` |
-
-**Local full-suite runs are contention-flaky and always have been.** Across four runs the failing set
-was different every time and never included a new test: `vulnerabilityReleaseWorkflow`,
-`vulnerabilityCoreConcurrency`, `riskScoringConcurrency` and `phase10a1Orchestration`. All four pass
-in isolation — **11/11, 19/19, 15/15, 10/10**. `phase10a1Orchestration` is the one worth naming: it
-asserts `providerLookupAttempt.count()` and `providerDailyUsage.count()` **globally, unscoped**, so
-any suite that legitimately executes trips it whenever vitest schedules the files concurrently. That
-is a pre-existing defect in merged 10A-1 test code and was deliberately **not** rewritten here.
-
-## Next action
-
-Confirm CI is green at the corrected tip, then open the PR. **Do not merge `main`, do not start
-Phase 10B.**
+Full validation evidence is in `STATE.yaml`'s `validation` block. **Next
+action**: commit the ticket-owned paths, push
+`feat/phase-10b-enrichment-visibility`, confirm CI green, report PR readiness.
+Do not open a PR. Do not start Phase 10C.
