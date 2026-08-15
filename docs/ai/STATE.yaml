@@ -55,7 +55,8 @@
                        "backend_diff":  "NONE - no file under backend/ touched (verified again this stage; only the 2 bounded frontend fixes were made)",
                        "risk_diff":  "NONE - backend/src/services/risk/ not touched",
                        "primary_checkout":  "VERIFIED CLEAN AGAIN at the start of this stage - C:\\Users\\LENOVO\\Desktop\\ThreatNeXus git status matches its exact session-start snapshot (only the pre-existing Phase 9 dirty paths), confirmed before any worktree command ran",
-                       "full_ci_equivalent_gate":  "Proportional Tier-2 gate complete: frontend suite, lint, build, backend auth test, Chromium E2E all green. Full backend suite / evaluators / Docker demo rehearsal NOT re-run - out of the diff's blast radius (zero backend/risk files touched) per the ticket's own validation-strategy instruction; GitHub Actions CI (which does run the full backend suite) is the closing gate, to be confirmed green after push"
+                       "full_ci_equivalent_gate":  "Proportional Tier-2 gate complete: frontend suite, lint, build, backend auth test, Chromium E2E all green. Full backend suite / evaluators / Docker demo rehearsal NOT re-run locally - out of the diff's blast radius (zero backend/risk files touched) per the ticket's own validation-strategy instruction; GitHub Actions CI (which does run the full backend suite) is the closing gate",
+                       "ci":  "GREEN - run 31908829351, head SHA 5515861 (55158617bb4356654fc84d7c2d355373a39c4bb8), all 6 automatic jobs passed (Secrets and generated artifacts, Backend tests, Frontend lint/tests/build, Prisma schema and migration history, Core evaluators, Browser suite Chromium 2m42s). 'Mutation and concurrency gates' is manual-trigger, not part of the automatic gate. First attempt on this run stalled 21m39s on the 'Install Chromium' step (a GitHub-runner-side hang, confirmed abnormal against prior same-branch-family runs which complete in ~2.5-3min total) - cancelled and re-run once; the re-run's Chromium job completed in 2m42s with no code changed, confirming it was a transient runner issue, not a flaky test"
                    },
     "known_issues":  [
                          "force/justification on the trigger action is intentionally not exposed - an analyst who needs to force-refresh a stale result currently has no UI for it (the backend supports it). Backlog item, not required by any binding contract read for this ticket",
@@ -64,8 +65,8 @@
                          "The '.ai-team/WRITER_LOCK.json' mechanism does not exist in this repository (recorded as a standing cross-project backlog item in F:/Ismail-AI-Dev-Team/memory/ENGINEERING-LESSONS.md rather than being rebuilt inside this ticket) - single-writer discipline was manual and honest, not a working lease",
                          "COMPLETED at the persistent summary layer collapses a genuine positive result and a genuine 'queried, nothing on file' result into one look - an inherited Phase-10A backend read-model decision (enrichmentSummaryReadService.js), not something this frontend ticket can fix without a backend contract change. The current session's 'last run' table does distinguish them via the raw lookupState field"
                      ],
-    "next_action":  "Tier-2 second stop boundary reached (verify -> review -> deliver -> STOP). Stage only the ticket-owned paths (frontend/src/components/FindingEnrichmentPanel.jsx, FindingEnrichmentPanel.test.jsx, frontend/src/constants/findingEnrichment.js, frontend/src/services/api.js, frontend/src/pages/FindingDetail.jsx, frontend/e2e/findingEnrichment.spec.js, docs/ai/*), commit, push feat/phase-10b-enrichment-visibility, confirm CI green, report PR readiness. Do not open a PR. Do not start Phase 10C.",
-    "checkpoint_ref":  "pending commit",
-    "updated_at":  "2026-08-15T00:00:00.0000000Z",
+    "next_action":  "DELIVERED. Tier-2 second stop boundary complete: verified, reviewed, fixed, committed (5515861), pushed, CI green (run 31908829351). No PR opened per instruction. Ready for a human to open the PR when desired; do not start Phase 10C.",
+    "checkpoint_ref":  "5515861",
+    "updated_at":  "2026-08-15T21:35:00.0000000Z",
     "next_writer":  "claude"
 }
