@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 
 import { FindingEnrichmentPanel } from './FindingEnrichmentPanel'
@@ -33,6 +33,16 @@ vi.mock('../services/api', () => ({
 
 const ANALYST_CAPABILITIES = [CAPABILITIES.READ_FINDINGS, CAPABILITIES.TRIGGER_FINDING_ENRICHMENT]
 const VIEWER_CAPABILITIES = [CAPABILITIES.READ_FINDINGS]
+
+function deferred() {
+  let resolve
+  let reject
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
 
 function mockAuth(capabilities) {
   vi.spyOn(useAuthModule, 'useAuth').mockReturnValue({
@@ -258,6 +268,7 @@ describe('capability gating', () => {
   it('a role without trigger:finding-enrichment sees no request control', async () => {
     await renderPanel(VIEWER_CAPABILITIES)
     expect(screen.queryByRole('button', { name: /Request enrichment/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Run again/i })).not.toBeInTheDocument()
   })
 
   it('a role with trigger:finding-enrichment sees the request control', async () => {
@@ -295,6 +306,70 @@ describe('requesting a run', () => {
     expect(within(lastRun).getByTestId('enrichment-item-contacted-1')).toHaveTextContent('—')
   })
 
+  it('keeps force out of the normal request and sends only the approved force payload deliberately', async () => {
+    const user = userEvent.setup()
+    findingEnrichmentOrchestrationService.createRun.mockResolvedValue({
+      data: {
+        success: true,
+        outcome: 'CREATED',
+        executionState: 'ACTIVE',
+        run: { id: 43, findingId: 9, state: 'PENDING', force: true, itemCount: 0 },
+        items: [],
+      },
+    })
+
+    await renderPanel(ANALYST_CAPABILITIES)
+    expect(screen.queryByLabelText(/Why is another run needed/i)).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: /Run again/i }))
+    await user.click(screen.getByRole('button', { name: /Request another run/i }))
+
+    expect(findingEnrichmentOrchestrationService.createRun).not.toHaveBeenCalled()
+    expect(screen.getByText(/Enter a justification/i)).toBeInTheDocument()
+
+    fireEvent.change(screen.getByLabelText(/Why is another run needed/i), {
+      target: { value: '  Evidence may have changed.  ' },
+    })
+    await user.click(screen.getByRole('button', { name: /Request another run/i }))
+
+    await waitFor(() =>
+      expect(findingEnrichmentOrchestrationService.createRun).toHaveBeenCalledWith(9, {
+        force: true,
+        justification: 'Evidence may have changed.',
+      }),
+    )
+    expect(await screen.findByText(/Last forced request/i)).toBeInTheDocument()
+  })
+
+  it('prevents duplicate forced submissions while the request is in flight', async () => {
+    const user = userEvent.setup()
+    const pending = deferred()
+    findingEnrichmentOrchestrationService.createRun.mockReturnValue(pending.promise)
+
+    await renderPanel(ANALYST_CAPABILITIES)
+    await user.click(screen.getByRole('button', { name: /Run again/i }))
+    fireEvent.change(screen.getByLabelText(/Why is another run needed/i), {
+      target: { value: 'Manual analyst re-check' },
+    })
+    const submit = screen.getByRole('button', { name: /Request another run/i })
+    await user.click(submit)
+
+    expect(submit).toBeDisabled()
+    fireEvent.click(submit)
+    expect(findingEnrichmentOrchestrationService.createRun).toHaveBeenCalledTimes(1)
+
+    pending.resolve({
+      data: {
+        success: true,
+        outcome: 'CREATED',
+        executionState: 'ACTIVE',
+        run: { id: 44, findingId: 9, state: 'PENDING', force: true, itemCount: 0 },
+        items: [],
+      },
+    })
+    await screen.findByText(/Last forced request/i)
+  })
+
   it('a 403 shows a denial message and never tears down the panel', async () => {
     const user = userEvent.setup()
     findingEnrichmentOrchestrationService.createRun.mockRejectedValue({ response: { status: 403 } })
@@ -307,8 +382,9 @@ describe('requesting a run', () => {
     expect(screen.getByTestId('enrichment-panel')).toBeInTheDocument()
   })
 
-  it('checking status re-fetches the same run and reflects a newly contacted item', async () => {
+  it('manual refresh re-fetches the same run and summary, with a visible pending state', async () => {
     const user = userEvent.setup()
+    const pendingRefresh = deferred()
     findingEnrichmentOrchestrationService.createRun.mockResolvedValue({
       data: {
         success: true,
@@ -320,7 +396,24 @@ describe('requesting a run', () => {
         ],
       },
     })
-    findingEnrichmentOrchestrationService.getRun.mockResolvedValue({
+    findingEnrichmentOrchestrationService.getRun.mockReturnValue(pendingRefresh.promise)
+    findingEnrichmentOrchestrationService.getSummary
+      .mockResolvedValueOnce(fullSummary())
+      .mockResolvedValueOnce(fullSummary())
+      .mockResolvedValueOnce(
+        fullSummary({
+          providers: [
+            providerRow({ provider: 'abuseipdb', purpose: 'IOC_REPUTATION', status: 'RATE_LIMITED', source: 'ORCHESTRATION_JOB' }),
+            providerRow({ provider: 'censys' }),
+            providerRow({ provider: 'greynoise' }),
+            providerRow({ provider: 'netlas' }),
+            providerRow({ provider: 'nvd', purpose: 'VULNERABILITY', status: 'NO_SUBJECT', subjects: [] }),
+            providerRow({ provider: 'shodan' }),
+          ],
+        }),
+      )
+
+    const refreshedRun = {
       data: {
         success: true,
         executionState: 'ACTIVE',
@@ -329,7 +422,7 @@ describe('requesting a run', () => {
           { provider: 'censys', subjectType: 'IPV4', subjectValue: '203.0.113.5', decision: 'ELIGIBLE', skipReason: null, lookupState: 'SUCCEEDED', contacted: true },
         ],
       },
-    })
+    }
 
     await renderPanel(ANALYST_CAPABILITIES)
     await user.click(screen.getByRole('button', { name: /Request enrichment/i }))
@@ -339,8 +432,16 @@ describe('requesting a run', () => {
     await user.click(within(lastRun).getByRole('button', { name: /Check status/i }))
 
     await waitFor(() => expect(findingEnrichmentOrchestrationService.getRun).toHaveBeenCalledWith(9, 7))
+    const checking = within(lastRun).getByRole('button', { name: /Checking status/i })
+    expect(checking).toBeDisabled()
+    fireEvent.click(checking)
+    expect(findingEnrichmentOrchestrationService.getRun).toHaveBeenCalledTimes(1)
+
+    pendingRefresh.resolve(refreshedRun)
     await waitFor(() =>
       expect(within(lastRun).getByTestId('enrichment-item-contacted-0')).toHaveTextContent('Yes'),
     )
+    await waitFor(() => expect(findingEnrichmentOrchestrationService.getSummary).toHaveBeenCalledTimes(3))
+    expect(screen.getByText('Rate limited')).toBeInTheDocument()
   })
 })

@@ -34,6 +34,7 @@ import React, { useCallback, useEffect, useState } from 'react'
 import {
   Box,
   Button,
+  TextField,
   Table,
   TableBody,
   TableCell,
@@ -154,6 +155,9 @@ export function FindingEnrichmentPanel({ findingId }) {
   const [requesting, setRequesting] = useState(false)
   const [refreshingRun, setRefreshingRun] = useState(false)
   const [lastRun, setLastRun] = useState(null)
+  const [forceFormOpen, setForceFormOpen] = useState(false)
+  const [justification, setJustification] = useState('')
+  const [justificationError, setJustificationError] = useState('')
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -173,15 +177,26 @@ export function FindingEnrichmentPanel({ findingId }) {
     load()
   }, [load])
 
-  const requestRun = async () => {
+  const requestRun = async ({ force = false, reason = '' } = {}) => {
+    if (requesting) return
     setRequesting(true)
     try {
-      const res = await findingEnrichmentOrchestrationService.createRun(findingId)
+      const res = force
+        ? await findingEnrichmentOrchestrationService.createRun(findingId, {
+            force: true,
+            justification: reason,
+          })
+        : await findingEnrichmentOrchestrationService.createRun(findingId)
       setLastRun({
         outcome: res.data?.outcome || null,
         run: res.data?.run || null,
         items: res.data?.items || [],
       })
+      if (force) {
+        setForceFormOpen(false)
+        setJustification('')
+        setJustificationError('')
+      }
       await load()
     } catch (error) {
       if (error?.response?.status === 403) {
@@ -192,6 +207,21 @@ export function FindingEnrichmentPanel({ findingId }) {
     } finally {
       setRequesting(false)
     }
+  }
+
+  const requestForcedRun = async (event) => {
+    event.preventDefault()
+    const reason = justification.trim()
+    if (!reason) {
+      setJustificationError('Enter a justification for requesting another run.')
+      return
+    }
+    if (reason.length > 1000) {
+      setJustificationError('Justification must be 1000 characters or fewer.')
+      return
+    }
+    setJustificationError('')
+    await requestRun({ force: true, reason })
   }
 
   const refreshRun = async () => {
@@ -206,7 +236,8 @@ export function FindingEnrichmentPanel({ findingId }) {
         run: res.data?.run || prev?.run || null,
         items: res.data?.items || [],
       }))
-      await load()
+      const summaryRes = await findingEnrichmentOrchestrationService.getSummary(findingId)
+      setSummary(summaryRes.data?.data || null)
     } catch (error) {
       toast.error(describeEnrichmentError(error))
     } finally {
@@ -240,15 +271,25 @@ export function FindingEnrichmentPanel({ findingId }) {
       data-testid="enrichment-panel"
       actions={
         canTrigger ? (
+          <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
           <Button
             size="small"
             variant="outlined"
             startIcon={<FiSend size={13} />}
             disabled={requesting}
-            onClick={requestRun}
+            onClick={() => requestRun()}
           >
-            Request enrichment
+            {requesting ? 'Requesting…' : 'Request enrichment'}
           </Button>
+          <Button
+            size="small"
+            disabled={requesting}
+            aria-expanded={forceFormOpen}
+            onClick={() => setForceFormOpen((open) => !open)}
+          >
+            Run again
+          </Button>
+          </Box>
         ) : null
       }
     >
@@ -258,6 +299,51 @@ export function FindingEnrichmentPanel({ findingId }) {
             {executionCopy.label}.
           </Box>{' '}
           {executionCopy.detail}
+        </Box>
+      )}
+
+      {canTrigger && forceFormOpen && (
+        <Box
+          component="form"
+          onSubmit={requestForcedRun}
+          sx={{ mb: 2, p: 1.5, border: `1px solid ${color.border}`, borderRadius: 1 }}
+        >
+          <SectionLabel>Request another enrichment run</SectionLabel>
+          <Box sx={{ ...type.caption, color: color.textMuted, mt: 0.5, mb: 1.25 }}>
+            Run enrichment again even when fresh results would normally prevent it. Configuration,
+            budget, and access controls still apply.
+          </Box>
+          <TextField
+            fullWidth
+            multiline
+            minRows={2}
+            size="small"
+            label="Why is another run needed?"
+            value={justification}
+            error={Boolean(justificationError)}
+            helperText={justificationError || `${justification.length}/1000 characters`}
+            onChange={(event) => {
+              setJustification(event.target.value)
+              if (justificationError) setJustificationError('')
+            }}
+            slotProps={{ htmlInput: { maxLength: 1000 } }}
+          />
+          <Box sx={{ display: 'flex', gap: 1, mt: 1.25 }}>
+            <Button type="submit" size="small" variant="contained" disabled={requesting}>
+              {requesting ? 'Requesting…' : 'Request another run'}
+            </Button>
+            <Button
+              type="button"
+              size="small"
+              disabled={requesting}
+              onClick={() => {
+                setForceFormOpen(false)
+                setJustificationError('')
+              }}
+            >
+              Cancel
+            </Button>
+          </Box>
         </Box>
       )}
 
@@ -289,14 +375,17 @@ export function FindingEnrichmentPanel({ findingId }) {
       {lastRun && (
         <Box sx={{ mt: 2.5, pt: 2, borderTop: `1px solid ${color.border}` }} data-testid="enrichment-last-run">
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap', mb: 1 }}>
-            <SectionLabel>Last request{lastRun.run ? ` — run #${lastRun.run.id}` : ''}</SectionLabel>
+            <SectionLabel>
+              {lastRun.run?.force ? 'Last forced request' : 'Last request'}
+              {lastRun.run ? ` — run #${lastRun.run.id}` : ''}
+            </SectionLabel>
             <Button
               size="small"
               startIcon={<FiRefreshCw size={12} />}
               disabled={refreshingRun || !lastRun.run?.id}
               onClick={refreshRun}
             >
-              Check status
+              {refreshingRun ? 'Checking status…' : 'Check status'}
             </Button>
           </Box>
           {lastRun.outcome && (
