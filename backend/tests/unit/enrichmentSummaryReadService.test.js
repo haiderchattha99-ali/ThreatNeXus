@@ -13,16 +13,20 @@ const {
   EnrichmentSummaryNotFoundError,
   EnrichmentSummaryValidationError,
   statusForJobState,
+  refineUnavailableJobStatus,
+  summaryForIocDelegate,
   resolveSubjectState,
   rollUp,
   getFindingEnrichmentSummary,
 } = require("../../src/services/enrichmentOrchestration/enrichmentSummaryReadService");
 const {
   SUMMARY_STATUSES,
+  SUMMARY_STATUS_PRECEDENCE,
   SUMMARY_SOURCES,
   RUN_ITEM_DECISIONS,
   JOB_STATES,
   SKIP_REASONS,
+  EXECUTION_SKIP_REASONS,
 } = require("../../src/services/enrichmentOrchestration/enrichmentDecisionCodes");
 
 const ASOF = new Date("2026-08-12T00:00:00.000Z");
@@ -56,8 +60,9 @@ describe("job state to summary status", () => {
     expect(statusForJobState(JOB_STATES.PENDING)).toBe(SUMMARY_STATUSES.PENDING);
     expect(statusForJobState(JOB_STATES.WAITING_ON_DELEGATE)).toBe(SUMMARY_STATUSES.PENDING);
     expect(statusForJobState(JOB_STATES.SUCCEEDED)).toBe(SUMMARY_STATUSES.COMPLETED);
-    // "The provider has no record" is a real answer, not a failure.
-    expect(statusForJobState(JOB_STATES.NO_RECORD)).toBe(SUMMARY_STATUSES.COMPLETED);
+    // "The provider has no record" is a real answer, distinct from a positive
+    // one — never collapsed into COMPLETED, which would overclaim (defect 1).
+    expect(statusForJobState(JOB_STATES.NO_RECORD)).toBe(SUMMARY_STATUSES.NO_RECORD);
     expect(statusForJobState(JOB_STATES.FAILED)).toBe(SUMMARY_STATUSES.UNAVAILABLE);
     expect(statusForJobState(JOB_STATES.DEAD_LETTER)).toBe(SUMMARY_STATUSES.UNAVAILABLE);
     expect(statusForJobState(JOB_STATES.SKIPPED_BUDGET)).toBe(SUMMARY_STATUSES.SKIPPED);
@@ -66,6 +71,40 @@ describe("job state to summary status", () => {
     expect(statusForJobState("SOMETHING_ADDED_IN_A_LATER_PHASE")).toBe(
       SUMMARY_STATUSES.UNAVAILABLE
     );
+  });
+});
+
+describe("refining a job's generic UNAVAILABLE from closed diagnostics only", () => {
+  it("recovers RATE_LIMITED only from the recognized provider error code (guarantee 7)", () => {
+    expect(
+      refineUnavailableJobStatus({ terminalReasonCode: null, errorCode: "PROVIDER_RATE_LIMITED" })
+    ).toBe(SUMMARY_STATUSES.RATE_LIMITED);
+  });
+
+  it("recovers AMBIGUOUS only from the recognized terminal reason code (guarantee 6)", () => {
+    expect(
+      refineUnavailableJobStatus({ terminalReasonCode: "AMBIGUOUS_AFTER_CONTACT", errorCode: null })
+    ).toBe(SUMMARY_STATUSES.AMBIGUOUS);
+  });
+
+  it("never invents a status from an unrecognized diagnostic (guarantee 9)", () => {
+    expect(
+      refineUnavailableJobStatus({
+        terminalReasonCode: "TypeError: connect ECONNREFUSED 10.0.0.1:443",
+        errorCode: "SOME_FUTURE_CODE",
+      })
+    ).toBe(SUMMARY_STATUSES.UNAVAILABLE);
+  });
+});
+
+describe("resolving a terminal IOC delegate", () => {
+  it("distinguishes ambiguous from an ordinary exhausted dead-letter (guarantee 6)", () => {
+    expect(
+      summaryForIocDelegate({ status: "DEAD_LETTER", terminalReasonCode: "AMBIGUOUS_AFTER_CONTACT" })
+    ).toBe(SUMMARY_STATUSES.AMBIGUOUS);
+    expect(
+      summaryForIocDelegate({ status: "DEAD_LETTER", terminalReasonCode: "MAX_ATTEMPTS_EXHAUSTED" })
+    ).toBe(SUMMARY_STATUSES.UNAVAILABLE);
   });
 });
 
@@ -151,6 +190,167 @@ describe("resolving one subject", () => {
     const resolved = resolveSubjectState(eligibleItem({ state: JOB_STATES.PENDING }), ASOF);
     expect(resolved.status).toBe(SUMMARY_STATUSES.PENDING);
     expect(resolved.source).toBe(SUMMARY_SOURCES.ORCHESTRATION_JOB);
+  });
+
+  it("distinguishes a direct positive answer from a direct nothing-on-file answer (guarantee 1)", () => {
+    const positive = resolveSubjectState(eligibleItem({ state: JOB_STATES.SUCCEEDED }), ASOF);
+    expect(positive.status).toBe(SUMMARY_STATUSES.COMPLETED);
+    expect(positive.evidenceAvailable).toBe(true);
+
+    const nothingOnFile = resolveSubjectState(eligibleItem({ state: JOB_STATES.NO_RECORD }), ASOF);
+    expect(nothingOnFile.status).toBe(SUMMARY_STATUSES.NO_RECORD);
+    expect(nothingOnFile.evidenceAvailable).toBe(false);
+  });
+
+  it("distinguishes IOC SUCCESS from IOC NOT_FOUND (guarantee 2)", () => {
+    const success = resolveSubjectState(
+      eligibleItem({ state: JOB_STATES.WAITING_ON_DELEGATE, iocEnrichment: { status: "SUCCESS", expiresAt: null } }),
+      ASOF
+    );
+    expect(success.status).toBe(SUMMARY_STATUSES.COMPLETED);
+
+    const notFound = resolveSubjectState(
+      eligibleItem({ state: JOB_STATES.WAITING_ON_DELEGATE, iocEnrichment: { status: "NOT_FOUND", expiresAt: null } }),
+      ASOF
+    );
+    expect(notFound.status).toBe(SUMMARY_STATUSES.NO_RECORD);
+    expect(notFound.evidenceAvailable).toBe(false);
+  });
+
+  it("never claims evidenceAvailable for VULNERABILITY_ENRICHMENT merely from job completion (gate P1-1)", () => {
+    const resolved = resolveSubjectState(
+      eligibleItem({
+        state: JOB_STATES.WAITING_ON_DELEGATE,
+        vulnerabilityEnrichmentJob: { status: "COMPLETED" },
+      }),
+      ASOF
+    );
+    expect(resolved.status).toBe(SUMMARY_STATUSES.COMPLETED);
+    expect(resolved.source).toBe(SUMMARY_SOURCES.VULNERABILITY_ENRICHMENT);
+    // COMPLETED here means only "the batch finished this CVE" — this layer
+    // never read VulnerabilityProviderStatus, so it cannot claim evidence.
+    expect(resolved.evidenceAvailable).toBe(false);
+  });
+
+  it("lets a terminal Phase-10 job outrank a non-terminal delegate, reporting source ORCHESTRATION_JOB (gate P2, closes defect 6)", () => {
+    // The runner dead-lettered the Phase-10 job on AMBIGUOUS_AFTER_CONTACT but
+    // deliberately left the delegate row PENDING (it still holds the live
+    // claim). Reading the delegate here would report a charged,
+    // manual-review job as PENDING forever.
+    const resolved = resolveSubjectState(
+      eligibleItem({
+        state: JOB_STATES.DEAD_LETTER,
+        terminalReasonCode: "AMBIGUOUS_AFTER_CONTACT",
+        iocEnrichment: { status: "PENDING", expiresAt: null },
+      }),
+      ASOF
+    );
+    expect(resolved.status).toBe(SUMMARY_STATUSES.AMBIGUOUS);
+    expect(resolved.source).toBe(SUMMARY_SOURCES.ORCHESTRATION_JOB);
+    expect(resolved.evidenceAvailable).toBe(false);
+  });
+
+  it("leaves the delegate authoritative while the job is still non-terminal", () => {
+    const resolved = resolveSubjectState(
+      eligibleItem({
+        state: JOB_STATES.WAITING_ON_DELEGATE,
+        iocEnrichment: { status: "PENDING", expiresAt: null },
+      }),
+      ASOF
+    );
+    expect(resolved.status).toBe(SUMMARY_STATUSES.PENDING);
+    expect(resolved.source).toBe(SUMMARY_SOURCES.IOC_ENRICHMENT);
+  });
+
+  it("leaves the delegate authoritative once both job and delegate are terminal", () => {
+    const resolved = resolveSubjectState(
+      eligibleItem({
+        state: JOB_STATES.SUCCEEDED,
+        iocEnrichment: { status: "SUCCESS", expiresAt: null },
+      }),
+      ASOF
+    );
+    expect(resolved.status).toBe(SUMMARY_STATUSES.COMPLETED);
+    expect(resolved.source).toBe(SUMMARY_SOURCES.IOC_ENRICHMENT);
+  });
+
+  it("distinguishes a recognized rate limit from a generic direct failure (guarantee 7)", () => {
+    const resolved = resolveSubjectState(
+      eligibleItem({ state: JOB_STATES.FAILED, errorCode: "PROVIDER_RATE_LIMITED" }),
+      ASOF
+    );
+    expect(resolved.status).toBe(SUMMARY_STATUSES.RATE_LIMITED);
+    expect(resolved.evidenceAvailable).toBe(false);
+  });
+
+  it("distinguishes a recognized rate limit on the delegated IOC path too (guarantee 7)", () => {
+    const resolved = resolveSubjectState(
+      eligibleItem({
+        state: JOB_STATES.WAITING_ON_DELEGATE,
+        iocEnrichment: { status: "RATE_LIMITED", expiresAt: null },
+      }),
+      ASOF
+    );
+    expect(resolved.status).toBe(SUMMARY_STATUSES.RATE_LIMITED);
+    expect(resolved.source).toBe(SUMMARY_SOURCES.IOC_ENRICHMENT);
+    expect(resolved.evidenceAvailable).toBe(false);
+  });
+
+  it("distinguishes post-contact ambiguity from a generic direct failure (guarantee 6)", () => {
+    const resolved = resolveSubjectState(
+      eligibleItem({ state: JOB_STATES.DEAD_LETTER, terminalReasonCode: "AMBIGUOUS_AFTER_CONTACT" }),
+      ASOF
+    );
+    expect(resolved.status).toBe(SUMMARY_STATUSES.AMBIGUOUS);
+
+    const ordinaryFailure = resolveSubjectState(eligibleItem({ state: JOB_STATES.FAILED, errorCode: null }), ASOF);
+    expect(ordinaryFailure.status).toBe(SUMMARY_STATUSES.UNAVAILABLE);
+  });
+
+  it("names a layer-correct closed reason for every execution-time skip (guarantee 8)", () => {
+    const jobBudgetSkip = resolveSubjectState(eligibleItem({ state: JOB_STATES.SKIPPED_BUDGET }), ASOF);
+    expect(jobBudgetSkip.status).toBe(SUMMARY_STATUSES.SKIPPED);
+    expect(jobBudgetSkip.skipReason).toBe(EXECUTION_SKIP_REASONS.EXECUTION_BUDGET_EXHAUSTED);
+
+    const jobDisabledSkip = resolveSubjectState(eligibleItem({ state: JOB_STATES.SKIPPED_DISABLED }), ASOF);
+    expect(jobDisabledSkip.skipReason).toBe(EXECUTION_SKIP_REASONS.EXECUTION_DISABLED);
+
+    // The two IOC-derived skips (defect 4).
+    const iocUnsupported = resolveSubjectState(
+      eligibleItem({
+        state: JOB_STATES.WAITING_ON_DELEGATE,
+        iocEnrichment: { status: "UNSUPPORTED_INDICATOR", expiresAt: null },
+      }),
+      ASOF
+    );
+    expect(iocUnsupported.status).toBe(SUMMARY_STATUSES.SKIPPED);
+    expect(iocUnsupported.skipReason).toBe(EXECUTION_SKIP_REASONS.EXECUTION_UNSUPPORTED_SUBJECT);
+
+    const iocDisabled = resolveSubjectState(
+      eligibleItem({
+        state: JOB_STATES.WAITING_ON_DELEGATE,
+        iocEnrichment: { status: "SKIPPED_DISABLED", expiresAt: null },
+      }),
+      ASOF
+    );
+    expect(iocDisabled.skipReason).toBe(EXECUTION_SKIP_REASONS.EXECUTION_DISABLED);
+  });
+
+  it("never turns a stale nothing-on-file answer into stale evidence (guarantee 11)", () => {
+    const resolved = resolveSubjectState(
+      eligibleItem({ state: JOB_STATES.NO_RECORD, freshUntil: new Date("2026-08-11T00:00:00.000Z") }),
+      ASOF
+    );
+    expect(resolved.status).toBe(SUMMARY_STATUSES.NO_RECORD);
+    expect(resolved.isStale).toBe(true);
+    expect(resolved.evidenceAvailable).toBe(false);
+  });
+});
+
+describe("SUMMARY_STATUS_PRECEDENCE completeness (guarantee 10)", () => {
+  it("ranks exactly the same set of statuses SUMMARY_STATUSES defines", () => {
+    expect(new Set(SUMMARY_STATUS_PRECEDENCE)).toEqual(new Set(Object.values(SUMMARY_STATUSES)));
+    expect(SUMMARY_STATUS_PRECEDENCE.length).toBe(Object.values(SUMMARY_STATUSES).length);
   });
 });
 

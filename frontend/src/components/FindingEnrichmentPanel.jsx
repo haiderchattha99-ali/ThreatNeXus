@@ -122,7 +122,7 @@ function ProviderRow({ row }) {
             {SKIP_REASON_LABELS[row.skipReason] || row.skipReason}
           </Box>
         )}
-        {row.status === 'COMPLETED' && row.isStale && (
+        {row.isStale && (
           <StaleNotice sx={{ mt: 0.75 }}>
             This evidence is no longer fresh
             {row.freshUntil ? ` — expired ${formatAsOf(row.freshUntil)}` : ''}.

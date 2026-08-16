@@ -52,12 +52,14 @@
 
 const {
   SUMMARY_STATUSES,
+  SUMMARY_STATUS_PRECEDENCE,
   SUMMARY_SOURCES,
   SKIP_REASONS,
   RUN_ITEM_DECISIONS,
   NON_TERMINAL_JOB_STATES,
-  SUCCESSFUL_JOB_STATES,
   SKIPPED_JOB_STATES,
+  JOB_STATES,
+  EXECUTION_SKIP_REASONS,
   isKnownSkipReason,
 } = require("./enrichmentDecisionCodes");
 const {
@@ -68,7 +70,8 @@ const {
 } = require("./enrichmentSubject");
 const { resolveExecutionState } = require("./enrichmentRunReadService");
 const repository = require("./enrichmentOrchestrationRepository");
-const { ENRICHMENT_STATUS } = require("../enrichment/iocEnrichmentTypes");
+const { ENRICHMENT_STATUS, PROVIDER_ERROR_CODES } = require("../enrichment/iocEnrichmentTypes");
+const { ENRICHMENT_TERMINAL_REASON } = require("../enrichment/iocEnrichmentCacheRules");
 
 class EnrichmentSummaryNotFoundError extends Error {
   constructor(findingId) {
@@ -92,23 +95,54 @@ function resolveClient(client) {
 
 // An IocEnrichment status is a PROVIDER outcome vocabulary, not a job state, so
 // it gets its own explicit map rather than being pattern-matched. NOT_FOUND is
-// COMPLETED on purpose: "the provider has no record of this indicator" is a
-// real answer, and calling it UNAVAILABLE would turn a known absence into an
-// unknown — the exact confusion the IOC read service already guards against.
+// its own status, NO_RECORD, on purpose: "the provider has no record of this
+// indicator" is a real answer distinct from SUCCESS (which is real evidence,
+// including a SUCCESS carrying a zero score — see iocEnrichmentCacheRules.js),
+// and calling either UNAVAILABLE would turn a known absence into an unknown —
+// the exact confusion the IOC read service already guards against. DEAD_LETTER
+// is resolved separately, below, because it needs terminalReasonCode to tell an
+// ordinary exhausted-retry failure apart from a charged, manual-review
+// ambiguity.
 const IOC_STATUS_TO_SUMMARY = Object.freeze({
   [ENRICHMENT_STATUS.PENDING]: SUMMARY_STATUSES.PENDING,
   [ENRICHMENT_STATUS.SUCCESS]: SUMMARY_STATUSES.COMPLETED,
-  [ENRICHMENT_STATUS.NOT_FOUND]: SUMMARY_STATUSES.COMPLETED,
-  [ENRICHMENT_STATUS.RATE_LIMITED]: SUMMARY_STATUSES.UNAVAILABLE,
+  [ENRICHMENT_STATUS.NOT_FOUND]: SUMMARY_STATUSES.NO_RECORD,
+  [ENRICHMENT_STATUS.RATE_LIMITED]: SUMMARY_STATUSES.RATE_LIMITED,
   [ENRICHMENT_STATUS.INVALID_KEY]: SUMMARY_STATUSES.UNAVAILABLE,
   [ENRICHMENT_STATUS.TIMEOUT]: SUMMARY_STATUSES.UNAVAILABLE,
   [ENRICHMENT_STATUS.FAILED]: SUMMARY_STATUSES.UNAVAILABLE,
   [ENRICHMENT_STATUS.UNSUPPORTED_INDICATOR]: SUMMARY_STATUSES.SKIPPED,
   [ENRICHMENT_STATUS.SKIPPED_DISABLED]: SUMMARY_STATUSES.SKIPPED,
-  // Queue lifecycle, not a provider outcome: we stopped processing. Never
-  // COMPLETED, which would read as "nothing found".
-  DEAD_LETTER: SUMMARY_STATUSES.UNAVAILABLE,
 });
+
+// The execution-time skipReason for an IOC-derived SKIPPED row (defect 4's two
+// IOC-derived skips). Reuses the SAME sibling codes the job-state path uses
+// below — one vocabulary of REASONS, observed from two different layers.
+const IOC_STATUS_TO_EXECUTION_SKIP_REASON = Object.freeze({
+  [ENRICHMENT_STATUS.UNSUPPORTED_INDICATOR]: EXECUTION_SKIP_REASONS.EXECUTION_UNSUPPORTED_SUBJECT,
+  [ENRICHMENT_STATUS.SKIPPED_DISABLED]: EXECUTION_SKIP_REASONS.EXECUTION_DISABLED,
+});
+
+/**
+ * Resolves a terminal IocEnrichment delegate row onto the summary vocabulary.
+ * DEAD_LETTER is handled outside the static map above because "ambiguous,
+ * possibly charged, manual review" and "an ordinary exhausted-retry failure"
+ * are different facts an analyst must act on differently (invariant 5), and
+ * telling them apart needs the row's own closed `terminalReasonCode` — never
+ * an unfiltered string, so an unrecognized reason still fails toward the
+ * generic, truthful UNAVAILABLE rather than inventing AMBIGUOUS.
+ *
+ * @param {{status: string, terminalReasonCode: string|null}} delegate
+ * @returns {string} a SUMMARY_STATUSES value
+ */
+function summaryForIocDelegate(delegate) {
+  if (delegate.status === "DEAD_LETTER") {
+    return delegate.terminalReasonCode === ENRICHMENT_TERMINAL_REASON.AMBIGUOUS_AFTER_CONTACT
+      ? SUMMARY_STATUSES.AMBIGUOUS
+      : SUMMARY_STATUSES.UNAVAILABLE;
+  }
+  return IOC_STATUS_TO_SUMMARY[delegate.status] || SUMMARY_STATUSES.UNAVAILABLE;
+}
 
 const VULNERABILITY_STATUS_TO_SUMMARY = Object.freeze({
   PENDING: SUMMARY_STATUSES.PENDING,
@@ -124,13 +158,45 @@ const VULNERABILITY_STATUS_TO_SUMMARY = Object.freeze({
  */
 function statusForJobState(state) {
   if (NON_TERMINAL_JOB_STATES.includes(state)) return SUMMARY_STATUSES.PENDING;
-  if (SUCCESSFUL_JOB_STATES.includes(state)) return SUMMARY_STATUSES.COMPLETED;
+  // SUCCEEDED and NO_RECORD are both real, terminal answers — split apart
+  // exactly as the IOC path splits SUCCESS from NOT_FOUND (defect 1).
+  if (state === JOB_STATES.SUCCEEDED) return SUMMARY_STATUSES.COMPLETED;
+  if (state === JOB_STATES.NO_RECORD) return SUMMARY_STATUSES.NO_RECORD;
   if (SKIPPED_JOB_STATES.includes(state)) return SUMMARY_STATUSES.SKIPPED;
   // FAILED and DEAD_LETTER, plus anything a future state addition forgets to
   // classify. Defaulting to UNAVAILABLE is the only safe direction: it says
-  // "we do not know", never "there is nothing".
+  // "we do not know", never "there is nothing". The caller refines this
+  // further into RATE_LIMITED/AMBIGUOUS from the job's own closed diagnostics.
   return SUMMARY_STATUSES.UNAVAILABLE;
 }
+
+/**
+ * Recovers RATE_LIMITED / AMBIGUOUS out of a job's generic UNAVAILABLE,
+ * exclusively from recognized closed diagnostics (invariants 5 and 7). Never
+ * reads terminalReasonCode/errorCode as free text — an unrecognized value
+ * fails safely toward the generic UNAVAILABLE it already had.
+ *
+ * @param {{terminalReasonCode: string|null, errorCode: string|null}} job
+ * @returns {string} a SUMMARY_STATUSES value
+ */
+function refineUnavailableJobStatus(job) {
+  if (job.terminalReasonCode === ENRICHMENT_TERMINAL_REASON.AMBIGUOUS_AFTER_CONTACT) {
+    return SUMMARY_STATUSES.AMBIGUOUS;
+  }
+  if (job.errorCode === PROVIDER_ERROR_CODES.PROVIDER_RATE_LIMITED) {
+    return SUMMARY_STATUSES.RATE_LIMITED;
+  }
+  return SUMMARY_STATUSES.UNAVAILABLE;
+}
+
+// Execution-time skipReason for an ELIGIBLE item whose JOB (not its routing
+// decision) reached one of the four execution-time SKIPPED_* states (defect 4).
+const JOB_STATE_TO_EXECUTION_SKIP_REASON = Object.freeze({
+  [JOB_STATES.SKIPPED_DISABLED]: EXECUTION_SKIP_REASONS.EXECUTION_DISABLED,
+  [JOB_STATES.SKIPPED_NOT_CONFIGURED]: EXECUTION_SKIP_REASONS.EXECUTION_NOT_CONFIGURED,
+  [JOB_STATES.SKIPPED_UNSUPPORTED_SUBJECT]: EXECUTION_SKIP_REASONS.EXECUTION_UNSUPPORTED_SUBJECT,
+  [JOB_STATES.SKIPPED_BUDGET]: EXECUTION_SKIP_REASONS.EXECUTION_BUDGET_EXHAUSTED,
+});
 
 /**
  * Resolves ONE (provider, subject) pair into a summary row body.
@@ -184,13 +250,29 @@ function resolveSubjectState(item, asOf) {
   let status;
   let source;
   let freshUntil;
+  let skipReason = null;
 
-  if (job.iocEnrichment) {
+  // A terminal Phase-10 job outranks a non-terminal (PENDING) delegate
+  // (invariant 2, closing defect 6): a delegated job can be dead-lettered
+  // (e.g. AMBIGUOUS_AFTER_CONTACT) while its own delegate row is deliberately
+  // left PENDING by the runner, which still holds the live claim. Reading the
+  // delegate unconditionally there would report a terminally dead-lettered,
+  // possibly-charged, manual-review job as PENDING forever. The delegate stays
+  // authoritative only while the job is non-terminal, or once both are
+  // terminal.
+  const jobIsTerminal = !NON_TERMINAL_JOB_STATES.includes(job.state);
+  const delegateIsNonTerminal =
+    job.iocEnrichment && job.iocEnrichment.status === ENRICHMENT_STATUS.PENDING;
+
+  if (job.iocEnrichment && !(jobIsTerminal && delegateIsNonTerminal)) {
     // The canonical IOC queue owns this work. Its row is the truth; the
     // Phase-10 job merely waits on it.
     source = SUMMARY_SOURCES.IOC_ENRICHMENT;
-    status = IOC_STATUS_TO_SUMMARY[job.iocEnrichment.status] || SUMMARY_STATUSES.UNAVAILABLE;
+    status = summaryForIocDelegate(job.iocEnrichment);
     freshUntil = job.iocEnrichment.expiresAt || null;
+    if (status === SUMMARY_STATUSES.SKIPPED) {
+      skipReason = IOC_STATUS_TO_EXECUTION_SKIP_REASON[job.iocEnrichment.status] || null;
+    }
   } else if (job.vulnerabilityEnrichmentJob) {
     source = SUMMARY_SOURCES.VULNERABILITY_ENRICHMENT;
     status =
@@ -202,8 +284,16 @@ function resolveSubjectState(item, asOf) {
     // only on the status.
     freshUntil = null;
   } else {
+    // Either a plain direct provider's own job, or a terminal Phase-10 job
+    // that just outranked its still-PENDING delegate above — either way the
+    // job's own state (and its own closed diagnostics) is the truth here.
     source = SUMMARY_SOURCES.ORCHESTRATION_JOB;
     status = statusForJobState(job.state);
+    if (status === SUMMARY_STATUSES.UNAVAILABLE) {
+      status = refineUnavailableJobStatus(job);
+    } else if (status === SUMMARY_STATUSES.SKIPPED) {
+      skipReason = JOB_STATE_TO_EXECUTION_SKIP_REASON[job.state] || null;
+    }
     freshUntil = job.freshUntil || null;
   }
 
@@ -211,17 +301,26 @@ function resolveSubjectState(item, asOf) {
 
   return {
     status,
-    // skipReason belongs to a ROUTING refusal, which is recorded on the item.
-    // An ELIGIBLE item has none, and inventing one from a job state would
-    // conflate a routing-time refusal with an execution-time one — two
-    // structurally different events (see SKIP_REASONS.AUTOMATIC_BUDGET_ZERO).
-    skipReason: null,
+    // A routing refusal (item.decision !== ELIGIBLE, handled above) records
+    // its own skipReason on the item. This is an ELIGIBLE item, so any
+    // skipReason here is EXECUTION-time — resolved above from the job's or
+    // delegate's own state, never invented from an unfiltered string (see
+    // SKIP_REASONS.AUTOMATIC_BUDGET_ZERO for why routing and execution stay
+    // structurally separate).
+    skipReason,
     source,
     freshUntil,
     isStale,
-    // A real answer that is still current. A stale answer is not evidence: it
-    // is a record of what was true once.
-    evidenceAvailable: status === SUMMARY_STATUSES.COMPLETED && !isStale,
+    // A real, positive answer that is still current. NO_RECORD, a stale
+    // answer, and every VULNERABILITY_ENRICHMENT row are never evidence: a
+    // vulnerability orchestration JOB reaching COMPLETED proves only that the
+    // batch finished, not that a per-source provider result exists — this
+    // layer never reads VulnerabilityProviderStatus or its freshness horizon,
+    // so it cannot truthfully claim otherwise (gate P1-1).
+    evidenceAvailable:
+      source !== SUMMARY_SOURCES.VULNERABILITY_ENRICHMENT &&
+      status === SUMMARY_STATUSES.COMPLETED &&
+      !isStale,
   };
 }
 
@@ -326,16 +425,15 @@ async function getFindingEnrichmentSummary(findingId, options = {}) {
  */
 function rollUp(subjects) {
   const statuses = subjects.map((subject) => subject.status);
-  // Least settled first: an outstanding or failed subject outranks a finished
-  // one, because it is the fact an analyst needs to act on.
-  const precedence = [
-    SUMMARY_STATUSES.PENDING,
-    SUMMARY_STATUSES.UNAVAILABLE,
-    SUMMARY_STATUSES.SKIPPED,
-    SUMMARY_STATUSES.NOT_REQUESTED,
-    SUMMARY_STATUSES.COMPLETED,
-  ];
-  const status = precedence.find((candidate) => statuses.includes(candidate)) || statuses[0];
+  // Least settled/most-actionable first (SUMMARY_STATUS_PRECEDENCE, gate
+  // invariant 8). The fallback is the array's OWN most-unsettled entry, never
+  // `statuses[0]` — an unranked status must never be silently overridden by
+  // any ranked one. A test asserts SUMMARY_STATUS_PRECEDENCE covers every
+  // SUMMARY_STATUSES value, so this fallback is unreachable for a valid
+  // status and exists only to fail safely if that ever stops being true.
+  const status =
+    SUMMARY_STATUS_PRECEDENCE.find((candidate) => statuses.includes(candidate)) ||
+    SUMMARY_STATUS_PRECEDENCE[0];
 
   const freshUntils = subjects
     .map((subject) => subject.freshUntil)
@@ -363,6 +461,8 @@ module.exports = {
   IOC_STATUS_TO_SUMMARY,
   VULNERABILITY_STATUS_TO_SUMMARY,
   statusForJobState,
+  refineUnavailableJobStatus,
+  summaryForIocDelegate,
   resolveSubjectState,
   rollUp,
   getFindingEnrichmentSummary,
