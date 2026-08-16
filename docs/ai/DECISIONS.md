@@ -561,3 +561,23 @@ A consumer of `GET /api/findings/:id/enrichment/summary` written against the pre
 was updated in the same change. A future session adding a `SUMMARY_STATUSES` value must add it to
 `SUMMARY_STATUS_PRECEDENCE` in the same change — a test asserts the two sets stay equal precisely so
 this cannot silently regress to the old fail-open fallback.
+
+---
+
+## D-P10C2-01 — Controlled force/justification and explicit run refresh UX
+
+**Status:** Accepted. Ticket `TNX-P10C2-FORCE-JUSTIFICATION-REFRESH`, Tier 2. Base `6c9b19e`
+(merged PR #23).
+
+The existing `POST /api/findings/:id/enrichment/runs` contract is authoritative: a normal request
+sends no force fields; a deliberate repeat sends `force: true` plus a trimmed 1–1000 character
+`justification`. Force bypasses freshness only and never bypasses server-side capability,
+configuration, budget, subject, or active-work controls. The reason remains plain request data and
+is never echoed by the API.
+
+The Finding panel exposes that repeat action only to callers whose current session advertises
+`trigger:finding-enrichment` (UX gating only), blocks duplicate submissions in flight, and keeps the
+ordinary request path unchanged. Run refresh remains one explicit click: it re-reads the known run
+ID and then the canonical Finding summary, preserving the Phase-10C1 terminal vocabulary,
+provenance, and stale markers. No polling, backend, migration, authorization, provider execution,
+quota, credential, or deployment behavior changes in this ticket.
