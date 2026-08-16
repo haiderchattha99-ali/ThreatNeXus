@@ -283,6 +283,19 @@ describe("resolving one subject", () => {
     expect(resolved.evidenceAvailable).toBe(false);
   });
 
+  it("distinguishes a recognized rate limit on the delegated IOC path too (guarantee 7)", () => {
+    const resolved = resolveSubjectState(
+      eligibleItem({
+        state: JOB_STATES.WAITING_ON_DELEGATE,
+        iocEnrichment: { status: "RATE_LIMITED", expiresAt: null },
+      }),
+      ASOF
+    );
+    expect(resolved.status).toBe(SUMMARY_STATUSES.RATE_LIMITED);
+    expect(resolved.source).toBe(SUMMARY_SOURCES.IOC_ENRICHMENT);
+    expect(resolved.evidenceAvailable).toBe(false);
+  });
+
   it("distinguishes post-contact ambiguity from a generic direct failure (guarantee 6)", () => {
     const resolved = resolveSubjectState(
       eligibleItem({ state: JOB_STATES.DEAD_LETTER, terminalReasonCode: "AMBIGUOUS_AFTER_CONTACT" }),
