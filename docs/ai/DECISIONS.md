@@ -515,3 +515,49 @@ Explicitly, deliberately **not** in V1 (backlog if a future ticket needs them):
 A future session extending enrichment visibility should treat this entry, not the mid-turn prompts
 that produced it, as the record of what V1 actually is. Any of the deferred items above becomes its
 own ticket rather than silent scope creep on this one.
+
+---
+
+## D-P10C1-01 — Truthful terminal summary states, and the §4 amendment they require
+
+**Status:** Accepted. Ticket `TNX-P10C1-TRUTHFUL-TERMINAL-STATES`, Tier 2.
+
+### Context
+
+An independent `backend-logic-reviewer` design gate on `GET /api/findings/:id/enrichment/summary`
+(base `13f7e24`) found six P1 defects: the summary's `status`/`evidenceAvailable`/`skipReason`
+vocabulary collapsed materially different provider truths into the same look. Full findings, the
+approved contract (v4, `READY`), and the implementation record live in
+`docs/ai/PHASE-10C1-TRUTHFUL-TERMINAL-STATES-CONTRACT.md` — this entry records only the decision and
+its consequence for `docs/ai/PHASE-10A1-API-CONTRACT.md` §4, whose own rule requires an explicit
+approval plus this entry before that section may change.
+
+### Decision
+
+`docs/ai/PHASE-10A1-API-CONTRACT.md` §4's `status` vocabulary is amended: `COMPLETED` now means only
+a positive answer with retrievable evidence; a new `NO_RECORD` status carries "queried, nothing on
+file" (previously collapsed into `COMPLETED`); `RATE_LIMITED` and `AMBIGUOUS` are recovered out of
+the previous single `UNAVAILABLE` bucket, exclusively from the closed `errorCode`/`terminalReasonCode`
+diagnostics already persisted at the five existing write sites — no write site changed. Every
+`SKIPPED` row now carries a non-null `skipReason`, drawn from `SKIP_REASONS` (routing-time) or a new
+sibling `EXECUTION_SKIP_REASONS` vocabulary (execution-time), which is deliberately NOT merged into
+`SKIP_REASONS` because `isKnownSkipReason` also filters a run item's own field. A terminal Phase-10
+job now outranks a still-non-terminal delegate (closing the "terminally dead-lettered job reads
+PENDING forever" defect), and `source` reports `ORCHESTRATION_JOB` when that precedence applies.
+`evidenceAvailable` on a `VULNERABILITY_ENRICHMENT` row is now unconditionally `false`: this summary
+layer does not read `VulnerabilityProviderStatus` or its freshness horizon, so orchestration-job
+completion alone can never prove per-source positive evidence exists.
+
+Explicitly unchanged: `SUCCESSFUL_JOB_STATES` / `FAILED_JOB_STATES` / `SKIPPED_JOB_STATES` (and
+therefore `EnrichmentRun.state`'s persisted semantics), every backend write path, the endpoint's
+pure-read/zero-write guarantee, and per-source vulnerability outcomes (still served only by the
+existing vulnerability read surface).
+
+### Consequence
+
+A consumer of `GET /api/findings/:id/enrichment/summary` written against the pre-10C1 six-value
+`status` vocabulary must be updated: `COMPLETED` no longer covers a nothing-on-file answer, and
+`UNAVAILABLE` no longer covers a rate limit or a post-contact ambiguity. `FindingEnrichmentPanel.jsx`
+was updated in the same change. A future session adding a `SUMMARY_STATUSES` value must add it to
+`SUMMARY_STATUS_PRECEDENCE` in the same change — a test asserts the two sets stay equal precisely so
+this cannot silently regress to the old fail-open fallback.

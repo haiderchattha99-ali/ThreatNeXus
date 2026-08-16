@@ -128,6 +128,28 @@ describe('provider status rendering', () => {
     expect(screen.getAllByText(matcher).length).toBeGreaterThan(0)
   })
 
+  it.each([
+    ['NO_RECORD', /Nothing on file/i],
+    ['RATE_LIMITED', /Rate limited/i],
+    ['AMBIGUOUS', /Ambiguous/i],
+  ])('%s (Phase 10C-1) renders its own distinct label, never the COMPLETED look', async (status, matcher) => {
+    findingEnrichmentOrchestrationService.getSummary.mockResolvedValue(
+      fullSummary({
+        providers: [
+          providerRow({ provider: 'abuseipdb', purpose: 'IOC_REPUTATION', status, source: 'ORCHESTRATION_JOB' }),
+          providerRow({ provider: 'censys' }),
+          providerRow({ provider: 'greynoise' }),
+          providerRow({ provider: 'netlas' }),
+          providerRow({ provider: 'nvd', purpose: 'VULNERABILITY', status: 'NO_SUBJECT', subjects: [] }),
+          providerRow({ provider: 'shodan' }),
+        ],
+      }),
+    )
+    await renderPanel(VIEWER_CAPABILITIES)
+    expect(screen.getByText(matcher)).toBeInTheDocument()
+    expect(screen.queryByText(/Lookup completed/i)).not.toBeInTheDocument()
+  })
+
   it('never renders UNAVAILABLE as though it were a clean "nothing found" COMPLETED result', async () => {
     await renderPanel(VIEWER_CAPABILITIES)
     expect(screen.queryByText(/Unavailable.*Lookup completed/i)).not.toBeInTheDocument()
@@ -157,6 +179,31 @@ describe('provider status rendering', () => {
     )
     await renderPanel(VIEWER_CAPABILITIES)
     expect(screen.getByText('Lookup completed')).toBeInTheDocument()
+    expect(screen.getByText(/no longer fresh/i)).toBeInTheDocument()
+  })
+
+  it('a stale NO_RECORD row shows a stale notice too — staleness is not exclusive to COMPLETED (P2-2)', async () => {
+    findingEnrichmentOrchestrationService.getSummary.mockResolvedValue(
+      fullSummary({
+        providers: [
+          providerRow({
+            provider: 'abuseipdb',
+            purpose: 'IOC_REPUTATION',
+            status: 'NO_RECORD',
+            source: 'IOC_ENRICHMENT',
+            freshUntil: '2026-01-01T00:00:00.000Z',
+            isStale: true,
+          }),
+          providerRow({ provider: 'censys' }),
+          providerRow({ provider: 'greynoise' }),
+          providerRow({ provider: 'netlas' }),
+          providerRow({ provider: 'nvd', purpose: 'VULNERABILITY', status: 'NO_SUBJECT', subjects: [] }),
+          providerRow({ provider: 'shodan' }),
+        ],
+      }),
+    )
+    await renderPanel(VIEWER_CAPABILITIES)
+    expect(screen.getByText('Nothing on file')).toBeInTheDocument()
     expect(screen.getByText(/no longer fresh/i)).toBeInTheDocument()
   })
 

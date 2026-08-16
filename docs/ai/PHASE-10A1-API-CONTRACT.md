@@ -163,22 +163,41 @@ One row per known provider, always all six, always in the same order. Each row:
 | `provider` | lowercase allow-listed identifier |
 | `purpose` | `IOC_REPUTATION` \| `EXPOSURE` \| `VULNERABILITY` — closed |
 | `status` | closed, see below |
-| `skipReason` | closed `SKIP_REASONS` code, or null |
+| `skipReason` | closed `SKIP_REASONS` or `EXECUTION_SKIP_REASONS` code, or null |
 | `source` | `NONE` \| `ORCHESTRATION_JOB` \| `IOC_ENRICHMENT` \| `VULNERABILITY_ENRICHMENT` |
 | `asOf` | the evaluation instant this row was resolved at |
 | `freshUntil` | when the resolved answer stops being fresh, or null |
 | `isStale` | `freshUntil !== null && freshUntil <= asOf` |
-| `evidenceAvailable` | a terminal successful answer exists and is still fresh |
+| `evidenceAvailable` | a positive, terminal answer exists and is still fresh — see below |
 
-`status` vocabulary:
+`status` vocabulary (Phase 10C-1, `TNX-P10C1-TRUTHFUL-TERMINAL-STATES`, amends this section — see
+`docs/ai/PHASE-10C1-TRUTHFUL-TERMINAL-STATES-CONTRACT.md` and `DECISIONS.md` `D-P10C1-01`):
 
 * `NO_SUBJECT` — considered, but this Finding carries no subject of the provider's type. This is
   the required NVD-without-a-verified-CVE answer, and it creates **no** NVD item.
 * `NOT_REQUESTED` — a subject exists, but no orchestration item has ever been recorded.
 * `PENDING` — an item exists and its work is non-terminal.
-* `COMPLETED` — the work reached a real answer (`SUCCEEDED` / `NO_RECORD`).
-* `UNAVAILABLE` — the work reached a terminal failure.
-* `SKIPPED` — the item was refused by policy, or the job was refused before it could be attempted.
+* `COMPLETED` — a real, positive answer with retrievable evidence exists (`SUCCEEDED` / IOC
+  `SUCCESS`).
+* `NO_RECORD` — the provider was queried and had nothing on file (`NO_RECORD` / IOC `NOT_FOUND`). A
+  real, terminal answer, never the same look as `COMPLETED`.
+* `RATE_LIMITED` — the provider refused this attempt on a recognized rate limit
+  (`errorCode === "PROVIDER_RATE_LIMITED"`), recovered from a closed diagnostic only.
+* `AMBIGUOUS` — the request was sent and no durable answer followed (`terminalReasonCode ===
+  "AMBIGUOUS_AFTER_CONTACT"`). May have been charged; manual-review-only, never auto-retried.
+* `UNAVAILABLE` — the work reached a terminal failure other than a recognized rate limit or
+  post-contact ambiguity.
+* `SKIPPED` — the item was refused by policy, or the job (or its delegate) was refused once
+  execution reached it. Always carries a closed-vocabulary `skipReason` naming why.
+
+`evidenceAvailable` is **always `false`** on a `VULNERABILITY_ENRICHMENT` row, regardless of
+`status` — this summary layer never reads `VulnerabilityProviderStatus` or its freshness horizon, so
+a `COMPLETED` vulnerability-batch job proves only that the batch finished, never that a per-source
+provider result exists. Per-source vulnerability outcomes remain on the existing vulnerability read
+surface, outside this contract.
+
+A terminal Phase-10 orchestration job outranks a still-non-terminal delegate status; when that
+precedence applies, `source` is `ORCHESTRATION_JOB` — never the outranked delegate.
 
 NVD may carry `subjects` — one sub-row per verified CVE, each with `subjectValue`, `status`,
 `skipReason`, `source`, `freshUntil`, `isStale`, `evidenceAvailable`. Every other provider carries

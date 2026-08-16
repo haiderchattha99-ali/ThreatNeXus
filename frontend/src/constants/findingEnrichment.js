@@ -19,11 +19,18 @@ export const ENRICHMENT_SUMMARY_STATUS = Object.freeze({
   NO_SUBJECT: { label: 'No subject on this finding', tone: 'neutral', icon: 'minus' },
   NOT_REQUESTED: { label: 'Not requested', tone: 'neutral', icon: 'dot' },
   PENDING: { label: 'Pending', tone: 'info', icon: 'clock' },
-  // "Completed" on purpose, not "Evidence recorded" — this same status covers
-  // a real positive AND a real "queried, nothing on file" answer (both are
-  // legitimate terminal results per enrichmentSummaryReadService.js). Naming
-  // it as though content exists would overclaim in the nothing-found case.
+  // A real, positive answer with retrievable evidence.
   COMPLETED: { label: 'Lookup completed', tone: 'success', icon: 'check' },
+  // The provider was queried and had nothing on file — a real terminal
+  // answer, but never rendered with the same look as COMPLETED, which would
+  // overclaim that evidence exists.
+  NO_RECORD: { label: 'Nothing on file', tone: 'neutral', icon: 'dot' },
+  // A recognized provider rate limit — distinct from a generic failure
+  // because the right analyst action (wait, then retry) differs.
+  RATE_LIMITED: { label: 'Rate limited', tone: 'warning', icon: 'clock' },
+  // The request was sent and no durable answer followed. May have been
+  // charged; never auto-retried; requires manual review.
+  AMBIGUOUS: { label: 'Ambiguous — needs manual review', tone: 'warning', icon: 'warning' },
   UNAVAILABLE: { label: 'Unavailable', tone: 'danger', icon: 'cross' },
   SKIPPED: { label: 'Skipped', tone: 'warning', icon: 'minus' },
 })
@@ -52,11 +59,22 @@ export const SKIP_REASON_LABELS = Object.freeze({
   FRESH_RESULT_EXISTS: 'A fresh result already exists',
   PROVIDER_SUBJECT_MISMATCH: 'This provider does not accept this subject type',
   NO_SUBJECT_FOR_PROVIDER: 'No qualifying subject on this finding',
-  AUTOMATIC_BUDGET_ZERO: 'Automatic daily budget is exhausted',
-  MANUAL_BUDGET_ZERO: 'Manual daily budget is exhausted',
+  // "Set to zero" — a configuration value, never attempted. "Exhausted" is
+  // reserved for EXECUTION_BUDGET_EXHAUSTED below, which means an
+  // already-created job's own reservation was refused at execution time.
+  AUTOMATIC_BUDGET_ZERO: 'Automatic daily budget is set to zero',
+  MANUAL_BUDGET_ZERO: 'Manual daily budget is set to zero',
   EXECUTION_NOT_IMPLEMENTED: 'Execution is not available in this deployment',
   DELEGATE_BATCH_REQUIRED: 'Requires the administrator vulnerability batch',
   DELEGATE_UNAVAILABLE: 'Could not be scheduled',
+  // Execution-time skips: the item was recorded ELIGIBLE, and the refusal
+  // happened once its job (or IOC delegate) actually reached execution —
+  // distinct from the routing-time codes above, which mean the item was
+  // never recorded ELIGIBLE at all.
+  EXECUTION_DISABLED: 'Provider was disabled by the time this job ran',
+  EXECUTION_NOT_CONFIGURED: 'No credential was configured by the time this job ran',
+  EXECUTION_UNSUPPORTED_SUBJECT: 'This subject was unsupported once execution reached it',
+  EXECUTION_BUDGET_EXHAUSTED: "This job's budget reservation was refused at execution time",
 })
 
 // source — WHICH stored record answered a summary row. Shown as a short

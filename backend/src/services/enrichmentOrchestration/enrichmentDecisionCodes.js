@@ -144,19 +144,79 @@ const EXECUTION_STATES = Object.freeze({
 //                  "there was nothing to ask about", the other is "nobody
 //                  asked".
 //   PENDING        an item exists and its work is non-terminal.
-//   COMPLETED      the work reached a real answer.
-//   UNAVAILABLE    the work reached a terminal failure. Never reported as
-//                  COMPLETED-with-no-evidence, which would read as "nothing
-//                  found" rather than "we do not know".
+//   COMPLETED      a real, positive answer with retrievable evidence exists
+//                  (`SUCCEEDED` / IOC `SUCCESS`). Never the same look as
+//                  NO_RECORD, which also reached a real answer but found
+//                  nothing.
+//   NO_RECORD      the provider was queried and had nothing on file
+//                  (`NO_RECORD` / IOC `NOT_FOUND`). A real, terminal answer —
+//                  never rendered as evidence, and never collapsed into
+//                  COMPLETED, which would overclaim.
+//   RATE_LIMITED   the provider refused this attempt on a recognized rate
+//                  limit. Distinct from a generic technical failure because
+//                  the right analyst action (wait, then retry) differs.
+//   AMBIGUOUS      the request was sent and no durable answer followed — the
+//                  provider may have been charged, and this row is
+//                  manual-review-only, never auto-retried. Never collapsed
+//                  into UNAVAILABLE, which would hide that a paid call may
+//                  already have happened.
+//   UNAVAILABLE    the work reached a terminal failure other than a
+//                  recognized rate limit or post-contact ambiguity. Never
+//                  reported as COMPLETED-with-no-evidence, which would read as
+//                  "nothing found" rather than "we do not know".
 //   SKIPPED        refused by policy, or refused before it could be attempted.
+//                  Always carries a closed-vocabulary `skipReason` naming why.
 const SUMMARY_STATUSES = Object.freeze({
   NO_SUBJECT: "NO_SUBJECT",
   NOT_REQUESTED: "NOT_REQUESTED",
   PENDING: "PENDING",
   COMPLETED: "COMPLETED",
+  NO_RECORD: "NO_RECORD",
+  RATE_LIMITED: "RATE_LIMITED",
+  AMBIGUOUS: "AMBIGUOUS",
   UNAVAILABLE: "UNAVAILABLE",
   SKIPPED: "SKIPPED",
 });
+
+// `rollUp`'s precedence order, least-settled/most-actionable first. Every
+// value of SUMMARY_STATUSES appears exactly once — proven by a test asserting
+// set equality — so a status added later without a ranking cannot silently
+// fall through `rollUp`'s fallback undetected (gate invariant 8).
+const SUMMARY_STATUS_PRECEDENCE = Object.freeze([
+  SUMMARY_STATUSES.PENDING,
+  SUMMARY_STATUSES.AMBIGUOUS,
+  SUMMARY_STATUSES.RATE_LIMITED,
+  SUMMARY_STATUSES.UNAVAILABLE,
+  SUMMARY_STATUSES.SKIPPED,
+  SUMMARY_STATUSES.NOT_REQUESTED,
+  SUMMARY_STATUSES.NO_SUBJECT,
+  SUMMARY_STATUSES.NO_RECORD,
+  SUMMARY_STATUSES.COMPLETED,
+]);
+
+// Execution-time skip causes for an ELIGIBLE item whose JOB (or IOC delegate)
+// was refused after being created — distinct from the ROUTING-time SKIP_REASONS
+// below, which record why an item was never made ELIGIBLE in the first place.
+// A sibling object, deliberately NOT merged into SKIP_REASONS: isKnownSkipReason
+// also filters a run item's OWN skipReason (enrichmentRunReadService.js), which
+// is exclusively a routing-time fact, and three of these four codes would be
+// indistinguishable from their routing-time twins if the vocabularies merged
+// (PROVIDER_DISABLED/PROVIDER_NOT_CONFIGURED/PROVIDER_SUBJECT_MISMATCH already
+// mean something different: refused before an item was ever recorded).
+const EXECUTION_SKIP_REASONS = Object.freeze({
+  // The provider was switched off by the time its recorded job executed.
+  EXECUTION_DISABLED: "EXECUTION_DISABLED",
+  // The provider had no credential configured by the time its job executed.
+  EXECUTION_NOT_CONFIGURED: "EXECUTION_NOT_CONFIGURED",
+  // The recorded subject turned out unsupported once execution reached it.
+  EXECUTION_UNSUPPORTED_SUBJECT: "EXECUTION_UNSUPPORTED_SUBJECT",
+  // The job's execution-time quota reservation was refused. Distinct from
+  // AUTOMATIC_BUDGET_ZERO / MANUAL_BUDGET_ZERO below, which refuse a job
+  // before it is ever created.
+  EXECUTION_BUDGET_EXHAUSTED: "EXECUTION_BUDGET_EXHAUSTED",
+});
+
+const EXECUTION_SKIP_REASON_VALUES = Object.freeze(Object.values(EXECUTION_SKIP_REASONS));
 
 // WHICH stored record answered a summary row. A delegated provider's truth
 // lives in the canonical queue's own row, not in the Phase-10 job that waits on
@@ -253,9 +313,12 @@ module.exports = {
   RUN_REQUEST_OUTCOMES,
   EXECUTION_STATES,
   SUMMARY_STATUSES,
+  SUMMARY_STATUS_PRECEDENCE,
   SUMMARY_SOURCES,
   INGESTION_ENRICHMENT_STATES,
   SKIP_REASONS,
   SKIP_REASON_VALUES,
+  EXECUTION_SKIP_REASONS,
+  EXECUTION_SKIP_REASON_VALUES,
   isKnownSkipReason,
 };
