@@ -1,130 +1,95 @@
-# Handoff: TNX-P10C5-BOUNDED-PROVIDER-RESPONSE-BODIES
+# Handoff: THREATNEXUS-FUNCTIONAL-CLOSURE
 
 - From: claude
-- Branch: `feat/phase-10c5-bounded-provider-response-bodies`
-- Worktree: `F:\AI-Worktrees\ThreatNeXus\phase-10c5`
-- Base: `origin/main` @ `c683cae` (merge of PR #26, TNX-P10C4)
+- Branch: `docs/tnx-functional-closure`
+- Worktree: `F:\AI-Worktrees\ThreatNeXus\closure`
+- Base / merged main: `origin/main` @ `eb19f4e` (merge of PR #27, TNX-P10C5)
 - Updated: 2026-08-18
-- Status: **ready_for_pr** — Tier 3. Implementation, focused evidence, regression evidence, and one
-  targeted review are all complete and green. **Remaining: stage/commit, push, CI, open PR (no
-  merge).** This is the LAST currently-recorded 10C engineering ticket — next action after the PR is
-  functional project closure, not a new phase.
+- Status: **core_functionally_closed** — Tier N/A (reconciliation, not an engineering ticket).
 
-- Decision: `docs/ai/DECISIONS.md` → `D-P10C5-01`
+## CORE FUNCTIONAL STATUS: CLOSED
 
-## What this ticket closes
+The Phase-10 engineering sequence (10A → 10B → 10C1 → 10C2 → 10C3 → 10C4 → 10C5) is complete and
+merged. No P0/P1 functional blocker exists at the current merged tip. **Begin optional endgame on
+separate explicit authorization; this run started none of it.**
 
-10C-4's own decision record (`D-P10C4-01`) disclosed the residual explicitly: the worker's
-`lookupWithBound` races `provider.lookup()` against a timeout but never cancels the underlying fetch
-if it loses that race, and no provider bounded how many bytes of a response body it would ever read
-into memory before parsing. This ticket closes that gap.
+## What was actually checked (reconciliation, not rediscovery)
 
-## The grounded defect (not assumed from the ticket's own summary sentence)
+- **Merge confirmed by Git, not assumed:** `git merge-base --is-ancestor` proves the TNX-P10C5
+  branch is a real ancestor of `origin/main`.
+- **Merged-head regression evidence — the cheapest, strongest signal available:** every merge-to-main
+  CI run from PR #23 (TNX-P10C1) through PR #27 (TNX-P10C5) completed successfully
+  (`gh run list --branch main`). This directly answers "did composing these five tickets together
+  break anything" without re-running any local suite.
+- **Default-off / provider-safety invariants, grep-verified at the merged tip** (not trusted from
+  memory): `AI_ENABLED`, `ENRICHMENT_WORKER_ENABLED`, `AUTO_ENRICHMENT_ENABLED` all default `false` in
+  both `backend/src/config/env.js` and `docker-compose.yml`; `IOC_ENRICHMENT_PROVIDER` defaults
+  `mock` in both. No unintended live/provider default is enabled.
+- **Core data model present:** `User`, `AuditLog`, `Case`, `Notification`, `Finding`, `RiskScore`,
+  `GreyNoiseEnrichment` all confirmed in `backend/prisma/schema.prisma` at the merged tip.
+- **Core frontend routes present:** Dashboard, Findings, FindingDetail, Cases, CaseDetail,
+  Notifications, NotificationDetail, Organizations, Settings, Profile, Analytics, AttackNavigator,
+  Login — the full route set the product's core journeys require.
+- **TNX-P10C5's own closure evidence stands** (recorded earlier this session, not repeated here):
+  177/177 provider suites, 56/56 legacy-route integration, 96/96 inertness/evidence/security, 34/34
+  real-Postgres Phase-10A-2 execution, 3640/3642 full backend suite, zero schema/migration diff, zero
+  live provider contact, one `security-reviewer` pass CLEAR (0 P0/P1).
+- **Stale planning artifacts identified and correctly NOT reopened:** `docs/ai/TASKS.md` stops
+  tracking at Phase 6.3; `../ThreatNeXus-Planning/planning/NEXT_STEPS.md` still says "no
+  implementation work has started"; `BUILD_PLAN.md` only defines Phases 0–7. All three predate the
+  STATE.yaml/HANDOFF.md-per-ticket execution record this project actually used from Phase 0 onward.
+  Historical wording, not a functional gap — per this run's own explicit instruction not to reopen
+  work merely because an old doc disagrees.
 
-All five real provider adapters — `greynoise`, `censys`, `shodan`, `netlas`, `abuseipdb` — each
-independently called `body = await response.json()` on a successful response, with their own
-copy-pasted `createComposedController` timeout/AbortController helper. No shared HTTP client existed.
-`response.json()` materializes the entire body with no upper bound before parsing a single byte — a
-misbehaving or compromised provider endpoint could exhaust process memory with an arbitrarily large or
-infinite chunked response.
+## What was updated (minimal, truthful, not a documentation redesign)
 
-Every legacy synchronous route (`greyNoiseExecutionService.js` and its four siblings) calls the
-identical `provider.lookup()` as the Phase-10 worker does — confirmed by reading the actual call
-sites, not assumed. That meant fixing the read **inside the provider module** protects both paths
-from one change, with **zero** execution-service or route-file edits required.
+`README.md`'s "Current status" table was frozen at Phase 9B.1. Added one row each for 10A, 10B,
+10C1–10C3 (grouped), 10C4, and 10C5, corrected the heading and the Roadmap anchor/claim to match, and
+added one new Roadmap bullet recording the still-pending external report dependency (below). This is
+the "README-facing project status" correction this closure run was asked to make — the *professional*
+documentation/diagram finalization pass remains deferred to optional endgame phase C.
 
-## The fix — one shared seam, not five duplicated policies
+## External dependency — recorded truthfully, not fabricated or marked complete
 
-**New:** `backend/src/services/shared/boundedResponseBody.js`, exporting
-`readBoundedResponseText(response, {maxBytes})`.
+**The expected Rapid7/Sonar-style Open Data (or comparable Shadowserver-style Accessible-RDP)
+report/access response has NOT yet been received.** This is an external data/access dependency, not
+an application defect: the synthetic dataset already exercises the full ingest → triage → case →
+notification → closure path today, and nothing in the ingestion contract depends on receiving the
+external report. If it continues to be unavailable, a legitimate alternate demo dataset may be
+substituted for demonstration purposes only, **provided its provenance is recorded truthfully** rather
+than presented as the original source. Not researched, not downloaded, not substituted this run.
 
-- Enforcement is on **actual bytes received from the stream** (`response.body.getReader()`, summing
-  each chunk's real `byteLength`) — never on `Content-Length` alone. A present, over-limit
-  `Content-Length` is used only as an **early refusal** before any byte is read; a missing
-  (chunked-transfer), spoofed, or understated `Content-Length` cannot bypass the real byte-counting
-  loop.
-- `DEFAULT_MAX_RESPONSE_BYTES = 2 MiB` — one shared constant. None of the five providers' documented
-  response shapes come close to it, so a single limit is simpler and no less safe than five
-  per-provider policies.
-- On overflow: the reader (and the underlying connection) is cancelled where the runtime supports it,
-  and a distinguishable `ResponseTooLargeError` is thrown **before any text is ever returned** — a
-  partial oversized body can never be parsed as valid evidence.
-- Runtime fact checked before designing this, not assumed: the backend runs Node 22 (native
-  `fetch`/undici — `backend/Dockerfile:7` pins `node:22-bookworm-slim`), so `response.body` is a real
-  Web Streams `ReadableStream` supporting `.getReader()`/`.cancel()`.
+## Deferred / non-blocking (correctly not converted into new tickets)
 
-**Wiring (all 5 providers, same shape):** the existing 2xx branch's `response.json()` call became
-`readBoundedResponseText(response)` → `JSON.parse(text)`, inside the *exact same* try/catch each
-provider already had. `ResponseTooLargeError` maps to a new, additive, per-provider closed error code
-— `PROVIDER_RESPONSE_TOO_LARGE` — classified into the existing `ENRICHMENT_STATUS.FAILED` bucket, the
-same bucket `PROVIDER_MALFORMED_RESPONSE` already uses. Nothing about status-code handling, timeout
-behavior, `NOT_FOUND`/`RATE_LIMITED` semantics, or the Phase-10 attempt/quota/ledger model changed.
+- The four legacy synchronous provider routes remain an off-ledger, credential-armed contact path —
+  now body-size-bounded by 10C-5, still not retired/hardened. Unowned; carried forward, not reopened.
+- 10C-5's own disclosed residuals (bounding beyond the shared 2 MiB limit for large/variable
+  responses; `lookupWithBound`'s outer `Promise.race` still doesn't thread a cancellation signal)
+  remain required only before unattended/production/batch>1 enablement — not before functional
+  closure of the current bounded local/demo deployment model.
+- Whether the CI job for `phase10c3UsageService.test.js` sets `TEST_DATABASE_URL` (carried forward
+  from 10C-3, not re-checked this run — out of scope for a merged-head regression pass).
 
-**Contact truth preserved.** An oversized body is only ever discovered *after* the fetch already
-returned a response object (status/headers known) — i.e. after `contactedProvider` is already true.
-It is a normal post-contact `FAILED` outcome in the existing closed vocabulary, never a fabricated
-`REFUSED_BEFORE_LOOKUP`.
+## Optional endgame — approved, recorded, NOT started
 
-## Deliberately out of scope (recorded in D-P10C5-01, not silently dropped)
+Three bounded activities remain, each requiring separate explicit authorization before starting, one
+at a time:
 
-- `backend/src/services/vulnerability/vulnerabilityHttp.js` (NVD/KEV/EPSS's own `response.text()`
-  path) — a structurally separate system per this project's own IOC-vs-vulnerability architecture
-  boundary. Not touched. A distinct future ticket if the same bound is ever wanted there.
-- `lookupWithBound`'s outer `Promise.race` (`enrichmentDirectExecutionService.js:161`) — a *timeout*
-  safety property, not a *body-size* one. Left exactly as-is. The body bound now achieved inside each
-  provider (reader/connection cancellation on overflow) already removes the unbounded-memory risk
-  that made the outer race's non-cancellation material.
+**A. Security / pentest pass — if time.** Read-only audit/pentest → prioritized evidence → fix P0/P1
+and only the highest-value P2 if time → one targeted re-test → STOP. No endless security loop.
 
-## A real pre-existing test-double bug found and fixed along the way
+**B. Deep frontend/UI-UX audit + one polish pass.** One rendered, page-by-page audit first (login,
+dashboard, findings, finding detail, cases, settings, navigation, loading/error/empty states,
+mobile/responsive, accessibility, visual cohesion, motion opportunities). Route each recommended
+improvement to the right capability rather than reaching for tools because they exist. Implement one
+approved bounded set, one browser QA pass, STOP. No second polish loop.
 
-`phase10a2Execution.test.js`'s `fakeFetch` had **divergent** `.json()` and `.text()` defaults: the
-`.json()` default (used until now) was a valid Censys success shape; the dormant `.text()` default —
-never exercised because production never called `.text()` before — was just `"{}"`. Updating mocks to
-expose `.text()`/`.body` (since production no longer calls `.json()`) would have silently flipped a
-`SUCCEEDED`-outcome test to a `FAILED`/malformed-response outcome. Fixed by giving both paths the
-identical single default body.
-
-## Testing
-
-- **New:** `boundedResponseBody.test.js` — 17 tests: small/multi-chunk normal responses,
-  exactly-at-limit, one-byte-over, no-Content-Length, understated/malformed Content-Length, early
-  refusal on an accurate over-limit Content-Length (proving zero streaming ever starts), multibyte
-  byte-vs-character-length, partial-body-never-exposed, the `.text()` fallback for a non-streaming
-  Response.
-- **Updated:** all 5 provider unit test files' shared response-mock helpers now expose
-  `.text()`/`.body` streaming; one new `PROVIDER_RESPONSE_TOO_LARGE`-mapping test added per provider
-  (6 total across the 5 files + `abuseIpdbProvider.test.js`'s own dedicated case). Also updated:
-  `abuseIpdbProviderSecurity.test.js`, `censysLiveSmoke.test.js`, `enrichmentRunner.test.js`, and the
-  4 legacy-route authorization integration tests — every mock that previously only exposed `.json()`.
-- **Real-Postgres:** stood up a disposable local Postgres (25 migrations applied, `TEST_DATABASE_URL`
-  set), ran `tests/integration/phase10a2Execution.test.js` — 34/34, proving Phase-10
-  attempt/quota/reservation/contact truth is unchanged end-to-end through the real worker path.
-- **Full suite:** `npm test` with `TEST_DATABASE_URL` active — first run 3640/3642 passed (162/163
-  files, 2 pre-existing skips). A second run showed 6 failures, all isolated to
-  `riskScoringConcurrency.test.js`/`vulnerabilityReleaseWorkflow.test.js` — files this ticket never
-  touched, with write-conflict/deadlock-shaped errors matching this project's own documented local
-  full-suite contention flakiness (not a regression; CI runs isolated and is the authoritative gate).
-- No backend lint script exists in this repo (only the frontend CI job lints); confirmed, not a gap.
-- Zero live provider contact anywhere — every fixture is deterministic and local.
-
-## Review
-
-One bounded read-only pass, `security-reviewer`, 9 binding questions (bypass via Content-Length,
-partial-data exposure, contact-truth misreporting, cancellation safety, provider-semantics
-regression, legacy-route coverage, secret/body leakage). **0 P0/P1 — CLEAR.**
-
-Two P2 notes: (1) a recommendation to live/manual-smoke-test undici's `reader.cancel()` behavior
-before unattended/production reliance — explicitly **not** performed this ticket, per the absolute
-no-live-provider-testing rule; recorded for a future operator decision. (2) A duplicated trailing
-sentence in `docs/ai/DECISIONS.md` (my own copy-paste artifact while writing D-P10C5-01) — fixed, a
-trivial zero-risk 1-line doc correction.
+**C. Professional final documentation.** After (A)/(B) settle the product surface: README, overview,
+architecture, data-flow diagrams, screenshots, security model, deployment/setup, demo workflow,
+external-data provenance (including the Rapid7/Sonar dependency above), limitations. No AI
+watermarks, no fabricated claims.
 
 ## Next action
 
-Isolate and stage the exact ticket-owned paths, validate the staged index, create one bounded
-implementation commit, push, obtain green CI at the exact final SHA, open the PR against `main`, and
-**STOP without merging**.
-
-**This was the last currently-recorded 10C engineering ticket.** The action after this PR is
-functional project closure — not 10C-5's own successor, not a pentest phase, not frontend polish, not
-a documentation overhaul, unless explicitly requested in a future ticket.
+Wait for explicit authorization to begin (A), (B), or (C). Do not invent a Phase 11. Do not reopen
+10A–10C5 without genuine new P0/P1 evidence.
