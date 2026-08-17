@@ -367,6 +367,17 @@ jobs:
           IOC_ENRICHMENT_PROVIDER: mock
           ABUSEIPDB_API_KEY: ''
           NVD_API_KEY: ''
+          GREYNOISE_API_KEY: ''
+          SHODAN_API_KEY: ''
+          NETLAS_API_KEY: ''
+          # Phase 10C-3 — a deliberately FAKE, non-functional credential. The
+          # worker stays off in this job (ENRICHMENT_WORKER_ENABLED defaults
+          # false, never set here), so it is never used to contact anything;
+          # it exists only to make the "credential present, worker off"
+          # EXECUTION_PAUSED readiness state reachable for
+          # enrichmentOperability.spec.js, which every other provider proves
+          # as NOT_CONFIGURED with no credential at all.
+          CENSYS_PAT: 'fake-censys-pat-for-e2e-only'
           AI_ENABLED: 'false'
           AI_PROVIDER: 'null'
           # Disposable override for this job only, matching docker-compose's
