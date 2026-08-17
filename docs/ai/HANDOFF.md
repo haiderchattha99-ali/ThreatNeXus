@@ -5,9 +5,9 @@
 - Worktree: `F:\AI-Worktrees\ThreatNeXus\phase-10c4`
 - Base: `origin/main` @ `0f81835` (merge of PR #25, TNX-P10C3)
 - Updated: 2026-08-17
-- Status: **pre_live_ready** — Tier 3. Implementation checkpoint `3bb2004` independently re-verified, its
-  own implementation-delta review is closed (0 P0/P1), and a real disposable-stack dry run proved the
-  environment fails closed for the correct reason. **READY FOR HUMAN CANARY AUTHORIZATION.**
+- Status: **live_canary_closed** — Tier 3. The bounded live canary (contract §13, C1-C10) executed under
+  explicit human authorization, reached a clean terminal state, and rollback to default-off is verified.
+  **Remaining: push, CI, open PR (no merge).**
 
 **The design/contract gate below (design_frozen, verdict READY) is unchanged and still authoritative.
 The IMPLEMENTATION checkpoint (`3bb2004`: the P1-P17 preflight script, its unit tests, one
@@ -43,6 +43,59 @@ torn down with `docker compose down -v` and confirmed removed.
 
 **No credential was requested, read, printed, or committed at any point.** The Compose overlay used
 for the dry run lives only in the session scratchpad, never in the repository.
+
+## Live canary closure (this update)
+
+**Executed under explicit human authorization, exactly once, GreyNoise only, subject `1.1.1.1`.**
+
+**Credential path.** The real `GREYNOISE_API_KEY` came from the human operator's own pre-existing
+`backend/.env` in the *primary checkout* (`C:\Users\LENOVO\Desktop\ThreatNeXus`, not this worktree),
+referenced via `docker compose --env-file` so the agent never read, typed, or displayed the value.
+That file also carries other providers' keys; every one of them (`abuseipdb`, `censys`, `shodan`,
+`netlas`, `nvd`) was explicitly blanked in a scratchpad-only overlay so only `greynoise` could ever be
+armed — confirmed by preflight **P4 PASS** (no other provider credentialed).
+
+**Live preflight (worker off): 17/17 PASS.** Every assertion held, including P3
+(`greynoise` credential configured) and P4.
+
+**The canonical flow was used, not the adapter directly.** Logged in as the seeded `admin` account and
+called the real `POST /api/findings/1/enrichment/runs` (`{providers:["greynoise"]}`, no force, no
+justification) — the same endpoint an analyst uses. The worker (restarted with
+`ENRICHMENT_WORKER_ENABLED=true`, confirmed active via the `enrichment.worker.started` audit row and
+`READY` readiness) picked up the job on its own.
+
+**Result: one clean contact, `NOT_FOUND` (HTTP 404).** Per contract §12/§15.1 this is a complete,
+valid success — positive intelligence was never required. Evidence (database-verified, not log
+output):
+
+| Fact | Value |
+|---|---|
+| `ProviderLookupAttempt` count | exactly 1 — `FINISHED`, `outcome=NOT_FOUND`, `httpStatus=404`, `contactedProvider=true` |
+| `ProviderLookupJob` (greynoise) | exactly 1 — `lane=MANUAL`, terminal `state=NO_RECORD` |
+| `ProviderDailyUsage` | exactly 1 row — today, MANUAL, `reservedCount=1`, `limitAtLastReservation=1`, no other day |
+| `GreyNoiseEnrichment` count | 1 (the known-outcome path) |
+| `greynoise.lookup.%` audit count | still 0 — **no legacy-path contact** |
+| Audit sequence | `claimed → charged → contacted → finalized`, in order |
+| `GET .../summary` | agrees: `greynoise` status `NO_RECORD`, source `ORCHESTRATION_JOB`; every other provider `NOT_REQUESTED`/`NO_SUBJECT` |
+
+**Rollback (§11) executed and verified, in order:** restarted with `ENRICHMENT_WORKER_ENABLED=false`;
+confirmed via `docker compose ps` and the absence of the worker-started startup line in the new
+container's own logs (the audit-row *absence* of a matching `stopped` row is explicitly **not**
+evidence per contract §11 step 2 — the fire-and-forget audit call can silently fail — so the positive
+process-level check was used instead); confirmed readiness back to `EXECUTION_PAUSED`
+(`reservedToday=1`, `remaining=0` — correctly reflecting the one spent reservation, not zeroed);
+confirmed the attempt/job counts were **unchanged** after shutdown (no post-rollback contact);
+destroyed the stack and its volume (`docker compose down -v`); confirmed the worktree has **zero**
+diff against HEAD and the primary checkout has zero 10C-4-related changes. Nothing new was ever
+written that could hold the credential, so there was nothing to delete or purge from shell history.
+
+**Minor operational note (not a defect):** the overlay's `ports` list concatenated with the base
+file's rather than replacing it, so the disposable backend was also briefly reachable on host port
+5000 (in addition to the intended 15000). No collision occurred. Worth a dedicated compose file rather
+than `-f` layering if this exact procedure is repeated.
+
+**10C-5 (provider response-body size hardening) remains required** before any unattended, production,
+or batch-size->1 enablement, and was not started.
 
 ## What this gate decided
 
