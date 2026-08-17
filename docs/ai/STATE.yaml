@@ -1,97 +1,84 @@
 {
     "schema_version":  1,
-    "ticket":  "TNX-P10C3-PROVIDER-CREDENTIAL-BUDGET-OPERABILITY",
-    "title":  "Read-only provider credential/budget operability surface (contract v3)",
-    "status":  "pr_open",
+    "ticket":  "TNX-P10C4-CONTROLLED-LIVE-ENRICHMENT-GO-LIVE",
+    "title":  "Controlled live enrichment go-live contract (design/contract gate only, revision 2)",
+    "status":  "design_frozen",
     "owner":  "claude",
-    "reviewer":  "security-reviewer (internal fallback for Codex, which was at its usage limit this session; SAFE TO COMMIT, 0 P0/P1, 2 P2 non-blocking, 1 P3 non-blocking - see known_issues)",
-    "branch":  "feat/phase-10c3-provider-credential-budget-operability",
-    "worktree":  "F:\\AI-Worktrees\\ThreatNeXus\\phase-10c3",
-    "starting_commit":  "3f5c7ea71446b287d10b9229fa103b7823e702ba",
-    "goal":  "Answer 'can this provider execute right now, and if not, exactly what is missing' with a read-only, environment-owned, server-derived surface (7-value closed readiness vocabulary) on Settings, joining the previously-separate credential and budget panels, without persisting/exposing any credential value, without any mutation path, and without changing execution, reservation, retry, concurrency or auth semantics. Also corrects two pre-existing defects in the older budget surface: reservationsActive was hardcoded false (now reflects real worker/executionState via the existing resolveExecutionState), and reservedToday could report a non-today usage bucket (now bound to enrichmentQuotaService.utcUsageDate).",
+    "reviewer":  "security-reviewer + backend-logic-reviewer + software-architect (independent-gate substitute; Codex FAILED - usage limit, resets 2026-08-21). READY: 0 P0, 6 P1 raw / 4 distinct (ALL CLOSED in revision 2), 16 P2 (all closed), 6 P3 (all closed).",
+    "branch":  "feat/phase-10c4-controlled-live-enrichment",
+    "worktree":  "F:\\AI-Worktrees\\ThreatNeXus\\phase-10c4",
+    "starting_commit":  "0f8183518c485cc3be5ee29b5a2ea5be7a37ca24",
+    "goal":  "Tier-3 design/contract gate ONLY. Define the smallest safe path from the currently implemented enrichment system to controlled live-provider execution proof, without turning it into a production-deployment redesign. NO product code, NO live provider contact, NO production enablement, NO secret values, NO start on 10C-5.",
     "current_work":  "",
     "files_changed":  [
-                          "backend/.env.example",
-                          "backend/src/services/enrichmentOrchestration/enrichmentOrchestrationController.js",
-                          "backend/src/services/enrichmentOrchestration/enrichmentOrchestrationConfig.js",
-                          "backend/src/services/enrichmentOrchestration/enrichmentProviderReadiness.js",
-                          "backend/src/services/enrichmentOrchestration/enrichmentUsageService.js",
-                          "backend/tests/integration/phase10c3UsageService.test.js",
-                          "backend/tests/unit/enrichmentOrchestrationConfig.test.js",
-                          "backend/tests/unit/enrichmentOrchestrationInertness.test.js",
-                          "backend/tests/unit/enrichmentProviderReadiness.test.js",
-                          "backend/tests/unit/enrichmentRunServices.test.js",
-                          "backend/tests/unit/enrichmentUsageService.test.js",
-                          "docs/OPERATIONS_RUNBOOK.md",
-                          "docs/PROVIDER_GUIDE.md",
-                          "docs/ai/PHASE-10C3-PROVIDER-CREDENTIAL-BUDGET-OPERABILITY-CONTRACT.md",
-                          "docs/ai/SECURITY.md",
-                          "frontend/src/pages/Settings.jsx",
-                          "frontend/src/pages/Settings.test.jsx",
-                          "frontend/src/services/api.js",
-                          "frontend/e2e/enrichmentOperability.spec.js",
-                          ".github/workflows/ci.yml"
+                          "docs/ai/PHASE-10C4-CONTROLLED-LIVE-ENRICHMENT-CONTRACT.md",
+                          "docs/ai/DECISIONS.md",
+                          "docs/ai/STATE.yaml",
+                          "docs/ai/HANDOFF.md"
                       ],
     "scope":  {
                   "included":  [
-                                   "backend/src/services/enrichmentOrchestration/enrichmentProviderReadiness.js (new) - the 7-value precedence ladder (NOT_CONFIGURED > EXECUTION_PAUSED > AUTOMATIC_INGESTION_DISABLED > BUDGET_ZERO > BUDGET_EXHAUSTED > DELEGATED_BATCH_REQUIRED > READY), fail-closed (throws on malformed/unknown input rather than resolving)",
-                                   "backend/src/services/enrichmentOrchestration/enrichmentOrchestrationConfig.js - missingProviderCredentialVariables() returns approved env-var NAMES only, never values",
-                                   "backend/src/services/enrichmentOrchestration/enrichmentUsageService.js - getProviderUsage() reads budget/credential facts from the same frozen config/env object that authorizes spend (I-10), binds reservedToday to enrichmentQuotaService.utcUsageDate (I-11), calls the existing exported resolveExecutionState(process.env) unmodified for executionState rather than re-deriving it (the v3 correction), projects a narrow named shape at the module boundary so JWT_SECRET/DATABASE_URL/credential values can never reach serialization",
-                                   "frontend/src/pages/Settings.jsx - new 'Enrichment budgets and readiness' panel, gated on execute:enrichment-batch (same as the existing route-level pattern), read-only (Refresh is the only control), renders the closed vocabulary via a fixed dictionary never raw backend text",
-                                   "GET /api/enrichment/usage - unchanged route/capability, extended response shape only",
-                                   "frontend/e2e/enrichmentOperability.spec.js (new, this session) - 3 deterministic Playwright tests against a real backend + real PostgreSQL stack proving: truthful closed-vocabulary readiness (NOT_CONFIGURED / EXECUTION_PAUSED via a fake non-functional censys credential with the worker off / DELEGATED_BATCH_REQUIRED for nvd), no secret value or CENSYS_PAT-missing hint in the DOM, no mutation control anywhere in the panel; ANALYST is refused before reaching the panel by the pre-existing manage:system route gate on /settings; no overflow at mobile width",
-                                   ".github/workflows/ci.yml - added CENSYS_PAT (fake, e2e-only) + the three remaining empty provider keys to the 'Start the backend' step of the existing Browser suite (Chromium) job, so this session's new spec's preconditions hold in CI too; ENRICHMENT_WORKER_ENABLED is never set in that job (stays false)"
+                                   "Go-live DEFINITION (contract section 4): one operator-authorized MANUAL-lane run, one provider, one subject, budget of exactly one reservation, disposable LOCAL stack, durable ledger evidence, verified return to default-off. Explicitly not a deployment, not a continuously-running worker, not AUTOMATIC-lane execution",
+                                   "Grounded default-off model (section 3): eight independent gates on the Phase-10 path, verified in source at 0f81835",
+                                   "Section 3.2 (NEW in revision 2, the single most important correction): the four legacy synchronous provider routes contact providers OUTSIDE Phase-10 accounting - no reservation, no attempt row, no lookupWithBound - and are armed by the credential alone, independent of ENRICHMENT_WORKER_ENABLED",
+                                   "Provider selection: greynoise ONLY (free Community API, one GET, one header, 404 -> NOT_FOUND first-class, DIRECT lane so it proves the shared direct-lane path). Excluded with reasons: shodan/netlas/censys (paid or credential-complex), abuseipdb (delegated lane, deliberately not first), nvd (structurally DELEGATED_BATCH_REQUIRED)",
+                                   "Safe subject: 1.1.1.1, reusing the ALREADY-APPROVED in-repo Phase-8D smoke subject rather than introducing new third-party exposure",
+                                   "Credential boundary (section 8): nine bindings, incl. the new no-process-environment-dump rule (docker inspect / compose config / printenv / /proc/<pid>/environ / shell history all hold the plaintext key)",
+                                   "Deterministic preflight (section 12.2): 17 assertions, bound to the worker's OWN process environment; P5 (budget strictly === 1) is load-bearing because a BLANK manual budget resolves to null = UNLIMITED",
+                                   "One bounded canary procedure (section 13, C1-C10), evidence set (13.1) and a five-state contact vocabulary (13.2)",
+                                   "Kill switch / rollback (section 11) with BINDING step ordering - evidence must be extracted before the volume is destroyed",
+                                   "14 binding invariants; I-02 and I-04 deliberately PATH-SCOPED, not system-wide",
+                                   "10C-5 sequencing decision (section 17): 10C-4 MAY proceed first; 10C-5 remains required before unattended/production enablement. Section 17.4 lists five residual gaps carried forward",
+                                   "Implementation surface (section 14): Shape A - procedure/evidence only. One new read-only preflight script + its unit tests + docs. NO product code in the execution path, zero schema change",
+                                   "D-P10C4-01 in DECISIONS.md"
                                ],
                   "excluded":  [
-                                   "Any schema, migration, or Prisma change - prisma validate clean, migrate diff --exit-code 0 (contract requires and this session did not re-verify beyond the diff shape, since the diff touches no prisma/ path)",
-                                   "Any auth/capability/role definition change - roles.js, capabilities.js untouched; route guard on GET /api/enrichment/usage unchanged (execute:enrichment-batch)",
-                                   "Any provider execution, worker, or quota-reservation semantics change - enrichmentWorker.js, every *ExecutionService.js, enrichmentQuotaService.js untouched",
-                                   "resolveExecutionState's signature or any of its three pre-existing call sites - verified unmodified in source by the independent review",
-                                   "Any credential persistence, credential-editing UI/API, budget-editing UI/API, or provider enable/disable mutation",
-                                   "10C-4, 10C-5, unifying IOC_ENRICHMENT_PROVIDER with the Phase-10 path, RETRY_WAIT cleanup - all explicitly out of scope per contract v3 section 16"
+                                   "ALL product code - nothing under backend/src or frontend/src was written or modified this session",
+                                   "Any live provider call, any provider contact, any quota spend - none occurred",
+                                   "Any production/staging deployment, cloud infrastructure, hosting migration, CI integration",
+                                   "Any credential value - none was requested, read, printed, or reconstructed",
+                                   "10C-5 (provider response-body size hardening) - explicitly NOT started, recorded as remaining hardening",
+                                   "Retirement or hardening of the legacy synchronous provider routes - disclosed and detected in this contract, but unowned and left to a future ticket",
+                                   "The targeted/delegated (abuseipdb) canary - candidate successor ticket",
+                                   "Credential delivery/egress in a hosted environment, and provider-account-level behaviour - named residual gaps, currently unowned"
                                ]
               },
     "completed":  [
-                      "Reconstructed live state from Git rather than trusting the handoff prompt: worktree F:\\AI-Worktrees\\ThreatNeXus\\phase-10c3 confirmed at HEAD e610732 on feat/phase-10c3-provider-credential-budget-operability, merge-base 3f5c7ea == origin/main (0/0 divergence), branch not previously pushed (no origin ref existed)",
-                      "Found and safely recovered a stale writer lease (dead PowerShell process, PID no longer running) via continue-task.ps1 -RecoverDeadLease rather than editing the lock file directly",
-                      "Read the full v3 contract (READY, section 19) and confirmed via git diff 3f5c7ea..e610732 that the implementation touches exactly the 18 files the contract's implementation surface names - no schema/migration/auth/execution/worker file in the diff",
-                      "Dispatched an independent read-only implementation-fidelity review. Codex (the preferred cross-provider reviewer) was at its usage limit this session (0 available) - noted here rather than silently substituted; fell back to the internal security-reviewer agent per the ticket's own fallback allowance. Reviewer answered all 17 load-bearing questions against actual source at HEAD (not against this ticket's own claims) and cited file:line evidence for each. Verdict: SAFE TO COMMIT, 0 P0/P1",
-                      "Produced deterministic browser evidence myself after a delegated fork stalled: it left an orphaned `vite preview` process (from an earlier, incomplete attempt) still bound to port 4273 and serving a stale build, which silently made every assertion against the new panel fail with no console/network error to explain why. Root-caused this via a targeted debug script (logged canReadOperability + capabilities array directly from the running page, then diffed the served JS bundle hash against the on-disk build) before touching product code",
-                      "Killed the orphaned process, stood up a fresh isolated stack myself: disposable Postgres 16 container on port 15433, backend run natively on port 5100 (CENSYS_PAT=fake-censys-pat-for-e2e-only, ENRICHMENT_WORKER_ENABLED=false, AUTO_ENRICHMENT_ENABLED=false, all other provider keys empty), frontend built for production and served via vite preview on port 4273 (VITE_API_BASE_URL pointed at the isolated backend)",
-                      "Found and fixed two genuine test-authoring bugs in the new (uncommitted) spec, neither a product defect: (1) a Playwright strict-mode violation - the regex locator for 'Automatic/Manual - today / budget / remaining' matched all 6 provider rows instead of one, needed .first(); (2) an incorrect premise that ANALYST could reach /settings and merely not see the panel - /settings is actually gated on manage:system at the ROUTE level (pre-existing, unrelated to this ticket, src/utils/permissions.js), which ANALYST does not hold, so the correct and strictly stronger assertion is the 403 Access Denied page, not an absent panel",
-                      "All 3 new tests green after the fixes: truthful closed-vocabulary readiness ladder (3 representative high-risk states reached without live provider contact or enabling the worker), zero secret/credential-value leakage including the fake CENSYS_PAT itself, structurally zero mutation controls (0 input/textarea/select, only 'Refresh'), ANALYST correctly refused, no horizontal overflow at mobile width, zero console errors/warnings",
-                      "Ran the full existing Chromium e2e suite against the same stack as a regression check: 71/71 passed",
-                      "Cleaned up: removed the temporary debug script and .env.local override, deleted test-results/playwright-report artifacts, stopped the native backend/frontend processes, removed the disposable Postgres container - worktree left with exactly the two ticket-owned changed files",
-                      "Committed frontend/e2e/enrichmentOperability.spec.js and the CI env additions as a single commit (174d665), explicit paths only, no git add -A"
+                      "Resolved the exact live base from Git rather than a stated SHA: origin/main fetched to 0f8183518c485cc3be5ee29b5a2ea5be7a37ca24 (merge of PR #25). Created an isolated worktree at F:\\AI-Worktrees\\ThreatNeXus\\phase-10c4 on a new branch from that exact commit, acquired the writer lease (49c3e199), and verified the protected primary checkout at C:\\Users\\LENOVO\\Desktop\\ThreatNeXus was never written to",
+                      "Grounded the real system in source rather than from the prior contracts' claims: the eight-gate default-off chain, the worker start site (backend/server.js:17-25, read-once-at-boot, sole call site in all of backend/), DIRECT vs DELEGATED provider split, the atomic reservation+ledger transaction, contactedProvider written BEFORE the call, the no-refund conservative accounting, trigger->lane mapping (enrichmentRunService.js:701), force semantics, docker/env passthrough, CI defaults, and the pre-existing Phase-8D live smoke scripts",
+                      "Found the design's decisive fact independently: DEFAULT_MANUAL_DAILY_BUDGET is null and null means UNLIMITED, so a blank GREYNOISE_MANUAL_DAILY_BUDGET is not zero - and every analyst-triggered run is MANUAL lane. This single fact is why the contract's only implementation surface is a preflight that refuses unless the budget resolves to exactly 1",
+                      "Established that the existing npm run smoke:* scripts prove the provider ADAPTER only - they create no job, reserve no quota, write no attempt row, and never touch the worker. That gap is precisely what 10C-4 exists to close",
+                      "Split preflight: eight high-risk surfaces counted, decided ONE ticket / no split - they are eight facets of one ceremony, none independently landable, and no independent risky system is created",
+                      "Wrote contract revision 1 and dispatched the smallest sufficient Tier-3 reviewer set (three non-overlapping read-only reviewers). Attempted Codex as the policy-mandated independent-provider gate for a go-live boundary; it FAILED on usage limit (resets 2026-08-21) and this was recorded honestly rather than silently substituted",
+                      "Reviewers returned 0 P0 and 6 P1 (4 distinct). All three independently found the same most-important defect - the legacy synchronous provider route as an off-ledger contact path. Verified that finding against source myself before accepting it, and likewise verified the other three P1s and the FindingEnrichmentRun naming fact rather than taking reviewer output at face value",
+                      "Closed all 6 P1, 16 P2 and 6 P3 in one consolidated revision-2 fix pass. Two revision-1 claims were outright FALSE and are corrected in place with the error acknowledged rather than quietly deleted: preflight P4 was unsatisfiable (isProviderCredentialConfigured('nvd') returns true unconditionally, so the preflight would have refused every canary), and P12 was called 'the sharpest single assertion' when EXECUTION_PAUSED actually masks every budget state below it, making P12 blind to a blank/unlimited budget"
                   ],
     "validation":  {
                        "passing":  [
-                                       "frontend: npx playwright test e2e/enrichmentOperability.spec.js - 3/3 (this session, real backend + real PostgreSQL, native isolated stack)",
-                                       "frontend: npx playwright test (full suite) - 71/71 against the same stack, zero regressions",
-                                       "frontend: npm run build - clean production build (verified twice, before and after the debug-line revert, identical bundle hash confirming Settings.jsx returned to exactly its committed state)",
-                                       "git diff --check on the commit - clean, no whitespace errors",
-                                       "git status after commit - only the two intended files in the diff"
+                                       "Base resolved from Git and worktree verified at the exact SHA on the correct branch",
+                                       "Primary checkout verified untouched throughout (unchanged dirty-file count, session start to end)",
+                                       "Worktree contains ONLY the four intended docs files; git status clean otherwise",
+                                       "Zero product-code files touched - no backend/src, no frontend/src, no prisma/",
+                                       "Zero live provider contact, zero quota spend, zero secret values read/printed/requested"
                                    ],
                        "failing":  [],
-                       "carried_forward_from_implementation_checkpoint_e610732_not_rerun_this_session":  [
-                                       "backend unit 2487/2487, backend integration 813/813 non-skipped, real-PostgreSQL Phase-10 suites 119/119, frontend unit 202/202, frontend production build clean, changed-file oxlint clean, prisma validate clean, migration diff zero, git diff --check clean, 17/17 contract invariants addressed - per this session's own diff-shape verification (git diff 3f5c7ea..e610732 touches no schema/migration/auth file) and the independent review's source-level re-verification of the same invariants, these were not blindly re-run; final-tip CI is the authoritative broad regression gate for this session's own added commit"
+                       "not_applicable_this_gate":  [
+                                       "Test suites, lint, build, migration checks, evaluators - this is a design/contract gate that changed no code. Contract section 20 defines the three-phase validation plan (deterministic pre-live gates / one controlled live canary / post-live safety proof) that the IMPLEMENTATION boundary must run"
                                    ],
-                       "independent_review":  "PASS - security-reviewer (Codex substitute, Codex at 0/usage-limit this session), all 17 questions answered with file:line citations against actual source at e610732, 0 P0/P1, verdict SAFE TO COMMIT. 2 P2 non-blocking (confirm TEST_DATABASE_URL is set for phase10c3UsageService.test.js's real-Postgres corroboration of the reservedToday fix in CI, or it self-skips; the two Settings.jsx panels - legacy IOC_ENRICHMENT_PROVIDER vs Phase-10 orchestration - can still show apparently-contradictory strings, which is a contract-accepted disclosed residual with a rendered ScopeNote, not an elimination). 1 P3 non-blocking (two contract-named test files were not created as separate files; equivalent coverage was folded into existing files instead - organizational only)",
-                       "browser_evidence":  "PASS - see completed[] for the exact flows proven and the stalled-fork/orphaned-process root cause this session diagnosed and worked around before any product code was touched",
-                       "backend_frontend_scope":  "PASS - git diff 3f5c7ea..e610732 -- backend frontend touches exactly the 18 files the contract names; no prisma/, no roles.js/capabilities.js, no worker/execution service",
-                       "primary_checkout":  "VERIFIED UNTOUCHED - only the worktree at F:\\AI-Worktrees\\ThreatNeXus\\phase-10c3 was ever written to this session",
-                       "ci":  "PASS - https://github.com/haiderchattha99-ali/ThreatNeXus/actions/runs/32027832600, exact SHA 6606b570ac66b953df00201ef58f98fadadc7f6b, status completed / conclusion success. All 6 required jobs succeeded (Secrets and generated artifacts, Prisma schema and migration history, Backend tests, Frontend lint/tests/build, Browser suite (Chromium), Core evaluators); Mutation and concurrency gates (manual) correctly skipped (manual-trigger-only, not required)"
+                       "independent_review":  "READY - 3 internal reviewers COMPLETED (security-reviewer, backend-logic-reviewer, software-architect). Codex FAILED (usage limit, resets 2026-08-21) - recorded as an explicit pending gap, not faked. 0 P0; 6 P1 raw / 4 distinct, all closed in revision 2; 16 P2 and 6 P3 all closed.",
+                       "primary_checkout":  "VERIFIED UNTOUCHED - only F:\\AI-Worktrees\\ThreatNeXus\\phase-10c4 was written to this session"
                    },
     "known_issues":  [
-                         "P2 (non-blocking, recorded by the independent review): confirm the CI job running backend/tests/integration/phase10c3UsageService.test.js sets TEST_DATABASE_URL - the suite self-skips (describeOrSkip) without it, which would silently drop the real-Postgres corroboration of the reservedToday/defect-B fix down to unit-level-only coverage. Not verified this session; worth a one-line CI check before or shortly after merge.",
-                         "P2 (non-blocking, contract-accepted, disclosed): the pre-existing 'Platform configuration' panel (legacy IOC_ENRICHMENT_PROVIDER path) and the new 'Enrichment budgets and readiness' panel can still show apparently-contradictory strings for the same provider name on a deployment where the two authorities diverge. Contract section 3.4/16 explicitly accepts this and requires disclosure rather than unification; the required ScopeNote is rendered and covered by both Settings.test.jsx and the new Playwright spec.",
-                         "P3 (non-blocking, organizational): contract section 13 named two specific new backend test files (phase10c3NoSecretSerialization.test.js, phase10c3UsageRouteAuthorization.test.js) that were not created as separate files at e610732; the independent review confirmed equivalent coverage exists, folded into enrichmentUsageService.test.js and the existing phase10a1RouteAuthorization.test.js instead.",
-                         "Codex was unavailable (usage limit reached, 0 remaining) for the mandatory independent implementation review this session. The internal security-reviewer agent was used instead per the ticket's own stated fallback allowance ('if the current global workflow/provider setup supports it'). If Codex capacity becomes available before merge, a follow-up cross-provider pass would be strictly additive confirmation, not a reopening - no P0/P1 was found by the substitute review.",
-                         "A delegated subagent (fork) assigned to produce the browser evidence stalled after standing up only a Postgres container and never completing the run; it left an orphaned vite preview process bound to port 4273 serving a stale build, which produced misleading false-negative test failures until diagnosed. The work was taken over and completed directly in this session; the orphaned process and container were killed. No artifact from that stalled attempt was committed."
+                         "PENDING GATE (not a defect): Codex, the preferred independent cross-provider reviewer, was unavailable (usage limit, resets 2026-08-21). TEAM-WORKFLOW.md routes go-live to an independent-provider gate, so this gap is material. software-architect carried that scope as the canonical internal fallback - the same substitution 10C-3 made for the same reason. A Codex pass before implementation begins would be strictly additive confirmation, not a reopening: no P0 was found by any reviewer and every P1 is closed.",
+                         "DISCLOSED RESIDUAL (contract section 3.2, unowned): the four legacy synchronous provider routes (POST /api/findings/:id/enrichment/{greynoise,censys,shodan,netlas}) contact providers outside Phase-10 accounting entirely and are armed by the credential alone. This contract discloses and DETECTS them; it does not disable, retire, or harden them. No frontend code calls them, so reaching one requires a deliberate hand-made authenticated request. Their disposition belongs to a future ticket.",
+                         "DISCLOSED RESIDUAL (contract section 17.4, unowned): credential delivery and egress in any non-local environment, and provider-account-level behaviour (source-IP key binding, shared per-account rate accounting), cannot be established by a local-only canary. Prerequisites of any deployment ticket.",
+                         "DISCLOSED RESIDUAL: 10C-5 (provider response-body SIZE bounding) remains open. The worker path bounds the worker's DECISION but does not cancel the read - Promise.race cancels nothing and no signal is threaded through. Required before unattended/production enablement, batch size > 1, or any provider with large/variable responses.",
+                         "DISCLOSED RESIDUAL: closing 10C-4 confers NO live proof on abuseipdb or the targeted/delegated lane - against the clean database the preflight requires, those worker passes execute over zero rows, vacuously.",
+                         "CARRIED FORWARD from 10C-3 (unverified, still worth one line): confirm the CI job running backend/tests/integration/phase10c3UsageService.test.js sets TEST_DATABASE_URL, or the suite self-skips and silently drops real-Postgres coverage while reporting green."
                      ],
-    "next_action":  "PR #25 open: https://github.com/haiderchattha99-ali/ThreatNeXus/pull/25 (feat/phase-10c3-provider-credential-budget-operability -> main) at exact SHA 6606b57, CI green. Awaiting human review/merge decision. Do not merge. Do not start 10C-4.",
-    "checkpoint_ref":  "6606b570ac66b953df00201ef58f98fadadc7f6b",
-    "pr_url":  "https://github.com/haiderchattha99-ali/ThreatNeXus/pull/25",
-    "updated_at":  "2026-08-17T12:15:00.0000000Z",
+    "next_action":  "STOP - design/contract gate complete and frozen at revision 2, verdict READY. Do NOT implement, do NOT contact any provider, do NOT start 10C-5. Awaiting the user's decision to open the IMPLEMENTATION boundary, whose scope is fixed by contract section 14: one new read-only preflight script (backend/src/scripts/enrichmentCanaryPreflight.js implementing P1-P17), one package.json script entry, its unit tests red-checking each assertion, and doc updates to OPERATIONS_RUNBOOK.md and PROVIDER_GUIDE.md. No product code in the execution path, zero schema change. The live canary itself is a LATER, separate, operator-executed boundary.",
+    "checkpoint_ref":  "",
+    "pr_url":  "",
+    "updated_at":  "2026-08-17T00:00:00.0000000Z",
     "next_writer":  "unassigned"
 }

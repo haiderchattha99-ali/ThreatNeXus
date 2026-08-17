@@ -581,3 +581,48 @@ ordinary request path unchanged. Run refresh remains one explicit click: it re-r
 ID and then the canonical Finding summary, preserving the Phase-10C1 terminal vocabulary,
 provenance, and stale markers. No polling, backend, migration, authorization, provider execution,
 quota, credential, or deployment behavior changes in this ticket.
+
+---
+
+## D-P10C4-01 — "Go-live" means one bounded local canary, not a deployment
+
+**Status:** Accepted (contract frozen, not yet implemented). Ticket
+`TNX-P10C4-CONTROLLED-LIVE-ENRICHMENT-GO-LIVE`, Tier 3. Base `0f81835` (merged PR #25). Contract:
+`docs/ai/PHASE-10C4-CONTROLLED-LIVE-ENRICHMENT-CONTRACT.md`.
+
+**Go-live for ThreatNeXus is defined narrowly and bindingly:** one operator-authorized, MANUAL-lane
+enrichment run, one approved provider, one approved benign subject, a budget of exactly one
+reservation, executed by a real worker in a **disposable local stack**, with durable ledger evidence
+and a verified return to default-off. It is explicitly **not** a production or staging deployment, a
+continuously-running worker, or any AUTOMATIC-lane execution. "Provider configured" (10C-3) and
+"production enabled" (never) both remain distinct from it.
+
+**GreyNoise is the sole live-proof provider.** Free Community API, one `GET`, one header, and
+`404 → NOT_FOUND` as a first-class answer — the cheapest, least ambiguous way to prove the shared
+**direct-lane** path. `shodan`/`netlas`/`censys` are excluded as paid or credential-complex with no
+extra path coverage; `abuseipdb` is excluded because it is the *delegated* lane and carries strictly
+more machinery, so proving the simpler path first is the correct ordering; `nvd` is structurally
+`DELEGATED_BATCH_REQUIRED` and can never be a direct canary. **Closing 10C-4 confers no live proof
+on `abuseipdb` or on the delegated lane.**
+
+**10C-5 (bounded provider response-body reads) does NOT block 10C-4, and 10C-4 does not close it.**
+The worker path already races the whole of `lookup()` against `ENRICHMENT_LOOKUP_MAX_MS`, so the
+worker's *decision* is bounded — though the read itself is not cancelled, since `Promise.race`
+cancels nothing and no signal is threaded through. A single small-response GET in a disposable local
+stack does not materially expose the residual. 10C-5 remains **required before any unattended or
+production-facing enablement**, before batch size > 1, and before any provider with large or
+variable responses.
+
+**The decision that changed most under review:** the four legacy synchronous provider routes
+(`POST /api/findings/:id/enrichment/{greynoise,censys,shodan,netlas}`) contact providers **outside
+Phase-10 accounting entirely** — no quota reservation, no attempt row, no `lookupWithBound` — and are
+armed by the credential alone, independent of `ENRICHMENT_WORKER_ENABLED`. Two consequences are now
+binding: the invariant "credential presence alone cannot cause provider contact" is **path-scoped to
+the Phase-10 orchestration path, not system-wide**, and a `ProviderLookupAttempt` count is **not** a
+sufficient no-second-contact proof. Detection is instead by `GreyNoiseEnrichment` row count (both
+paths write it) plus the `greynoise.lookup.%` audit signature (legacy path only).
+
+**Consequence.** Any future ticket asserting a system-wide "no unintended provider contact" property
+must either retire/harden the legacy synchronous routes or restate the property as path-scoped.
+Credential delivery and egress in a hosted environment, and provider-account-level behaviour, remain
+unproven by any local canary and are prerequisites of any deployment ticket — currently unowned.
