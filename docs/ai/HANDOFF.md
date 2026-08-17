@@ -74,7 +74,13 @@ this session performed only the remaining Tier-3 closure work.
 
 ## Next action
 
-Push `feat/phase-10c3-provider-credential-budget-operability` at `174d665`,
-obtain CI green at that exact SHA (the Browser suite (Chromium) job now
-carries this session's env additions — check it specifically), then open the
-PR into `main`. Do not merge. Do not start 10C-4.
+**Done this session:** pushed at `174d665`, added a final canonical-state
+commit `6606b57`, CI green at that exact SHA
+([run 32027832600](https://github.com/haiderchattha99-ali/ThreatNeXus/actions/runs/32027832600),
+all 6 required jobs succeeded, manual mutation/concurrency gate correctly
+skipped), opened
+[PR #25](https://github.com/haiderchattha99-ali/ThreatNeXus/pull/25) into
+`main`. Writer lease released.
+
+**Remaining:** human review and merge decision. Do not merge. Do not start
+10C-4.

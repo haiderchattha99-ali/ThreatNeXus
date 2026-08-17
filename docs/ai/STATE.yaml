@@ -2,7 +2,7 @@
     "schema_version":  1,
     "ticket":  "TNX-P10C3-PROVIDER-CREDENTIAL-BUDGET-OPERABILITY",
     "title":  "Read-only provider credential/budget operability surface (contract v3)",
-    "status":  "ready_for_pr",
+    "status":  "pr_open",
     "owner":  "claude",
     "reviewer":  "security-reviewer (internal fallback for Codex, which was at its usage limit this session; SAFE TO COMMIT, 0 P0/P1, 2 P2 non-blocking, 1 P3 non-blocking - see known_issues)",
     "branch":  "feat/phase-10c3-provider-credential-budget-operability",
@@ -80,7 +80,7 @@
                        "browser_evidence":  "PASS - see completed[] for the exact flows proven and the stalled-fork/orphaned-process root cause this session diagnosed and worked around before any product code was touched",
                        "backend_frontend_scope":  "PASS - git diff 3f5c7ea..e610732 -- backend frontend touches exactly the 18 files the contract names; no prisma/, no roles.js/capabilities.js, no worker/execution service",
                        "primary_checkout":  "VERIFIED UNTOUCHED - only the worktree at F:\\AI-Worktrees\\ThreatNeXus\\phase-10c3 was ever written to this session",
-                       "ci":  "pending - push and CI run not yet executed as of this STATE.yaml write; see next_action"
+                       "ci":  "PASS - https://github.com/haiderchattha99-ali/ThreatNeXus/actions/runs/32027832600, exact SHA 6606b570ac66b953df00201ef58f98fadadc7f6b, status completed / conclusion success. All 6 required jobs succeeded (Secrets and generated artifacts, Prisma schema and migration history, Backend tests, Frontend lint/tests/build, Browser suite (Chromium), Core evaluators); Mutation and concurrency gates (manual) correctly skipped (manual-trigger-only, not required)"
                    },
     "known_issues":  [
                          "P2 (non-blocking, recorded by the independent review): confirm the CI job running backend/tests/integration/phase10c3UsageService.test.js sets TEST_DATABASE_URL - the suite self-skips (describeOrSkip) without it, which would silently drop the real-Postgres corroboration of the reservedToday/defect-B fix down to unit-level-only coverage. Not verified this session; worth a one-line CI check before or shortly after merge.",
@@ -89,8 +89,9 @@
                          "Codex was unavailable (usage limit reached, 0 remaining) for the mandatory independent implementation review this session. The internal security-reviewer agent was used instead per the ticket's own stated fallback allowance ('if the current global workflow/provider setup supports it'). If Codex capacity becomes available before merge, a follow-up cross-provider pass would be strictly additive confirmation, not a reopening - no P0/P1 was found by the substitute review.",
                          "A delegated subagent (fork) assigned to produce the browser evidence stalled after standing up only a Postgres container and never completing the run; it left an orphaned vite preview process bound to port 4273 serving a stale build, which produced misleading false-negative test failures until diagnosed. The work was taken over and completed directly in this session; the orphaned process and container were killed. No artifact from that stalled attempt was committed."
                      ],
-    "next_action":  "Push feat/phase-10c3-provider-credential-budget-operability at 174d665, obtain CI green at that exact SHA (confirm the Browser suite (Chromium) job in particular, since it now carries this session's env additions), then open the PR into main per instruction. Do not merge. Do not start 10C-4.",
-    "checkpoint_ref":  "174d665",
-    "updated_at":  "2026-08-17T12:10:00.0000000Z",
+    "next_action":  "PR #25 open: https://github.com/haiderchattha99-ali/ThreatNeXus/pull/25 (feat/phase-10c3-provider-credential-budget-operability -> main) at exact SHA 6606b57, CI green. Awaiting human review/merge decision. Do not merge. Do not start 10C-4.",
+    "checkpoint_ref":  "6606b570ac66b953df00201ef58f98fadadc7f6b",
+    "pr_url":  "https://github.com/haiderchattha99-ali/ThreatNeXus/pull/25",
+    "updated_at":  "2026-08-17T12:15:00.0000000Z",
     "next_writer":  "unassigned"
 }
