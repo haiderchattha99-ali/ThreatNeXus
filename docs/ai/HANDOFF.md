@@ -5,17 +5,44 @@
 - Worktree: `F:\AI-Worktrees\ThreatNeXus\phase-10c4`
 - Base: `origin/main` @ `0f81835` (merge of PR #25, TNX-P10C3)
 - Updated: 2026-08-17
-- Status: **implementation_checkpoint** — Tier 3, contract v2's read-only preflight harness written and green
+- Status: **pre_live_ready** — Tier 3. Implementation checkpoint `3bb2004` independently re-verified, its
+  own implementation-delta review is closed (0 P0/P1), and a real disposable-stack dry run proved the
+  environment fails closed for the correct reason. **READY FOR HUMAN CANARY AUTHORIZATION.**
 
 **The design/contract gate below (design_frozen, verdict READY) is unchanged and still authoritative.
-This update adds the IMPLEMENTATION checkpoint on top of it: the P1-P17 preflight script, its unit
-tests, one package.json entry, and the two operator docs contract §14 specified. No provider was
-contacted. No secret was read, printed, or requested. No worker was enabled. 10C-5 was not started.
-The live canary (§13, C1-C10) was NOT executed — it remains a later, separate, operator-executed
-boundary.**
+The IMPLEMENTATION checkpoint (`3bb2004`: the P1-P17 preflight script, its unit tests, one
+package.json entry, and the two operator docs contract §14 specified) is unchanged from the prior
+update. This update adds the PRE-LIVE gate on top of both: one bounded read-only implementation-delta
+review, and a real (non-live) dry run of the preflight against a genuinely disposable local stack.
+No provider was contacted. No secret was read, printed, or requested. No worker was enabled. 10C-5 was
+not started. The live canary (§13, C1-C10) was NOT executed — it remains a later, separate,
+human-operator-authorized boundary.**
 
 - Contract: `docs/ai/PHASE-10C4-CONTROLLED-LIVE-ENRICHMENT-CONTRACT.md` (**revision 2**, frozen)
 - Decision: `D-P10C4-01`
+
+## Pre-live readiness (this update)
+
+**Implementation-delta review — CLEAR.** One `security-reviewer` pass (not the full 3-reviewer
+contract panel — TEAM-WORKFLOW.md's review contract calls for one specialist matched to the changed
+surface at this boundary) read `c92cf86..3bb2004` in full against the 12 binding safety questions
+(provider/network contact, state mutation, secret leakage, budget correctness, NVD exemption,
+worker-environment binding, legacy-route honesty). **Verdict: 0 P0, 0 P1.** Two non-blocking P2 notes
+are recorded in `STATE.yaml`'s `known_issues`.
+
+**Dry run — fails closed for the right reason.** Stood up an isolated, disposable Docker Compose stack
+(`tnx-p10c4-canary` project, Postgres on host port 15432, database `threatnexus_canary`), applied the
+real migrations, seeded exactly one `Finding` (`1.1.1.1`), and ran the real `npm run preflight:canary`
+**inside the backend container** with every contract-approved bound set (`GREYNOISE_MANUAL_DAILY_BUDGET=1`,
+every other budget `0`, batch size `1`, worker and AUTOMATIC lane off) **except** `GREYNOISE_API_KEY`,
+left deliberately unset. Result: **15/17 PASS**, only **P3** (credential not configured) and **P12**
+(readiness resolves to `NOT_CONFIGURED`, not even reaching `EXECUTION_PAUSED`) fail — exactly the
+expected, closed reason. A direct post-run query confirmed zero rows in `ProviderLookupJob`,
+`ProviderLookupAttempt`, `ProviderDailyUsage`, `GreyNoiseEnrichment`, and `AuditLog`. The stack was
+torn down with `docker compose down -v` and confirmed removed.
+
+**No credential was requested, read, printed, or committed at any point.** The Compose overlay used
+for the dry run lives only in the session scratchpad, never in the repository.
 
 ## What this gate decided
 
