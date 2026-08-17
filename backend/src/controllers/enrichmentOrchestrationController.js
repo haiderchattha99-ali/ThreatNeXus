@@ -205,9 +205,16 @@ exports.getFindingEnrichmentSummary = async (req, res) => {
   }
 };
 
+// GET /api/enrichment/usage
+//
+// A pure read: no provider is contacted, no ProviderDailyUsage row is
+// created or mutated. `now` is obtained ONCE here so the whole response —
+// the reservedToday counts and the usageDate that names them — is derived
+// from the same instant. The reported day is never taken from the request
+// (docs/ai/PHASE-10C3-PROVIDER-CREDENTIAL-BUDGET-OPERABILITY-CONTRACT.md §10).
 exports.getEnrichmentUsage = async (req, res) => {
   try {
-    const usage = await getProviderUsage({ client: prisma });
+    const usage = await getProviderUsage({ client: prisma, now: new Date() });
     return res.status(200).json({ success: true, data: usage });
   } catch (error) {
     return serverError(res, "Failed to load enrichment provider usage", error);

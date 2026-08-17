@@ -228,6 +228,35 @@ The ADMIN `GET /api/enrichment/usage` endpoint reports the same data with explic
 coverage is `PARTIAL`, because the synchronous expert endpoints and the two ADMIN batches are not
 Phase-10 reservations and are not counted. No total provider-call figure is fabricated.
 
+### Which providers are usable right now? (Phase 10C-3)
+
+Read-only, no live call, no schema change. Sign in as ADMIN and either open Settings →
+"Enrichment budgets and readiness", or:
+
+```bash
+curl -s -H "Authorization: Bearer $ADMIN_TOKEN" http://localhost:5000/api/enrichment/usage \
+  | jq '.data.providers[] | {provider, automatic: .automatic.readiness, manual: .manual.readiness, missing: .missingConfiguration}'
+```
+
+Each provider reports one of seven closed values (`READY`, `NOT_CONFIGURED`, `EXECUTION_PAUSED`,
+`AUTOMATIC_INGESTION_DISABLED`, `BUDGET_ZERO`, `BUDGET_EXHAUSTED`, `DELEGATED_BATCH_REQUIRED`) per
+lane — see `docs/PROVIDER_GUIDE.md` → "Phase 10C-3" for what each means and which environment
+variable to set. **Every fix requires a restart** — nothing on this endpoint or screen can change a
+credential, a budget, or a switch; they are all read from the environment at process start
+(`backend/src/config/env.js`) and frozen for the life of the process. Set the variable named in
+`missingConfiguration` (or raise the budget, or flip the switch), then:
+
+```bash
+docker compose restart backend
+```
+
+If two adjacent panels disagree about AbuseIPDB — the dashboard's "IP reputation" row says
+"Mock provider" while this screen says `abuseipdb — READY` or `NOT_CONFIGURED` — that is not a bug.
+They answer different questions: the dashboard panel reflects `IOC_ENRICHMENT_PROVIDER` (the legacy
+IOC path's own selector, `mock` by default), and this screen reflects `ABUSEIPDB_API_KEY`'s presence
+for the Phase-10 path. See `docs/PROVIDER_GUIDE.md`'s "legacy `IOC_ENRICHMENT_PROVIDER` selector"
+note.
+
 ### A job is stuck and I want to know why
 
 ```sql

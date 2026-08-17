@@ -287,3 +287,65 @@ successful lookup, a failed lookup, or "no record found".
 call that was reserved but never sent; it can never **under**-count a call that was sent. For a paid
 third-party budget that is the only safe direction, and `ProviderLookupAttempt.contactedProvider`
 keeps the ledger honest about which case a row is.
+
+---
+
+## Phase 10C-3 — provider operability (read-only)
+
+Phase 10A-2 made execution real, but nothing joined "is a provider configured" (Phase 6, the
+dashboard's `sections.providers`) with "will it actually run" (Phase 10A-2's own controls above) into
+one truthful answer. Phase 10C-3 adds exactly that read, at `GET /api/enrichment/usage`
+(`execute:enrichment-batch`, ADMIN only) and Settings → "Enrichment budgets and readiness". It adds
+**no** new configuration authority: every credential, budget and switch stays exactly where §"Three
+independent controls" above says it lives, and this page never mutates any of it.
+
+### Reading a provider's variable against its readiness
+
+| Provider | Credential variable | Readiness when absent |
+|---|---|---|
+| `abuseipdb` | `ABUSEIPDB_API_KEY` | `NOT_CONFIGURED` |
+| `censys` | `CENSYS_PAT` | `NOT_CONFIGURED` |
+| `greynoise` | `GREYNOISE_API_KEY` | `NOT_CONFIGURED` |
+| `shodan` | `SHODAN_API_KEY` | `NOT_CONFIGURED` |
+| `netlas` | `NETLAS_API_KEY` | `NOT_CONFIGURED` |
+| `nvd` | — (keyless) | never `NOT_CONFIGURED` — always `DELEGATED_BATCH_REQUIRED` (see below) |
+
+The **value** of a credential is never read anywhere on this surface — only its presence. When a
+credential is absent, the response names the variable above (already public in `.env.example`), never
+the value.
+
+### The readiness ladder
+
+One of seven closed values, per `(provider, lane)`, evaluated in this order — the first match wins:
+
+1. **`DELEGATED_BATCH_REQUIRED`** — `nvd` only, always, on both lanes. Structural: NVD is never
+   worker-eligible (see the table under "Phase 10A-2" above); execution is the existing ADMIN
+   vulnerability batch, not this surface.
+2. **`NOT_CONFIGURED`** — the credential above is absent.
+3. **`EXECUTION_PAUSED`** — `ENRICHMENT_WORKER_ENABLED=false`. Blocks both lanes: nothing will pick
+   recorded work up at all.
+4. **`AUTOMATIC_INGESTION_DISABLED`** — AUTOMATIC lane only, `AUTO_ENRICHMENT_ENABLED=false`. No
+   automatic job can ever be recorded, so this must never be reported as `READY`.
+5. **`BUDGET_ZERO`** — this lane's configured daily budget is `0`; refused at routing time, no job
+   is ever created (matches §"Budgets and lanes" above exactly).
+6. **`BUDGET_EXHAUSTED`** — a positive budget, but today's reservations already meet or exceed it.
+7. **`READY`** — every deployment-level control passes. Complete by construction: a caller never has
+   to AND it with the worker switch or the automatic-ingestion switch.
+
+### What is never on this surface
+
+No credential value, no prefix or fragment of one, no currency amount (budgets are request counts,
+never money — see §"Budgets and lanes"), no free-text provider error, and no control to change a
+credential, a budget, or a switch. See `docs/ai/SECURITY.md` and
+`docs/ai/PHASE-10C3-PROVIDER-CREDENTIAL-BUDGET-OPERABILITY-CONTRACT.md` for the full secret boundary.
+
+### The legacy `IOC_ENRICHMENT_PROVIDER` selector is a different question
+
+The existing dashboard panel's `ioc-reputation` row reports `MOCK_PROVIDER` /
+`CONFIGURED` / `NOT_CONFIGURED` from **`IOC_ENRICHMENT_PROVIDER`** (`mock` by default) — the legacy
+IOC path's own provider selector, independent of `ABUSEIPDB_API_KEY`'s presence. Phase 10's
+`abuseipdb` readiness is computed from the credential alone and never reads that selector. A
+deployment can therefore legitimately show "Mock provider" on the dashboard panel and
+`abuseipdb — READY` (or `NOT_CONFIGURED`) on the operability panel at the same time — two true facts
+about two different execution paths, not a contradiction. The operability screen states this
+explicitly rather than leaving a reader to reconcile it.

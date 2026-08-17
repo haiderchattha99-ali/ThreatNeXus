@@ -346,27 +346,68 @@ describe("delegate reconciliation mapping", () => {
   });
 });
 
-describe("usage API — truthful partial coverage (Codex amendment 5)", () => {
-  // Phase 10A-1 writes no reservation rows, so the stub returns none.
+describe("usage API — truthful partial coverage, now current on Phase 10C-3", () => {
+  // Phase 10C-3 — the `env` raw-environment-map seam is retired (it fed a
+  // second, live `resolveOrchestrationConfig(process.env)` parse that could
+  // disagree with the frozen object the worker actually spends from). The
+  // seam is now `appConfig`, shaped exactly like config/env.js's export, and
+  // `now`, so a usageDate is deterministic rather than wall-clock-dependent.
+  const FIXED_NOW = new Date("2026-08-17T12:00:00.000Z");
+  const ZERO_BUDGETS = Object.freeze({
+    abuseipdb: 0,
+    censys: 0,
+    greynoise: 0,
+    shodan: 0,
+    netlas: 0,
+    nvd: 0,
+  });
+  const UNLIMITED_BUDGETS = Object.freeze({
+    abuseipdb: null,
+    censys: null,
+    greynoise: null,
+    shodan: null,
+    netlas: null,
+    nvd: null,
+  });
+  // No credential set for any provider — matches every real ThreatNeXus
+  // environment. nvd is still "configured" (keyless) via
+  // isProviderCredentialConfigured's own special case.
+  const NO_CREDENTIALS_CONFIG = Object.freeze({
+    ENRICHMENT_WORKER_ENABLED: false,
+    AUTO_ENRICHMENT_ENABLED: false,
+    ENRICHMENT_AUTOMATIC_DAILY_BUDGETS: ZERO_BUDGETS,
+    ENRICHMENT_MANUAL_DAILY_BUDGETS: UNLIMITED_BUDGETS,
+    ABUSEIPDB_API_KEY: "",
+    CENSYS_PAT: "",
+    GREYNOISE_API_KEY: "",
+    SHODAN_API_KEY: "",
+    NETLAS_API_KEY: "",
+  });
+
+  // Phase 10A-1/10C-3 write no reservation rows for an empty stub — the stub
+  // returns none regardless of the usageDate it was queried with.
   const stubClient = { providerDailyUsage: { findMany: async () => [] } };
 
-  it("labels its scope, coverage and inactive reservations explicitly", async () => {
-    const usage = await getProviderUsage({ client: stubClient, env: {} });
+  it("labels its scope and coverage, and reports reservationsActive from the worker switch", async () => {
+    const usage = await getProviderUsage({ client: stubClient, appConfig: NO_CREDENTIALS_CONFIG, now: FIXED_NOW });
     expect(usage.accountingScope).toBe(ACCOUNTING_SCOPES.PHASE_10_RESERVATIONS);
     expect(usage.coverage).toBe(COVERAGE.PARTIAL);
+    // Fixture has the worker off — the same truthful answer a hardcoded
+    // `false` would also give. The OTHER direction (worker on -> true) is
+    // proven in enrichmentUsageService.test.js, which is where defect A's
+    // fix is red-checked.
     expect(usage.reservationsActive).toBe(false);
   });
 
-  it("names the paths it does NOT account for", async () => {
-    const usage = await getProviderUsage({ client: stubClient, env: {} });
-    expect(usage.excludedPaths).toEqual(EXCLUDED_PATHS);
-    expect(usage.excludedPaths).toContain("LEGACY_ADMIN_IOC_BATCH");
-    expect(usage.excludedPaths).toContain("ADMIN_VULNERABILITY_BATCH");
-    expect(usage.excludedPaths).toContain("PRE_10A2_SYNCHRONOUS_DIRECT_PROVIDER_ROUTES");
+  it("names the paths it does NOT account for, current on the routes that are still mounted", () => {
+    expect(EXCLUDED_PATHS).toContain("LEGACY_ADMIN_IOC_BATCH");
+    expect(EXCLUDED_PATHS).toContain("ADMIN_VULNERABILITY_BATCH");
+    expect(EXCLUDED_PATHS).toContain("SYNCHRONOUS_DIRECT_PROVIDER_ROUTES");
+    expect(EXCLUDED_PATHS).not.toContain("PRE_10A2_SYNCHRONOUS_DIRECT_PROVIDER_ROUTES");
   });
 
   it("fabricates no total provider-call count", async () => {
-    const usage = await getProviderUsage({ client: stubClient, env: {} });
+    const usage = await getProviderUsage({ client: stubClient, appConfig: NO_CREDENTIALS_CONFIG, now: FIXED_NOW });
     const keys = Object.keys(usage);
     // Nothing that could be misread as "all provider calls, ever".
     expect(keys).not.toContain("totalProviderCalls");
@@ -375,7 +416,7 @@ describe("usage API — truthful partial coverage (Codex amendment 5)", () => {
   });
 
   it("reports configured budgets, with unlimited as null rather than a number", async () => {
-    const usage = await getProviderUsage({ client: stubClient, env: {} });
+    const usage = await getProviderUsage({ client: stubClient, appConfig: NO_CREDENTIALS_CONFIG, now: FIXED_NOW });
     const censys = usage.providers.find((p) => p.provider === "censys");
     expect(censys.automatic.dailyBudget).toBe(0);
     expect(censys.manual.dailyBudget).toBeNull();
@@ -383,7 +424,7 @@ describe("usage API — truthful partial coverage (Codex amendment 5)", () => {
   });
 
   it("covers all six providers", async () => {
-    const usage = await getProviderUsage({ client: stubClient, env: {} });
+    const usage = await getProviderUsage({ client: stubClient, appConfig: NO_CREDENTIALS_CONFIG, now: FIXED_NOW });
     expect(usage.providers.map((p) => p.provider).sort()).toEqual([
       "abuseipdb",
       "censys",
@@ -392,5 +433,27 @@ describe("usage API — truthful partial coverage (Codex amendment 5)", () => {
       "nvd",
       "shodan",
     ]);
+  });
+
+  it("names the missing credential variable for an unconfigured provider, and none for nvd", async () => {
+    const usage = await getProviderUsage({ client: stubClient, appConfig: NO_CREDENTIALS_CONFIG, now: FIXED_NOW });
+    const censys = usage.providers.find((p) => p.provider === "censys");
+    const nvd = usage.providers.find((p) => p.provider === "nvd");
+    expect(censys.credentialConfigured).toBe(false);
+    expect(censys.missingConfiguration).toEqual(["CENSYS_PAT"]);
+    expect(nvd.credentialConfigured).toBe(true);
+    expect(nvd.missingConfiguration).toEqual([]);
+  });
+
+  it("derives nvd as DELEGATED_BATCH_REQUIRED regardless of every other input", async () => {
+    const usage = await getProviderUsage({ client: stubClient, appConfig: NO_CREDENTIALS_CONFIG, now: FIXED_NOW });
+    const nvd = usage.providers.find((p) => p.provider === "nvd");
+    expect(nvd.automatic.readiness).toBe("DELEGATED_BATCH_REQUIRED");
+    expect(nvd.manual.readiness).toBe("DELEGATED_BATCH_REQUIRED");
+  });
+
+  it("reports today's UTC usage date, formatted YYYY-MM-DD", async () => {
+    const usage = await getProviderUsage({ client: stubClient, appConfig: NO_CREDENTIALS_CONFIG, now: FIXED_NOW });
+    expect(usage.usageDate).toBe("2026-08-17");
   });
 });

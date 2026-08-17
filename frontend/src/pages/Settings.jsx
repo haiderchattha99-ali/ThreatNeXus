@@ -46,7 +46,8 @@ import { FiPlay, FiRefreshCw } from 'react-icons/fi'
 
 import { useAuth } from '../hooks/useAuth'
 import { useMotionPreference } from '../hooks/useReducedMotion'
-import { dashboardService } from '../services/api'
+import { dashboardService, enrichmentUsageService } from '../services/api'
+import { CAPABILITIES } from '../constants/capabilities'
 import { OpeningMotif } from '../components/OpeningMotif'
 import {
   PageHeader,
@@ -74,6 +75,22 @@ const CONFIG_STATE = Object.freeze({
   NO_KEY_REQUIRED: { label: 'No key required', tone: 'info', icon: 'dot' },
   ENABLED: { label: 'Enabled', tone: 'warning', icon: 'warning' },
   DISABLED: { label: 'Disabled', tone: 'neutral', icon: 'power' },
+})
+
+// Phase 10C-3 — the closed provider-readiness vocabulary
+// (docs/ai/PHASE-10C3-PROVIDER-CREDENTIAL-BUDGET-OPERABILITY-CONTRACT.md §8).
+// Every value is a fact about DEPLOYMENT configuration, derived server-side —
+// never a health check, never something this screen can change. A value
+// outside this dictionary renders as its own raw string via StatusBadge's
+// fallback, never as invented prose.
+const READINESS_STATE = Object.freeze({
+  READY: { label: 'Ready', tone: 'success', icon: 'check' },
+  NOT_CONFIGURED: { label: 'Not configured', tone: 'warning', icon: 'warning' },
+  EXECUTION_PAUSED: { label: 'Execution paused', tone: 'neutral', icon: 'power' },
+  AUTOMATIC_INGESTION_DISABLED: { label: 'Automatic ingestion disabled', tone: 'neutral', icon: 'power' },
+  BUDGET_ZERO: { label: 'Budget zero', tone: 'neutral', icon: 'minus' },
+  BUDGET_EXHAUSTED: { label: 'Budget exhausted', tone: 'warning', icon: 'clock' },
+  DELEGATED_BATCH_REQUIRED: { label: 'Delegated to batch', tone: 'info', icon: 'repeat' },
 })
 
 function ReplayIntro() {
@@ -156,6 +173,30 @@ const Settings = () => {
   const providerRows = providers
     ? [providers.ioc, ...(providers.vulnerability || []), ...(providers.exposure || []), ...(providers.reputation || [])].filter(Boolean)
     : []
+
+  // Phase 10C-3 — deployment-level operability. A SEPARATE load from the
+  // dashboard-overview `providers` panel above: different capability
+  // (execute:enrichment-batch, ADMIN only), different endpoint, different
+  // question (can this provider actually run, right now, and why not).
+  const canReadOperability = (capabilities || []).includes(CAPABILITIES.EXECUTE_ENRICHMENT_BATCH)
+  const [usage, setUsage] = React.useState(null)
+  const [usageLoading, setUsageLoading] = React.useState(canReadOperability)
+  const [usageError, setUsageError] = React.useState(false)
+
+  const loadUsage = React.useCallback(() => {
+    if (!canReadOperability) return
+    setUsageLoading(true)
+    setUsageError(false)
+    enrichmentUsageService
+      .getUsage()
+      .then((res) => setUsage(res.data?.data || null))
+      .catch(() => setUsageError(true))
+      .finally(() => setUsageLoading(false))
+  }, [canReadOperability])
+
+  React.useEffect(() => {
+    loadUsage()
+  }, [loadUsage])
 
   return (
     <>
@@ -322,6 +363,112 @@ const Settings = () => {
           </>
         )}
       </Panel>
+
+      {canReadOperability && (
+        <Panel
+          title="Enrichment budgets and readiness"
+          description="Deployment-level operability for the Phase-10 enrichment orchestration path. Configuration is administered through the deployment environment — this screen only reads it."
+          actions={
+            <Button size="small" variant="outlined" startIcon={<FiRefreshCw />} onClick={loadUsage}>
+              Refresh
+            </Button>
+          }
+          footer={
+            usage ? (
+              <Provenance
+                source="GET /api/enrichment/usage"
+                asOf={usage.usageDate}
+                note={usage.note}
+              />
+            ) : null
+          }
+        >
+          {usageLoading && !usage ? (
+            <LoadingState label="Reading provider operability" />
+          ) : usageError && !usage ? (
+            <ErrorState onRetry={loadUsage}>
+              Provider operability could not be read. Nothing is assumed in its place.
+            </ErrorState>
+          ) : (
+            <>
+              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1.5, mb: 2 }}>
+                <StatusBadge
+                  dictionary={{
+                    ACTIVE: { label: 'Worker active', tone: 'success', icon: 'check' },
+                    PAUSED_WORKER_DISABLED: { label: 'Worker paused', tone: 'neutral', icon: 'power' },
+                  }}
+                  value={usage?.executionState}
+                />
+                <StatusBadge
+                  dictionary={{
+                    true: { label: 'Automatic ingestion on', tone: 'success', icon: 'check' },
+                    false: { label: 'Automatic ingestion off', tone: 'neutral', icon: 'power' },
+                  }}
+                  value={usage ? String(usage.automaticIngestionEnabled) : undefined}
+                />
+              </Box>
+
+              {(usage?.providers || []).map((provider, index) => (
+                <Box
+                  key={provider.provider}
+                  sx={{
+                    py: 1.4,
+                    borderTop: index ? `1px solid ${color.border}` : 0,
+                  }}
+                >
+                  <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1.5, flexWrap: 'wrap' }}>
+                    <Box sx={{ ...type.small, color: color.text, fontFamily: font.mono }}>{provider.provider}</Box>
+                    <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
+                      <StatusBadge dictionary={READINESS_STATE} value={provider.automatic?.readiness} size="small" />
+                      <StatusBadge dictionary={READINESS_STATE} value={provider.manual?.readiness} size="small" />
+                    </Box>
+                  </Box>
+
+                  {provider.missingConfiguration?.length > 0 && (
+                    <Box sx={{ ...type.caption, color: color.textMuted, mt: 0.5, fontFamily: font.mono }}>
+                      Missing: {provider.missingConfiguration.join(', ')}
+                    </Box>
+                  )}
+
+                  <FieldGrid columns={{ xs: '1fr', sm: '1fr 1fr' }} gap={1.5} sx={{ mt: 1 }}>
+                    <Field label="Automatic — today / budget / remaining" mono>
+                      {provider.automatic?.reservedToday ?? 0} / {provider.automatic?.dailyBudget ?? 'unlimited'} /{' '}
+                      {provider.automatic?.remaining ?? 'unlimited'}
+                    </Field>
+                    <Field label="Manual — today / budget / remaining" mono>
+                      {provider.manual?.reservedToday ?? 0} / {provider.manual?.dailyBudget ?? 'unlimited'} /{' '}
+                      {provider.manual?.remaining ?? 'unlimited'}
+                    </Field>
+                  </FieldGrid>
+                </Box>
+              ))}
+
+              <Box
+                sx={{
+                  mt: 3,
+                  p: 1.5,
+                  backgroundColor: color.surfaceSunken,
+                  borderRadius: `${radius.sm}px`,
+                  ...type.caption,
+                  color: color.textMuted,
+                }}
+              >
+                Credentials and budgets are environment/deployment configuration. They are never
+                editable through ThreatNeXus, and a change here would require nothing — because
+                there is nothing here to change. Setting a missing variable or a budget requires
+                editing the deployment environment and restarting the application.
+              </Box>
+
+              <ScopeNote sx={{ mt: 1.5 }}>
+                This describes the Phase-10 orchestration path only. The &ldquo;IP reputation&rdquo;
+                row in Platform configuration above can independently read &ldquo;Mock
+                provider&rdquo; — that is the separate, legacy IOC_ENRICHMENT_PROVIDER selector, not
+                this provider&apos;s readiness.
+              </ScopeNote>
+            </>
+          )}
+        </Panel>
+      )}
 
       <ScopeNote sx={{ mt: 2 }} />
     </>

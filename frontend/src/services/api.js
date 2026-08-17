@@ -113,6 +113,14 @@ export const findingEnrichmentOrchestrationService = {
   getRun: (findingId, runId) => apiClient.get(`/findings/${findingId}/enrichment/runs/${runId}`),
 }
 
+// Phase 10C-3 — deployment-level provider operability. A pure read, gated on
+// execute:enrichment-batch (ADMIN only): budgets, today's reservations, and
+// closed-vocabulary readiness per provider. Never a credential value — see
+// docs/ai/PHASE-10C3-PROVIDER-CREDENTIAL-BUDGET-OPERABILITY-CONTRACT.md.
+export const enrichmentUsageService = {
+  getUsage: () => apiClient.get('/enrichment/usage'),
+}
+
 // The canonical, evidence-backed report-ingestion contract.
 //
 // POST /api/reports/upload is the ONLY route that runs the real pipeline:
