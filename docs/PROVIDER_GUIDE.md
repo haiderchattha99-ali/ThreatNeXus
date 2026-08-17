@@ -349,3 +349,31 @@ deployment can therefore legitimately show "Mock provider" on the dashboard pane
 `abuseipdb — READY` (or `NOT_CONFIGURED`) on the operability panel at the same time — two true facts
 about two different execution paths, not a contradiction. The operability screen states this
 explicitly rather than leaving a reader to reconcile it.
+
+## Phase 10C-4 — which provider is approved for live proof
+
+The `smoke:*` scripts above prove each provider's **adapter** only — they call `lookup()` directly
+and never touch a job, a reservation, an attempt row, or the worker. Proving the *whole* execution
+path (claim → reserve → contact → account → terminalize) against a real provider is a materially
+different and riskier act, and this repository authorizes it for **exactly one** provider:
+
+| Provider | Approved for the live canary? | Why |
+|---|---|---|
+| `greynoise` | **Yes — the only one** | Free Community tier (no paid spend), one credential variable, one plain `GET` against a documented read-only endpoint, and `404 → NOT_FOUND` is already a first-class expected outcome — the cleanest proof that "nothing on file" is a success of the architecture, not a failure. |
+| `shodan`, `netlas` | No | Paid, metered query credits per lookup. Real spend for no additional path coverage over `greynoise`. |
+| `censys` | No | Paid tier, plus an optional organization ID — the most credential-complex of the four direct providers. |
+| `abuseipdb` | No — deliberately not first | A different, more complex lane (DELEGATED/targeted, not DIRECT) with its own machinery (the linked `IocEnrichment` row, the non-expiring contact sentinel, delegated-job reconciliation). A targeted-lane canary is a candidate successor ticket, not part of this one. |
+| `nvd` | No — structurally impossible | Never worker-eligible (`DELEGATED_BATCH_REQUIRED`); it cannot be the subject of a direct canary at all. |
+
+The approved subject is `1.1.1.1` (Cloudflare's public DNS resolver) — already the in-repo approved
+subject for `smoke:greynoise` (Phase 8D), reused rather than introducing new third-party exposure.
+No customer, constituent, victim, or PK-CERT-reported address may ever be a canary subject.
+
+Because `greynoise` is a DIRECT provider, this one canary exercises the shared direct-lane path
+every other direct provider (`censys`, `shodan`, `netlas`) also uses — the choice proves the
+architecture, not just one integration. It does **not** live-prove the delegated/targeted lane
+(`abuseipdb`), which remains not-live-proven in every environment until its own successor ticket.
+
+See `docs/ai/PHASE-10C4-CONTROLLED-LIVE-ENRICHMENT-CONTRACT.md` §6 for the full selection record,
+and `docs/OPERATIONS_RUNBOOK.md` → "Controlled live canary (Phase 10C-4)" for how to run the
+preflight that gates this canary.

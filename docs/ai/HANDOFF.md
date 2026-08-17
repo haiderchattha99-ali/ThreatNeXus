@@ -5,10 +5,14 @@
 - Worktree: `F:\AI-Worktrees\ThreatNeXus\phase-10c4`
 - Base: `origin/main` @ `0f81835` (merge of PR #25, TNX-P10C3)
 - Updated: 2026-08-17
-- Status: **design_frozen** — Tier 3 design/contract gate, verdict **READY**
+- Status: **implementation_checkpoint** — Tier 3, contract v2's read-only preflight harness written and green
 
-**Nothing was implemented. No provider was contacted. No secret was read, printed, or requested.
-10C-5 was not started.** Four documentation files changed; zero product code.
+**The design/contract gate below (design_frozen, verdict READY) is unchanged and still authoritative.
+This update adds the IMPLEMENTATION checkpoint on top of it: the P1-P17 preflight script, its unit
+tests, one package.json entry, and the two operator docs contract §14 specified. No provider was
+contacted. No secret was read, printed, or requested. No worker was enabled. 10C-5 was not started.
+The live canary (§13, C1-C10) was NOT executed — it remains a later, separate, operator-executed
+boundary.**
 
 - Contract: `docs/ai/PHASE-10C4-CONTROLLED-LIVE-ENRICHMENT-CONTRACT.md` (**revision 2**, frozen)
 - Decision: `D-P10C4-01`
@@ -91,21 +95,70 @@ deleted:
 
 Every reviewer finding was verified against source before being accepted.
 
+## Implementation checkpoint (this update)
+
+Writer lease: the previous lease (`49c3e199`, PID 24828/powershell) was found genuinely dead by
+process-identity evidence (not lease age) and recovered through the canonical
+`continue-task.ps1 -RecoverDeadLease` path. New lease `f9b02d0a`.
+
+**Files added/changed, exactly matching contract §14's file surface:**
+
+- `backend/src/scripts/enrichmentCanaryPreflight.js` — **new**. Read-only. Implements all
+  seventeen P1–P17 assertions as a pure `evaluateCanaryPreflight({config, dbFacts, rawEnv, now})`
+  function (no I/O), a `gatherDbFacts(prisma, {now})` composition layer for the four DB-dependent
+  assertions, and a `require.main`-guarded CLI entrypoint that loads `../config/env` and
+  `../config/prisma` — the same objects the worker itself would use. Imports no provider or
+  execution-service module anywhere in the file. Makes no provider call, creates no job, reserves
+  no quota, enables nothing.
+- `backend/tests/unit/enrichmentCanaryPreflight.test.js` — **new**. 63 deterministic tests, no
+  real database, no network. Every one of P1–P17 has a green case and at least one red case.
+- `backend/package.json` — one new script entry, `"preflight:canary"`, alongside the existing
+  `smoke:*` entries. Not referenced by `npm test` or any CI workflow.
+- `docs/OPERATIONS_RUNBOOK.md` — new "Controlled live canary (Phase 10C-4)" subsection under the
+  existing "Enrichment worker" section.
+- `docs/PROVIDER_GUIDE.md` — new "Phase 10C-4 — which provider is approved for live proof" section.
+
+**A convention this checkpoint had to establish, not merely apply:** contract v2's P15 says "the
+database name carries the required disposable-canary prefix" but no such prefix is defined
+anywhere else in the repository or the contract. This session defined it: the resolved
+`DATABASE_URL`'s database name must contain the literal substring `canary` (e.g.
+`threatnexus_canary`), documented as an operator naming convention in
+`docs/OPERATIONS_RUNBOOK.md` — a sanity check, not a cryptographic guarantee. This did not require
+touching execution-path code, schema, or any default, so it did not rise to a "STOP and report a
+contradiction" per the implementation boundary — but a reviewer should look at it.
+
+**One real defect found and fixed while red-checking P5's `"unlimited"` case:**
+`resolveProviderReadiness` throws (by design) on a non-null/non-integer `dailyBudget` rather than
+returning a refusal value. P12 was passing `manualDailyBudgets.greynoise` straight through, so a
+malformed budget value crashed the whole preflight instead of failing closed. Fixed by coercing any
+non-null/non-integer value to `null` before the P12 call — P5 still independently reports the real
+defect; P12 now degrades to a clean FAIL instead of throwing.
+
+**Focused validation, all green:**
+
+- `npx vitest run tests/unit/enrichmentCanaryPreflight.test.js` — 63/63
+- `npx vitest run tests/unit/enrichmentOrchestrationConfig.test.js tests/unit/enrichmentProviderReadiness.test.js tests/unit/enrichmentOrchestrationInertness.test.js` — 57/57, zero regression
+- `npx prisma validate` — schema valid, zero schema/migration change
+- `git diff --check` — clean
+
+**Deliberately not run this checkpoint:** a live invocation of `npm run preflight:canary` against a
+real disposable Postgres. `gatherDbFacts`'s four database queries are proven deterministically
+against a fake Prisma double in the new suite instead; standing up the actual disposable stack and
+running the script against it is step C1 of the later, separate, operator-executed live-canary
+boundary — not part of authoring the preflight itself.
+
 ## Next action
 
-**STOP.** Awaiting the user's decision to open the **implementation boundary**, whose scope is fixed
-by contract §14:
+**STOP.** This implementation checkpoint is complete. Remaining before the live canary (§13,
+C1–C10) can open:
 
-- `backend/src/scripts/enrichmentCanaryPreflight.js` (new, read-only, implements P1–P17, makes no
-  provider call, composes the existing resolvers rather than reimplementing them)
-- one `package.json` script entry (`preflight:canary`) — **never** wired into CI or `npm test`
-- `backend/tests/unit/enrichmentCanaryPreflight.test.js` red-checking each assertion, especially P5
-  (blank/`null`/`"unlimited"` must FAIL) and P4 (a correct environment must PASS)
-- `docs/OPERATIONS_RUNBOOK.md` and `docs/PROVIDER_GUIDE.md` additions
+1. An independent review pass of this new preflight/test/docs surface — Codex remains unavailable
+   (usage limit, resets 2026-08-21); an internal fallback reviewer per `TEAM-WORKFLOW.md` is the
+   alternative, same substitution the design gate already made once.
+2. A human operator's explicit decision to authorize the canary.
+3. Standing up the disposable local stack per `docs/OPERATIONS_RUNBOOK.md` → "Controlled live
+   canary (Phase 10C-4)", then running `npm run preflight:canary` **inside that stack's own backend
+   container** before any credential is ever set.
 
-No product code in the execution path. Zero schema change.
-
-**The live canary itself is a LATER, separate, operator-executed boundary** — not part of the
-implementation ticket.
-
-Do not implement. Do not contact any provider. Do not start 10C-5.
+Do not contact any provider. Do not enable the worker. Do not run the live canary. Do not start
+10C-5.
