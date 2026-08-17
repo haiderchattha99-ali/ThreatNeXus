@@ -626,3 +626,58 @@ paths write it) plus the `greynoise.lookup.%` audit signature (legacy path only)
 must either retire/harden the legacy synchronous routes or restate the property as path-scoped.
 Credential delivery and egress in a hosted environment, and provider-account-level behaviour, remain
 unproven by any local canary and are prerequisites of any deployment ticket — currently unowned.
+
+---
+
+## D-P10C5-01 — Bound every provider response body at one shared seam, byte-counted not Content-Length-trusted
+
+**Status:** Accepted and implemented. Ticket `TNX-P10C5-BOUNDED-PROVIDER-RESPONSE-BODIES`, Tier 3.
+Base `c683cae` (merged PR #26, TNX-P10C4).
+
+**The grounded gap.** All five real provider adapters (`greynoise`, `censys`, `shodan`, `netlas`,
+`abuseipdb`) independently read a successful response with `body = await response.json()` — no
+provider shares a common HTTP client. `response.json()` materializes the entire body in memory with
+no upper bound before parsing a single byte. This is the residual 10C-4 named but explicitly deferred
+(`D-P10C4-01`): the worker's `lookupWithBound` (`enrichmentDirectExecutionService.js:161`) races the
+whole of `provider.lookup()` against `ENRICHMENT_LOOKUP_MAX_MS`, bounding the worker's *decision*, but
+never cancels the underlying fetch if it loses that race — an unbounded body-read left running in the
+background is exactly what makes that gap material. Every legacy synchronous route
+(`greyNoiseExecutionService.js` and its four siblings) calls the identical `provider.lookup()`, so
+fixing the read inside each provider protects both the Phase-10 path and the legacy path with the
+same change — no execution-service or route file needed editing.
+
+**The fix: one new shared module, not five duplicated policies.**
+`backend/src/services/shared/boundedResponseBody.js` exports `readBoundedResponseText(response,
+{maxBytes})`. Enforcement is on **actual bytes read from the stream** (`response.body.getReader()`,
+summing each chunk's `byteLength`) — never on `Content-Length` alone, which is used only as an early,
+optional refusal before any byte is read. A missing, chunked, or understated `Content-Length` cannot
+bypass the bound; the byte-counting loop is the real boundary. One shared constant,
+`DEFAULT_MAX_RESPONSE_BYTES = 2 MiB`, applies to all five providers — none of their documented
+response shapes come close to it, so a single limit is simpler and no less safe than five per-provider
+policies. On overflow, the reader (and therefore the connection) is cancelled, no partial bytes are
+ever decoded or returned, and the caller receives a distinguishable `ResponseTooLargeError` — never a
+truncated string a caller could mistake for complete JSON.
+
+**Wiring, not redesign.** Each provider's existing 2xx branch now calls
+`readBoundedResponseText(response)` then `JSON.parse(text)` in place of `response.json()`, inside the
+exact same try/catch shape it already had. A `ResponseTooLargeError` maps to a **new**, additive,
+per-provider closed error code, `PROVIDER_RESPONSE_TOO_LARGE` (added to `greyNoiseTypes.js`,
+`censysTypes.js`, `shodanTypes.js`, `netlasTypes.js`, `iocEnrichmentTypes.js`), classified as
+`ENRICHMENT_STATUS.FAILED` — the same closed bucket `PROVIDER_MALFORMED_RESPONSE` already uses.
+Nothing about status-code handling, timeout/`AbortController` behavior, `NOT_FOUND`/`RATE_LIMITED`
+semantics, or the Phase-10 attempt/quota/ledger model changed. An oversized body is only ever
+discovered **after** `contactedProvider` is already `true` (the fetch already returned a response
+object), so it can never be misreported as `REFUSED_BEFORE_LOOKUP` — it is a normal post-contact
+`FAILED` outcome in the existing closed vocabulary, exactly like a malformed-JSON body already was.
+
+**Deliberately out of scope.** `backend/src/services/vulnerability/vulnerabilityHttp.js` (the
+NVD/KEV/EPSS `response.text()` path) is a structurally separate system per the project's own
+IOC-vs-vulnerability enrichment boundary and was not touched — extending this same bound there, if
+ever warranted, is a distinct future ticket, not silently folded into this one. `lookupWithBound`'s
+`Promise.race` (the outer worker-decision timeout) was likewise left exactly as-is: this ticket closes
+the *body-size* gap, not a timeout/cancellation-architecture redesign, and the body bound now achieved
+inside each provider (reader/connection cancellation on overflow) already removes the unbounded-memory
+risk that made the outer race's non-cancellation material in the first place.
+
+**Consequence.** This was the last currently-recorded 10C engineering ticket. No further engineering
+phase is implied by closing it — the next action is functional project closure, not a new phase.

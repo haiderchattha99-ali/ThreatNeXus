@@ -64,7 +64,8 @@ function fakeSuccessFetch() {
     ok: true,
     status: 200,
     headers: { get: () => null },
-    json: async () => ({
+    // TNX-P10C5 — production reads the body via .text(), not .json().
+    text: async () => JSON.stringify({
       result: {
         resource: { services: [{ port: 443, protocol: "HTTP", transport_protocol: "TCP" }] },
       },

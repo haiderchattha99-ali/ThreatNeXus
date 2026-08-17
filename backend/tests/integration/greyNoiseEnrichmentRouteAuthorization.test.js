@@ -65,7 +65,8 @@ function fakeSuccessFetch() {
     ok: true,
     status: 200,
     headers: { get: () => null },
-    json: async () => ({
+    // TNX-P10C5 — production reads the body via .text(), not .json().
+    text: async () => JSON.stringify({
       ip: "203.0.113.40",
       noise: true,
       riot: false,

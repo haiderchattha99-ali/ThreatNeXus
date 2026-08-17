@@ -42,6 +42,11 @@ const PROVIDER_ERROR_CODES = Object.freeze({
   PROVIDER_UNAVAILABLE: "PROVIDER_UNAVAILABLE",
   PROVIDER_UNREACHABLE: "PROVIDER_UNREACHABLE",
   PROVIDER_MALFORMED_RESPONSE: "PROVIDER_MALFORMED_RESPONSE",
+  // TNX-P10C5 — the response body exceeded the shared application byte
+  // bound (boundedResponseBody.js). Distinct from PROVIDER_MALFORMED_RESPONSE:
+  // the body was never fully read, so it is unknown whether it would even
+  // have parsed.
+  PROVIDER_RESPONSE_TOO_LARGE: "PROVIDER_RESPONSE_TOO_LARGE",
   PROVIDER_REJECTED: "PROVIDER_REJECTED",
   UNSUPPORTED_INDICATOR: "UNSUPPORTED_INDICATOR",
   ENRICHMENT_DISABLED: "ENRICHMENT_DISABLED",
@@ -53,6 +58,8 @@ const PROVIDER_ERROR_MESSAGES = Object.freeze({
   [PROVIDER_ERROR_CODES.PROVIDER_TIMEOUT]: "Provider request timed out.",
   [PROVIDER_ERROR_CODES.PROVIDER_UNAVAILABLE]: "Provider is temporarily unavailable.",
   [PROVIDER_ERROR_CODES.PROVIDER_UNREACHABLE]: "Provider could not be reached.",
+  [PROVIDER_ERROR_CODES.PROVIDER_RESPONSE_TOO_LARGE]:
+    "Provider response body exceeded the configured size limit.",
   [PROVIDER_ERROR_CODES.PROVIDER_MALFORMED_RESPONSE]:
     "Provider returned a response that could not be parsed.",
   [PROVIDER_ERROR_CODES.PROVIDER_REJECTED]: "Provider rejected the request.",
