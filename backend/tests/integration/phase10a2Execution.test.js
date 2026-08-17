@@ -87,17 +87,21 @@ const describeOrSkip = TEST_DATABASE_URL ? describe : describe.skip;
 
 /** A Censys-shaped fake transport. Exercises the real provider parsing. */
 function fakeFetch({ status = 200, body = null, delayMs = 0, onCall } = {}) {
+  // TNX-P10C5 — production now reads the body through
+  // readBoundedResponseText/text(), not response.json(): the default shape
+  // below (used whenever a test omits `body`) must be the SAME valid Censys
+  // response either way, or a caller relying on the default would silently
+  // start seeing PROVIDER_MALFORMED_RESPONSE instead of a real result.
+  const DEFAULT_BODY = { result: { resource: { services: [], autonomous_system: {} } } };
   return async (...args) => {
     if (onCall) onCall(...args);
     if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+    const text = JSON.stringify(body || DEFAULT_BODY);
     return {
       ok: status >= 200 && status < 300,
       status,
       headers: { get: () => null },
-      // Censys wraps its host record in result.resource; anything else is
-      // correctly normalized as a malformed response.
-      json: async () => body || { result: { resource: { services: [], autonomous_system: {} } } },
-      text: async () => JSON.stringify(body || {}),
+      text: async () => text,
     };
   };
 }

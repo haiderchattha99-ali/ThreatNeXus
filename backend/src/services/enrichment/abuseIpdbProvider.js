@@ -23,6 +23,10 @@ const {
 } = require("./iocEnrichmentTypes");
 const { isSupportedIocIndicator, assertValidLookupRequest } = require("./iocEnrichmentProvider");
 const {
+  ResponseTooLargeError,
+  readBoundedResponseText,
+} = require("../shared/boundedResponseBody");
+const {
   AbuseIpdbConfigError,
   DEFAULT_BASE_URL,
   DEFAULT_TIMEOUT_MS,
@@ -207,9 +211,32 @@ async function mapHttpResponseToResult({ response, indicatorType, indicator, asO
     });
   }
   if (status !== null && status >= 200 && status <= 299) {
+    // TNX-P10C5 — read through the shared bounded-body seam rather than
+    // response.json() directly: an oversized body is refused before it is
+    // ever fully materialized or parsed (boundedResponseBody.js).
+    let bodyText;
+    try {
+      bodyText = await readBoundedResponseText(response);
+    } catch (err) {
+      if (err instanceof ResponseTooLargeError) {
+        return createEnrichmentResult({
+          ...base,
+          status: ENRICHMENT_STATUS.FAILED,
+          httpStatus: status,
+          errorInfo: { code: PROVIDER_ERROR_CODES.PROVIDER_RESPONSE_TOO_LARGE },
+        });
+      }
+      return createEnrichmentResult({
+        ...base,
+        status: ENRICHMENT_STATUS.FAILED,
+        httpStatus: status,
+        errorInfo: { code: PROVIDER_ERROR_CODES.PROVIDER_MALFORMED_RESPONSE },
+      });
+    }
+
     let body;
     try {
-      body = await response.json();
+      body = JSON.parse(bodyText);
     } catch {
       return createEnrichmentResult({
         ...base,

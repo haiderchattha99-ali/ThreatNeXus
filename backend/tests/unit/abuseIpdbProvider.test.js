@@ -21,10 +21,32 @@ const ASOF = new Date("2026-06-01T00:00:00Z");
 const IP = "203.0.113.10";
 const FAKE_KEY = "test-only-abuseipdb-key-0123456789";
 
+// TNX-P10C5 — production now reads the body through readBoundedResponseText
+// (a real streaming reader), not response.json(), so the fake response must
+// expose `.text()`/`.body.getReader()` the same way Node's native fetch
+// Response does.
+function makeSingleChunkBody(text) {
+  const bytes = new TextEncoder().encode(text);
+  let done = false;
+  return {
+    getReader: () => ({
+      async read() {
+        if (done) return { done: true, value: undefined };
+        done = true;
+        return { done: false, value: bytes };
+      },
+      async cancel() {},
+    }),
+    cancel: async () => {},
+  };
+}
+
 function makeJsonResponse(status, body, headers = {}) {
+  const text = JSON.stringify(body);
   return {
     status,
-    json: async () => body,
+    text: async () => text,
+    body: makeSingleChunkBody(text),
     headers: { get: (name) => (Object.prototype.hasOwnProperty.call(headers, name.toLowerCase()) ? headers[name.toLowerCase()] : null) },
   };
 }
@@ -32,10 +54,19 @@ function makeJsonResponse(status, body, headers = {}) {
 function makeMalformedJsonResponse(status) {
   return {
     status,
-    json: async () => {
-      throw new SyntaxError("Unexpected token in JSON");
-    },
+    text: async () => "not valid json {",
     headers: { get: () => null },
+  };
+}
+
+function makeOversizedResponse(status) {
+  return {
+    status,
+    headers: { get: (name) => (name === "content-length" ? "99999999" : null) },
+    body: { cancel: async () => {} },
+    text: async () => {
+      throw new Error("text() should not be reached — Content-Length already refused the body");
+    },
   };
 }
 
@@ -384,6 +415,12 @@ describe("HTTP outcome mapping", () => {
     const { result } = await lookupWithResponse(makeMalformedJsonResponse(200));
     expect(result.status).toBe(ENRICHMENT_STATUS.FAILED);
     expect(result.errorInfo.code).toBe(PROVIDER_ERROR_CODES.PROVIDER_MALFORMED_RESPONSE);
+  });
+
+  it("oversized body -> FAILED / PROVIDER_RESPONSE_TOO_LARGE without parsing it", async () => {
+    const { result } = await lookupWithResponse(makeOversizedResponse(200));
+    expect(result.status).toBe(ENRICHMENT_STATUS.FAILED);
+    expect(result.errorInfo.code).toBe(PROVIDER_ERROR_CODES.PROVIDER_RESPONSE_TOO_LARGE);
   });
 
   it("valid JSON with a malformed shape (no data object) -> FAILED / PROVIDER_MALFORMED_RESPONSE", async () => {

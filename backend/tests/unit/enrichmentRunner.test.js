@@ -1282,7 +1282,8 @@ describe("runEnrichmentBatch — logging/security", () => {
       return {
         status: 200,
         headers: { get: () => null },
-        json: async () => ({ data: { ipAddress: "198.18.0.33", abuseConfidenceScore: 0, totalReports: 0 } }),
+        // TNX-P10C5 — production reads the body via .text(), not .json().
+        text: async () => JSON.stringify({ data: { ipAddress: "198.18.0.33", abuseConfidenceScore: 0, totalReports: 0 } }),
       };
     };
     const provider = createAbuseIpdbProvider({ apiKey: FAKE_KEY, fetchImpl });

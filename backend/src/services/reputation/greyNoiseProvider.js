@@ -29,6 +29,10 @@ const {
   validateBaseUrl,
   validateTimeoutMs,
 } = require("./greyNoiseConfig");
+const {
+  ResponseTooLargeError,
+  readBoundedResponseText,
+} = require("../shared/boundedResponseBody");
 
 const PROVIDER_NAME = "greynoise";
 const RETRY_AFTER_SECONDS_PATTERN = /^\d+$/;
@@ -155,9 +159,32 @@ async function mapHttpResponseToResult({ response, indicator, asOf }) {
     });
   }
   if (status !== null && status >= 200 && status <= 299) {
+    // TNX-P10C5 — read through the shared bounded-body seam rather than
+    // response.json() directly: an oversized body is refused before it is
+    // ever fully materialized or parsed (boundedResponseBody.js).
+    let bodyText;
+    try {
+      bodyText = await readBoundedResponseText(response);
+    } catch (err) {
+      if (err instanceof ResponseTooLargeError) {
+        return createNoiseResult({
+          ...base,
+          status: ENRICHMENT_STATUS.FAILED,
+          httpStatus: status,
+          errorInfo: { code: PROVIDER_ERROR_CODES.PROVIDER_RESPONSE_TOO_LARGE },
+        });
+      }
+      return createNoiseResult({
+        ...base,
+        status: ENRICHMENT_STATUS.FAILED,
+        httpStatus: status,
+        errorInfo: { code: PROVIDER_ERROR_CODES.PROVIDER_MALFORMED_RESPONSE },
+      });
+    }
+
     let body;
     try {
-      body = await response.json();
+      body = JSON.parse(bodyText);
     } catch {
       return createNoiseResult({
         ...base,

@@ -15,15 +15,38 @@ const ASOF = new Date("2026-08-09T00:00:00Z");
 const IP = "203.0.113.50";
 const SECRET_KEY = "SECRET-NETLAS-API-KEY-VALUE";
 
+// TNX-P10C5 — production now reads the body through readBoundedResponseText
+// (a real streaming reader), not response.json(), so the fake response must
+// expose `.text()`/`.body.getReader()` the same way Node's native fetch
+// Response does. `.body` yields the whole JSON-encoded text as one chunk,
+// matching a normal small provider response.
 function fakeFetch({ status = 200, body = {}, headers = {}, calls = [] } = {}) {
   return async (url, init) => {
     calls.push({ url, init });
+    const text = JSON.stringify(body);
     return {
       ok: status >= 200 && status < 300,
       status,
       headers: { get: (name) => headers[String(name).toLowerCase()] ?? null },
-      json: async () => body,
+      text: async () => text,
+      body: makeSingleChunkBody(text),
     };
+  };
+}
+
+function makeSingleChunkBody(text) {
+  const bytes = new TextEncoder().encode(text);
+  let done = false;
+  return {
+    getReader: () => ({
+      async read() {
+        if (done) return { done: true, value: undefined };
+        done = true;
+        return { done: false, value: bytes };
+      },
+      async cancel() {},
+    }),
+    cancel: async () => {},
   };
 }
 
@@ -81,7 +104,7 @@ describe("NetlasProvider", () => {
     let called = false;
     const provider = createNetlasProvider({
       apiKey: SECRET_KEY,
-      fetchImpl: async () => { called = true; return { ok: true, status: 200, headers: { get: () => null }, json: async () => ({}) }; },
+      fetchImpl: async () => { called = true; return { ok: true, status: 200, headers: { get: () => null }, text: async () => "{}" }; },
     });
     const result = await provider.lookup({ indicator: "example.com", asOf: ASOF });
     expect(result.status).toBe(ENRICHMENT_STATUS.UNSUPPORTED_INDICATOR);
@@ -198,12 +221,30 @@ describe("NetlasProvider", () => {
         ok: true,
         status: 200,
         headers: { get: () => null },
-        json: async () => { throw new SyntaxError("Unexpected token"); },
+        text: async () => "not valid json {",
       }),
     });
     const result = await provider.lookup({ indicator: IP, asOf: ASOF });
     expect(result.status).toBe(ENRICHMENT_STATUS.FAILED);
     expect(result.errorInfo.code).toBe(PROVIDER_ERROR_CODES.PROVIDER_MALFORMED_RESPONSE);
+  });
+
+  it("maps an oversized 200 body to FAILED/PROVIDER_RESPONSE_TOO_LARGE without parsing it", async () => {
+    const provider = createNetlasProvider({
+      apiKey: SECRET_KEY,
+      fetchImpl: async () => ({
+        ok: true,
+        status: 200,
+        headers: { get: (name) => (name === "content-length" ? "99999999" : null) },
+        body: { cancel: async () => {} },
+        text: async () => {
+          throw new Error("text() should not be reached — Content-Length already refused the body");
+        },
+      }),
+    });
+    const result = await provider.lookup({ indicator: IP, asOf: ASOF });
+    expect(result.status).toBe(ENRICHMENT_STATUS.FAILED);
+    expect(result.errorInfo.code).toBe(PROVIDER_ERROR_CODES.PROVIDER_RESPONSE_TOO_LARGE);
   });
 
   it("maps a network-level throw to FAILED/PROVIDER_UNREACHABLE", async () => {

@@ -24,10 +24,32 @@ function makeCapturingFetch(response) {
   return { fetchImpl, calls };
 }
 
+// TNX-P10C5 — production now reads the body through readBoundedResponseText
+// (a real streaming reader), not response.json(), so the fake response must
+// expose `.text()`/`.body.getReader()` the same way Node's native fetch
+// Response does.
+function makeSingleChunkBody(text) {
+  const bytes = new TextEncoder().encode(text);
+  let done = false;
+  return {
+    getReader: () => ({
+      async read() {
+        if (done) return { done: true, value: undefined };
+        done = true;
+        return { done: false, value: bytes };
+      },
+      async cancel() {},
+    }),
+    cancel: async () => {},
+  };
+}
+
 function makeJsonResponse(status, body, headers = {}) {
+  const text = JSON.stringify(body);
   return {
     status,
-    json: async () => body,
+    text: async () => text,
+    body: makeSingleChunkBody(text),
     headers: { get: (name) => (Object.prototype.hasOwnProperty.call(headers, name.toLowerCase()) ? headers[name.toLowerCase()] : null) },
   };
 }

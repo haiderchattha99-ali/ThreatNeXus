@@ -34,19 +34,39 @@ describe("censysLiveSmoke", () => {
   });
 
   it("returns only safe normalized fields, never the credentials or a raw payload", async () => {
+    // TNX-P10C5 — production now reads the body through
+    // readBoundedResponseText (a real streaming reader), not response.json(),
+    // so the fake response must expose `.text()`/`.body.getReader()` the
+    // same way Node's native fetch Response does.
+    const responseText = JSON.stringify({
+      result: {
+        resource: {
+          ip: SMOKE_INDICATOR,
+          services: [{ port: 53, protocol: "DNS", transport_protocol: "UDP" }],
+          autonomous_system: { asn: 13335, description: "CLOUDFLARENET" },
+        },
+      },
+    });
+    const bytes = new TextEncoder().encode(responseText);
     const fetchImpl = async () => ({
       ok: true,
       status: 200,
       headers: { get: () => null },
-      json: async () => ({
-        result: {
-          resource: {
-            ip: SMOKE_INDICATOR,
-            services: [{ port: 53, protocol: "DNS", transport_protocol: "UDP" }],
-            autonomous_system: { asn: 13335, description: "CLOUDFLARENET" },
-          },
+      text: async () => responseText,
+      body: {
+        getReader: () => {
+          let done = false;
+          return {
+            async read() {
+              if (done) return { done: true, value: undefined };
+              done = true;
+              return { done: false, value: bytes };
+            },
+            async cancel() {},
+          };
         },
-      }),
+        cancel: async () => {},
+      },
     });
 
     const summary = await runCensysLiveSmoke({
