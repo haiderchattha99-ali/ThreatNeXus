@@ -493,10 +493,14 @@ Both switches accept only the exact string `true` — there is no `1`/`yes`/`on`
 that spends money.
 
 **Credential values are never read.** The applicability router is told only *whether* a provider has
-a credential (`isProviderCredentialConfigured` coerces to `Boolean`). No module outside
-`enrichmentOrchestrationConfig.js` names an API-key variable at all, and a unit test asserts that.
-`ProviderLookupJob` deliberately has **no** `errorMessage` and **no** raw-body column, so a provider
-payload or an exception string has nowhere to land.
+a credential (`isProviderCredentialConfigured` coerces to `Boolean`). No module **inside the
+`enrichmentOrchestration` package** other than `enrichmentOrchestrationConfig.js` names an API-key
+variable, and a unit test asserts that (`enrichmentOrchestrationInertness.test.js`). That gate is
+package-scoped, not repository-wide: `config/env.js`, `enrichment/enrichmentRuntime.js`,
+`dashboard/operationalOverviewService.js` and each provider's own execution service legitimately name
+their variable to read it into the frozen config at boot. `ProviderLookupJob` deliberately has **no**
+`errorMessage` and **no** raw-body column, so a provider payload or an exception string has nowhere
+to land.
 
 **Cross-Finding isolation.** A `ProviderLookupJob` is SHARED — ten Findings on one IP point at one
 job. Serializers therefore publish the job's **state** (progress) but never its **identifier**, and
@@ -512,11 +516,25 @@ a control character in a header is a transport bug or an injection attempt. Only
 is persisted; the raw value is never stored, logged, audited or echoed, and rejection messages name
 the rule rather than the value.
 
-**Truthful usage reporting.** `GET /api/enrichment/usage` returns zeros in this milestone, and says
-why: `accountingScope: PHASE_10_RESERVATIONS`, `coverage: PARTIAL`, `reservationsActive: false`,
-plus an explicit `excludedPaths` list (legacy ADMIN IOC batch, ADMIN vulnerability batch, pre-10A2
-synchronous direct-provider routes). It fabricates no total provider-call count, because it cannot
-know one. A bare `0` would have been a true number presented as a false claim.
+**Truthful usage reporting.** `GET /api/enrichment/usage` states its own scope honestly rather than
+implying completeness: `accountingScope: PHASE_10_RESERVATIONS`, `coverage: PARTIAL`, plus an
+explicit `excludedPaths` list (legacy ADMIN IOC batch, ADMIN vulnerability batch, synchronous
+direct-provider routes — all three still mounted and still contact providers outside Phase-10
+accounting). It fabricates no total provider-call count, because it cannot know one. `reservedToday`
+is scoped to today's UTC usage day only, derived the same way a reservation is
+(`enrichmentQuotaService.utcUsageDate`) — never an unscoped multi-day read. `reservationsActive` was
+correctly `false` for the whole of Phase 10A-1 (nothing reserved yet); since Phase 10A-2 it is
+derived from `ENRICHMENT_WORKER_ENABLED` — reservations are active whenever the worker can run at
+all, since `reserveProviderQuota` is reachable only through it.
+
+**Phase 10C-3 — provider operability, still read-only.** The same endpoint additionally derives a
+closed, non-secret readiness value per `(provider, lane)` — see
+`docs/ai/PHASE-10C3-PROVIDER-CREDENTIAL-BUDGET-OPERABILITY-CONTRACT.md`. It exposes only: a boolean
+credential-configured flag, the missing environment **variable name** (never a value) when absent,
+the resolved readiness value, and the budget/usage figures already described above. It introduces no
+mutation, no new capability, no migration, and cannot turn a provider on — credential presence
+remains the sole Phase-10 activation fact (see "Credentials — presence is the sole activation switch"
+under Phase 10A-2 below).
 
 **Database-enforced integrity.** Seven CHECK constraints (proven by eight independent
 real-PostgreSQL rejection tests in `backend/tests/integration/phase10a1Constraints.test.js`) keep a
@@ -564,12 +582,22 @@ rather than precautionary.
 3. A provider with no credential is refused **before any reservation**, so an incomplete deployment
    cannot charge quota for a call it could never make.
 
-### Credentials
+### Credentials — presence is the sole activation switch
 
 Read from environment variables only, and only ever tested for **presence**
 (`isProviderCredentialConfigured` coerces to `Boolean`). No module returns, logs, interpolates or
-compares a key value. The tiered execution gate asserts statically that no module outside
-`enrichmentOrchestrationConfig.js` so much as mentions a provider key name.
+compares a key value. The tiered execution gate asserts statically that no module **inside the
+`enrichmentOrchestration` package** other than `enrichmentOrchestrationConfig.js` so much as mentions
+a provider key name — a package-scoped gate, not a repository-wide one (see the equivalent correction
+under "Two independent default-off switches" above).
+
+There is no separate provider-enablement switch to bypass or misconfigure: every direct provider's
+`isEnabled()` is exactly `credential present` (its constructor's `enabled` override is never passed
+by any production call site), so credential presence **is** activation for the whole of Phase 10.
+Phase 10C-3's operability surface (above) reports this fact; it does not add a second one. The
+pre-existing `IOC_ENRICHMENT_PROVIDER` selector governing the *legacy* IOC path is a separate,
+independent selector that Phase 10's `abuseipdb` readiness never reads — see
+`docs/PROVIDER_GUIDE.md`'s "legacy `IOC_ENRICHMENT_PROVIDER` selector" note.
 
 `backend/.env` is gitignored and is read by nothing in this repository, by CI, or by any test. CI
 sets every provider key to `''`. It was never opened during this milestone's development.

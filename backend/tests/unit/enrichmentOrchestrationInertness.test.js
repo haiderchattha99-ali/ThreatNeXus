@@ -43,6 +43,7 @@ const CORE_MODULES = Object.freeze([
   "enrichmentIdentity.js",
   "enrichmentOrchestrationConfig.js",
   "enrichmentOrchestrationRepository.js",
+  "enrichmentProviderReadiness.js",
   "enrichmentReconciliationService.js",
   "enrichmentRunReadService.js",
   "enrichmentRunService.js",

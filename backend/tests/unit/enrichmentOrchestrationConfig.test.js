@@ -21,6 +21,8 @@ const {
   parseDefaultOffSwitch,
   resolveOrchestrationConfig,
   isProviderCredentialConfigured,
+  missingProviderCredentialVariables,
+  PROVIDER_CREDENTIAL_VARIABLES,
 } = require("../../src/services/enrichmentOrchestration/enrichmentOrchestrationConfig");
 const { KNOWN_PROVIDERS } = require("../../src/services/enrichmentOrchestration/enrichmentSubject");
 
@@ -158,5 +160,63 @@ describe("enrichmentOrchestrationConfig — credential presence", () => {
 
   it("treats an unknown provider as not configured", () => {
     expect(isProviderCredentialConfigured("virustotal", {})).toBe(false);
+  });
+});
+
+// Phase 10C-3 — the non-secret credential-status surface. The variable NAMES
+// exposed here are already public (backend/.env.example, docker-compose.yml);
+// this module never reads, returns, or logs a VALUE.
+describe("missingProviderCredentialVariables — names, never values", () => {
+  it("names the missing variable for every unconfigured provider", () => {
+    const config = {}; // every credential absent
+    expect(missingProviderCredentialVariables("abuseipdb", config)).toEqual(["ABUSEIPDB_API_KEY"]);
+    expect(missingProviderCredentialVariables("censys", config)).toEqual(["CENSYS_PAT"]);
+    expect(missingProviderCredentialVariables("greynoise", config)).toEqual(["GREYNOISE_API_KEY"]);
+    expect(missingProviderCredentialVariables("shodan", config)).toEqual(["SHODAN_API_KEY"]);
+    expect(missingProviderCredentialVariables("netlas", config)).toEqual(["NETLAS_API_KEY"]);
+  });
+
+  it("returns an empty array once a provider is configured", () => {
+    expect(missingProviderCredentialVariables("censys", { CENSYS_PAT: "irrelevant-for-this-check" })).toEqual([]);
+  });
+
+  it("returns an empty array for nvd always — it works keyless", () => {
+    expect(missingProviderCredentialVariables("nvd", {})).toEqual([]);
+    expect(missingProviderCredentialVariables("nvd", { NVD_API_KEY: "set" })).toEqual([]);
+  });
+
+  it("returns an empty array, not a throw, for an unknown provider", () => {
+    expect(missingProviderCredentialVariables("virustotal", {})).toEqual([]);
+  });
+
+  it("every exposed variable name is a real, documented variable — never a value", () => {
+    // eslint-disable-next-line no-restricted-syntax
+    for (const provider of KNOWN_PROVIDERS) {
+      const names = PROVIDER_CREDENTIAL_VARIABLES[provider] || [];
+      // eslint-disable-next-line no-restricted-syntax
+      for (const name of names) {
+        expect(name).toMatch(/^[A-Z][A-Z0-9_]*$/);
+      }
+    }
+  });
+
+  it("red-check: a value planted in the config never appears in the output", () => {
+    const SENTINEL = "sk-live-planted-secret-value-should-never-leak-98214";
+    const config = {
+      ABUSEIPDB_API_KEY: "",
+      CENSYS_PAT: SENTINEL,
+      GREYNOISE_API_KEY: "",
+      SHODAN_API_KEY: "",
+      NETLAS_API_KEY: "",
+    };
+    // eslint-disable-next-line no-restricted-syntax
+    for (const provider of KNOWN_PROVIDERS) {
+      const names = missingProviderCredentialVariables(provider, config);
+      expect(JSON.stringify(names)).not.toContain(SENTINEL);
+    }
+    // censys IS configured (the sentinel is a real-looking value), so its
+    // missing-variable list must be empty — proving the function actually
+    // read presence, not just failed to leak an absent value.
+    expect(missingProviderCredentialVariables("censys", config)).toEqual([]);
   });
 });

@@ -318,12 +318,53 @@ function isProviderCredentialConfigured(provider, config) {
   }
 }
 
+// --- Phase 10C-3 — non-secret credential status ----------------------------
+//
+// The NAME of the environment variable a provider needs, never its value.
+// These names are already public: every one of them is spelled out verbatim
+// in backend/.env.example and docker-compose.yml. Publishing the name to an
+// authorized caller who is missing it is operator guidance, not disclosure —
+// the secret is the VALUE, which this module never reads, returns, or logs.
+//
+// This map — and PROVIDER_ENV_PREFIX above it — are why this file, and no
+// other, may name a provider credential variable
+// (enrichmentOrchestrationInertness.test.js enforces that for every other
+// module in this package). nvd maps to an empty array: it works keyless.
+const PROVIDER_CREDENTIAL_VARIABLES = Object.freeze({
+  abuseipdb: Object.freeze(["ABUSEIPDB_API_KEY"]),
+  censys: Object.freeze(["CENSYS_PAT"]),
+  greynoise: Object.freeze(["GREYNOISE_API_KEY"]),
+  shodan: Object.freeze(["SHODAN_API_KEY"]),
+  netlas: Object.freeze(["NETLAS_API_KEY"]),
+  nvd: Object.freeze([]),
+});
+
+/**
+ * The variable name(s) an operator must set for this provider to become
+ * configured, or an empty (frozen) array when it already is — including for
+ * `nvd`, which never has a missing variable because it works keyless.
+ *
+ * Total: never throws for a provider not in PROVIDER_CREDENTIAL_VARIABLES,
+ * it simply returns an empty array, matching isProviderCredentialConfigured's
+ * own unknown-provider default of `false` being harmless here (an unknown
+ * provider is caught earlier, by enrichmentProviderReadiness's own check).
+ *
+ * @param {string} provider
+ * @param {object} config the resolved application config (env.js's export)
+ * @returns {ReadonlyArray<string>} frozen
+ */
+function missingProviderCredentialVariables(provider, config) {
+  if (isProviderCredentialConfigured(provider, config)) return Object.freeze([]);
+  return PROVIDER_CREDENTIAL_VARIABLES[provider] || Object.freeze([]);
+}
+
 module.exports = {
   EnrichmentOrchestrationConfigError,
   DEFAULT_AUTOMATIC_DAILY_BUDGET,
   DEFAULT_MANUAL_DAILY_BUDGET,
   MAX_DAILY_BUDGET,
   PROVIDER_ENV_PREFIX,
+  PROVIDER_CREDENTIAL_VARIABLES,
   WORKER_RUNTIME_BOUNDS,
   LEASE_MARGIN_MS,
   STALE_MARGIN_MS,
@@ -333,4 +374,5 @@ module.exports = {
   resolveOrchestrationConfig,
   resolveWorkerRuntimeConfig,
   isProviderCredentialConfigured,
+  missingProviderCredentialVariables,
 };
