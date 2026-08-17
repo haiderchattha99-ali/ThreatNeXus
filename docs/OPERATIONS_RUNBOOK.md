@@ -307,3 +307,128 @@ ENRICHMENT_WORKER_ENABLED=false docker compose up -d
 
 No worker is constructed. In-flight leases expire on their own. Already-persisted evidence stays —
 this stops future calls, it does not retract completed ones.
+
+### Controlled live canary (Phase 10C-4)
+
+**This section documents the preflight gate for a future, separate, operator-authorized live
+canary. Running the preflight does NOT run the canary, and no canary has been executed by writing
+this document.** The full definition, evidence set, and rollback procedure live in
+`docs/ai/PHASE-10C4-CONTROLLED-LIVE-ENRICHMENT-CONTRACT.md` §4, §11, §13 — read it before ever
+authorizing a live run. This section is the short operator-facing version.
+
+**What the canary is, exactly:** one operator-authorized, MANUAL-lane enrichment run against
+`greynoise` only, for the single approved benign subject `1.1.1.1` (Cloudflare's public DNS
+resolver), in a **disposable local stack**, with `GREYNOISE_MANUAL_DAILY_BUDGET=1` — a budget of
+**exactly one** reservation — followed by a mandatory, verified return to default-off.
+
+#### Run the preflight
+
+```bash
+docker compose run --rm backend node src/scripts/enrichmentCanaryPreflight.js
+# equivalently, from inside that same container/process:
+npm run preflight:canary
+```
+
+**Must run inside the same container/process that will boot the worker.** The preflight reads
+`backend/src/config/env.js` — the identical, once-resolved config object the worker itself
+consumes — so a preflight run from a different shell validates a *different* environment and
+proves nothing about the one that will actually spend quota.
+
+#### What PASS means
+
+Every one of the contract's seventeen assertions (P1-P17) held at the moment the preflight ran:
+the worker switch and AUTOMATIC lane are off, only `greynoise` is credentialed, its MANUAL budget
+is explicitly `1` (not blank — blank means **unlimited**, never zero), every other provider's
+MANUAL budget is explicitly `0`, every AUTOMATIC budget is `0`, the worker batch size is `1`, the
+database has zero prior greynoise reservations/jobs/enrichment rows on any day, exactly one
+Finding exists and it is `1.1.1.1`, enough time remains before UTC midnight (the budget bucket
+resets then), the resolved database is named as a disposable canary database, the legacy
+IOC batch path is closed (`IOC_ENRICHMENT_PROVIDER=mock`), and no Phase-8D live-smoke opt-in is
+armed.
+
+#### What PASS does NOT mean
+
+- It does **not** mean the canary has run, or that a provider has been contacted.
+- It does **not** authorize the canary by itself — a human operator still decides to proceed.
+- It does **not** prove the legacy synchronous provider routes (`POST
+  /api/findings/:id/enrichment/{greynoise,censys,shodan,netlas}`) are safe or disabled — those
+  routes are armed by the credential alone and consult no switch in this preflight or in the
+  worker (contract §3.2). P13 only detects whether one has *already* fired before the canary
+  starts; nothing in this repository currently prevents a deliberate hand-made request to one
+  during the canary window. No frontend code calls them.
+- It does **not** re-run automatically. Re-run it immediately before C5 (worker enablement) if any
+  time has passed, especially near UTC midnight.
+
+#### Safe environment preparation
+
+1. Stand up a **disposable** local PostgreSQL, apply migrations, and seed exactly **one** Finding
+   with indicator `1.1.1.1`. Name the database so it carries the string `canary` (e.g.
+   `threatnexus_canary`) — the preflight's P15 checks for this naming convention as a sanity check
+   against accidentally pointing the canary at a shared or long-lived database. This is a
+   convention, not a cryptographic guarantee: it does not replace operator discipline about which
+   database the disposable stack actually points at.
+2. Export `GREYNOISE_API_KEY` into the shell that will launch the stack (or a git-ignored local
+   `.env`). **Never** paste it into a chat, an agent session, or any file that gets committed.
+3. Set `GREYNOISE_MANUAL_DAILY_BUDGET=1` explicitly. Set every other `*_MANUAL_DAILY_BUDGET=0`
+   explicitly, including `NVD_MANUAL_DAILY_BUDGET=0` and `ABUSEIPDB_MANUAL_DAILY_BUDGET=0` — a
+   blank value is **unlimited**, not disabled.
+4. Leave `AUTO_ENRICHMENT_ENABLED=false` and `ENRICHMENT_WORKER_ENABLED=false` until the preflight
+   passes. `ENRICHMENT_WORKER_ENABLED` is read once at process boot — enabling it later requires a
+   **restart**.
+5. Set `ENRICHMENT_WORKER_BATCH_SIZE=1` and leave every other worker-runtime variable at its
+   default.
+6. Leave `IOC_ENRICHMENT_PROVIDER=mock` (the default) and every `LIVE_*_SMOKE` variable unset.
+
+#### One-call cap and GreyNoise-only constraint
+
+The canary is bounded to **exactly one** outbound request, to **exactly one** provider
+(`greynoise`), against **exactly one** subject (`1.1.1.1`) — see contract §10. `shodan`, `netlas`,
+`censys`, `abuseipdb` and `nvd` are not part of this canary and must stay `NOT_CONFIGURED` /
+budget-zero throughout (P4/P6). Do not set any other provider's credential during the canary
+window.
+
+#### No secret-printing rule
+
+The preflight never reads, prints, compares, or serializes a credential **value** — only the
+boolean "is it configured" fact via the existing `isProviderCredentialConfigured` seam, and (where
+permitted) the variable **name**. It never dumps `process.env`. Neither should any evidence you
+collect by hand: **never** capture `docker inspect`, `docker compose config`, `printenv`,
+`/proc/<pid>/environ`, or a shell-history excerpt into any artifact, chat, or ticket — every one of
+those holds the plaintext key even though none of them is "the value" literally.
+
+#### Worker restart requirement
+
+`ENRICHMENT_WORKER_ENABLED` is read **once**, at process boot, and there is no runtime toggle —
+this is deliberate (contract §9, §16). Enabling the worker for the canary requires a restart;
+returning to default-off afterward requires **another** restart. Confirm the worker is genuinely
+active by the `enrichment.worker.started` `AuditLog` row, not by log output alone (the audit call
+is fire-and-forget — its presence is proof, its absence is not, contract §11 step 2).
+
+#### Legacy-route caveat
+
+The four legacy synchronous provider routes (§3.2 of the contract) are **not** made safe by this
+preflight or by this ticket. They bypass `ENRICHMENT_WORKER_ENABLED`, write no `ProviderLookupJob`
+or `ProviderLookupAttempt` row, and are armed the moment a credential is set — for the entire
+canary window. Their only bound is the provider rate limiter. No frontend code calls them, but a
+deliberate hand-made authenticated request can. Preflight P13 and the after-canary evidence
+queries (contract §13.1) detect a legacy-path contact by its distinct signature (a
+`GreyNoiseEnrichment` row with no matching `ProviderLookupAttempt`, or a `greynoise.lookup.%`
+audit row) — they do not prevent one.
+
+#### Rollback / default-off requirement
+
+**The canary is not complete until the environment is verified back to default-off.** Follow
+contract §11 in the stated order: restart with `ENRICHMENT_WORKER_ENABLED=false`, confirm no
+worker was constructed, confirm readiness reads `EXECUTION_PAUSED`, extract the "after" evidence
+**before** tearing anything down, then remove the credential from the shell (and purge the
+shell-history entry it left behind), then destroy the disposable database **and its volume**
+(`docker compose down -v`) — the volume destruction is what forecloses a UTC-rollover requeue
+risk, not tidiness. There is no approved outcome of the canary in which a worker is left running.
+
+#### 10C-5 remains required before broader enablement
+
+A green preflight and a successful canary establish readiness of **this exact bounded run** only.
+They do **not** establish that a continuously-running worker, a batch size greater than 1, or any
+provider with large/variable responses is safe — the provider response-body read has no size cap
+on any path (contract §17). That hardening is Phase 10C-5, a separate ticket, and is required
+before any unattended or production-facing enablement.

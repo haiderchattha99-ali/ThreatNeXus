@@ -24,7 +24,8 @@
     "smoke:censys": "node src/scripts/censysLiveSmoke.js",
     "smoke:greynoise": "node src/scripts/greyNoiseLiveSmoke.js",
     "smoke:shodan": "node src/scripts/shodanLiveSmoke.js",
-    "smoke:netlas": "node src/scripts/netlasLiveSmoke.js"
+    "smoke:netlas": "node src/scripts/netlasLiveSmoke.js",
+    "preflight:canary": "node src/scripts/enrichmentCanaryPreflight.js"
   },
   "keywords": [],
   "author": "",
