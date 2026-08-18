@@ -77,7 +77,8 @@
                                        "rendered QA: 0px horizontal overflow at 390/768/1024/1366/1440 on dashboard, findings and finding detail — collapsed AND with every disclosure open",
                                        "rendered QA: 0 console errors and 0 console warnings across all four roles",
                                        "backend untouched: git status --porcelain backend/ is empty",
-                                       "no dependency change: git diff on every package.json / package-lock.json is empty"
+                                       "no dependency change: git diff on every package.json / package-lock.json is empty",
+                                       "CI: GREEN on the first push at the exact PR tip 5097367 — run 32192035942, all six required jobs succeeded (Secrets and generated artifacts, Prisma schema and migration history, Backend tests, Frontend lint/tests/build, Browser suite (Chromium), Core evaluators). 'Mutation and concurrency gates' is manual-trigger-only and correctly skipped"
                                    ],
                        "failing":  [
 
@@ -101,8 +102,8 @@
                          "The Findings list still has no risk-band SORT, only a filter, because the backend exposes none. Severity now leads the row visually but the default order remains lastSeen.",
                          "No independent review of this pass. The brief explicitly excludes a post-implementation reviewer, which is a deliberate departure from CLAUDE.md's 'do not review your own final work as the only reviewer' rule and is recorded here rather than quietly honoured."
                      ],
-    "next_action":  "Frontend polish complete and PR opened. Per the brief there is NO second polish cycle and no further audit or design review. The next phase after merge is professional final documentation.",
-    "checkpoint_ref":  "",
+    "next_action":  "Frontend polish complete. PR #30 is open at https://github.com/haiderchattha99-ali/ThreatNeXus/pull/30 and CI is green at its exact tip (5097367, run 32192035942). Per the brief there is NO second polish cycle and no further audit or design review. The next phase after merge is professional final documentation.",
+    "checkpoint_ref":  "5097367d2a5985b1851eb2b126fec13c5b59ef70",
     "updated_at":  "2026-08-19T00:00:00.0000000Z",
     "next_writer":  "unassigned"
 }

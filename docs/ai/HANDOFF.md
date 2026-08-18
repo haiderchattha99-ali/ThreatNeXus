@@ -128,6 +128,14 @@ folded at all — each zero is then the entire answer.
 | backend | `git status --porcelain backend/` empty |
 | dependencies | no `package.json` / lockfile change anywhere |
 
+**CI: green on the first push**, at the exact PR tip `5097367` —
+[run 32192035942](https://github.com/haiderchattha99-ali/ThreatNeXus/actions/runs/32192035942). All
+six required jobs succeeded: Secrets and generated artifacts, Prisma schema and migration history,
+Backend tests, Frontend lint/tests/build, Browser suite (Chromium), Core evaluators. "Mutation and
+concurrency gates" is manual-trigger-only and correctly skipped.
+
+PR: <https://github.com/haiderchattha99-ali/ThreatNeXus/pull/30>
+
 ### Red-check — and the one that initially failed to fail
 
 The factor-label regression test **passed against the reintroduced defect** on the first attempt. The
