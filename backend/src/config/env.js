@@ -209,6 +209,30 @@ function buildConfig() {
     return raw.trim().toLowerCase() === "true";
   })();
 
+  // Security pass — public self-service registration.
+  //
+  // ThreatNeXus holds constituent exposure evidence. Its least-privileged role,
+  // VIEWER, deliberately carries read:dashboard, read:findings and read:cases,
+  // because a read-only oversight role is a stated requirement. That is correct
+  // for an account the organization issued — and wrong for an account anybody
+  // can mint. With POST /api/auth/register open, those two correct decisions
+  // composed into an anonymous read of every finding (victim address, port,
+  // owning organization), every case and the operational dashboard: one
+  // unauthenticated request to create the account, one to sign in.
+  //
+  // The route is therefore CLOSED unless an operator opens it. It is left
+  // mounted rather than deleted so the refusal is explicit, audited, and
+  // reversible for a bootstrap or a demonstration; the route census exception
+  // ("unauthenticated by necessity") stays accurate either way. Accounts are
+  // otherwise provisioned out of band by seedUsers.js.
+  //
+  // Default false in EVERY environment, test included. A control whose default
+  // differs between test and production is a control whose production
+  // behaviour no test observes.
+  const allowPublicRegistration =
+    String(process.env.ALLOW_PUBLIC_REGISTRATION || "").trim().toLowerCase() ===
+    "true";
+
   const rateLimitAuthWindowMs = parseOptionalInt(
     "RATE_LIMIT_AUTH_WINDOW_MS",
     process.env.RATE_LIMIT_AUTH_WINDOW_MS,
@@ -492,6 +516,9 @@ function buildConfig() {
     LOG_LEVEL: process.env.LOG_LEVEL || "info",
     UPLOAD_MAX_BYTES: uploadMaxBytes,
     REPORT_MAX_ROWS: reportMaxRows,
+
+    // Security pass — public registration is closed by default (see above).
+    ALLOW_PUBLIC_REGISTRATION: allowPublicRegistration,
 
     // Phase 7 — rate limiting (see the block that computes these).
     RATE_LIMIT_ENABLED: rateLimitEnabled,

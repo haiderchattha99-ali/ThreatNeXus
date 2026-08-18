@@ -13,6 +13,12 @@ const BASE_ENV = {
   DATABASE_URL: "postgresql://test:test@localhost:5432/test_db",
   JWT_SECRET,
   CORS_ORIGIN: "http://localhost:5173",
+  // Public registration is CLOSED by default in every environment. The cases
+  // below describe how the endpoint behaves once an operator opens it, so this
+  // suite opens it explicitly — the same shape phase7RateLimiting.test.js uses
+  // to turn a rate-limit bucket on. The shipped default is asserted separately
+  // in publicRegistrationClosed.test.js, so opening it here cannot hide it.
+  ALLOW_PUBLIC_REGISTRATION: "true",
 };
 
 // In-memory stand-in for the data layer. The whole Express stack (routing,

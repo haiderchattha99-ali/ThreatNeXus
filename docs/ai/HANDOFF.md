@@ -1,95 +1,95 @@
-# Handoff: THREATNEXUS-FUNCTIONAL-CLOSURE
+# Handoff: TNX-FINAL-SECURITY-PASS
 
 - From: claude
-- Branch: `docs/tnx-functional-closure`
-- Worktree: `F:\AI-Worktrees\ThreatNeXus\closure`
-- Base / merged main: `origin/main` @ `eb19f4e` (merge of PR #27, TNX-P10C5)
+- Suggested next writer: **codex** — independent review only, then the merge decision
+- Branch: `security/final-bounded-hardening` (from `origin/main` @ `90bdb8b`)
+- Worktree: `F:\AI-Worktrees\ThreatNeXus\final-security` (isolated — the primary checkout was never touched)
+- Writer lock: **released**
 - Updated: 2026-08-18
-- Status: **core_functionally_closed** — Tier N/A (reconciliation, not an engineering ticket).
+- Status: **review** — remediation applied and re-tested, awaiting independent review.
 
-## CORE FUNCTIONAL STATUS: CLOSED
+This was the single bounded authorized security pass — approved optional activity **(A)** from the
+functional-closure record. **It is finished. Do not run a second audit cycle.**
 
-The Phase-10 engineering sequence (10A → 10B → 10C1 → 10C2 → 10C3 → 10C4 → 10C5) is complete and
-merged. No P0/P1 functional blocker exists at the current merged tip. **Begin optional endgame on
-separate explicit authorization; this run started none of it.**
+> Note for any future writer: `handoff-task.ps1` overwrites this file with a five-line template on
+> every run. If you run it, restore the detail below from the prior commit afterwards.
 
-## What was actually checked (reconciliation, not rediscovery)
+---
 
-- **Merge confirmed by Git, not assumed:** `git merge-base --is-ancestor` proves the TNX-P10C5
-  branch is a real ancestor of `origin/main`.
-- **Merged-head regression evidence — the cheapest, strongest signal available:** every merge-to-main
-  CI run from PR #23 (TNX-P10C1) through PR #27 (TNX-P10C5) completed successfully
-  (`gh run list --branch main`). This directly answers "did composing these five tickets together
-  break anything" without re-running any local suite.
-- **Default-off / provider-safety invariants, grep-verified at the merged tip** (not trusted from
-  memory): `AI_ENABLED`, `ENRICHMENT_WORKER_ENABLED`, `AUTO_ENRICHMENT_ENABLED` all default `false` in
-  both `backend/src/config/env.js` and `docker-compose.yml`; `IOC_ENRICHMENT_PROVIDER` defaults
-  `mock` in both. No unintended live/provider default is enabled.
-- **Core data model present:** `User`, `AuditLog`, `Case`, `Notification`, `Finding`, `RiskScore`,
-  `GreyNoiseEnrichment` all confirmed in `backend/prisma/schema.prisma` at the merged tip.
-- **Core frontend routes present:** Dashboard, Findings, FindingDetail, Cases, CaseDetail,
-  Notifications, NotificationDetail, Organizations, Settings, Profile, Analytics, AttackNavigator,
-  Login — the full route set the product's core journeys require.
-- **TNX-P10C5's own closure evidence stands** (recorded earlier this session, not repeated here):
-  177/177 provider suites, 56/56 legacy-route integration, 96/96 inertness/evidence/security, 34/34
-  real-Postgres Phase-10A-2 execution, 3640/3642 full backend suite, zero schema/migration diff, zero
-  live provider contact, one `security-reviewer` pass CLEAR (0 P0/P1).
-- **Stale planning artifacts identified and correctly NOT reopened:** `docs/ai/TASKS.md` stops
-  tracking at Phase 6.3; `../ThreatNeXus-Planning/planning/NEXT_STEPS.md` still says "no
-  implementation work has started"; `BUILD_PLAN.md` only defines Phases 0–7. All three predate the
-  STATE.yaml/HANDOFF.md-per-ticket execution record this project actually used from Phase 0 onward.
-  Historical wording, not a functional gap — per this run's own explicit instruction not to reopen
-  work merely because an old doc disagrees.
+## What was found
 
-## What was updated (minimal, truthful, not a documentation redesign)
+Full report with reproductions, evidence and reasoning:
+**`docs/security/FINAL-SECURITY-ASSESSMENT.md`**.
 
-`README.md`'s "Current status" table was frozen at Phase 9B.1. Added one row each for 10A, 10B,
-10C1–10C3 (grouped), 10C4, and 10C5, corrected the heading and the Roadmap anchor/claim to match, and
-added one new Roadmap bullet recording the still-pending external report dependency (below). This is
-the "README-facing project status" correction this closure run was asked to make — the *professional*
-documentation/diagram finalization pass remains deferred to optional endgame phase C.
+| ID | Sev | Summary | Status |
+|---|---|---|---|
+| SEC-01 | **P0** | Anonymous self-registration → full read of all constituent exposure data | **Fixed** |
+| SEC-02 | **P1** | Every HTML document and asset served with no security headers (nginx `add_header` inheritance) | **Fixed** |
+| SEC-03 | **P2** | Out-of-range resource ids → 500 on 13 entity-by-id routes | **Fixed** |
+| SEC-04 | P3 | `X-Powered-By: Express` | Deferred, deliberate |
+| SEC-05 | P3 | `prisma` CLI in runtime `dependencies` (advisories not runtime-reachable) | Deferred, deliberate |
 
-## External dependency — recorded truthfully, not fabricated or marked complete
+**No authorization bypass was found.** 23 negative probes across four roles plus unauthenticated all
+refused correctly, and independent introspection of the live router confirmed 99 mounted routes with
+exactly the 3 unauthenticated and 1 capability-free exceptions the documentation already claimed.
+The forged-JWT set, the hostile-CSV corpus, the injection battery and the provider-boundary probes
+all came back clean. Those negatives are listed in §6 of the report so they are auditable rather
+than merely implied.
 
-**The expected Rapid7/Sonar-style Open Data (or comparable Shadowserver-style Accessible-RDP)
-report/access response has NOT yet been received.** This is an external data/access dependency, not
-an application defect: the synthetic dataset already exercises the full ingest → triage → case →
-notification → closure path today, and nothing in the ingestion contract depends on receiving the
-external report. If it continues to be unavailable, a legitimate alternate demo dataset may be
-substituted for demonstration purposes only, **provided its provenance is recorded truthfully** rather
-than presented as the original source. Not researched, not downloaded, not substituted this run.
+## The three fixes, and why they are shaped this way
 
-## Deferred / non-blocking (correctly not converted into new tickets)
+**SEC-01.** Two individually correct decisions composed into a critical one: registration is
+unauthenticated because it must be, and `VIEWER` reads findings and cases because read-only
+oversight is a stated requirement. The fix touches neither — it closes the *provisioning* path.
+`ALLOW_PUBLIC_REGISTRATION` defaults **false in every environment, tests included**, because a
+control whose default differs between test and production is a control no test observes. The route
+stays mounted (so the census exception stays truthful), and the refusal happens *before* any field
+parsing, user lookup or bcrypt work, so a closed door is not an email-existence oracle either.
 
-- The four legacy synchronous provider routes remain an off-ledger, credential-armed contact path —
-  now body-size-bounded by 10C-5, still not retired/hardened. Unowned; carried forward, not reopened.
-- 10C-5's own disclosed residuals (bounding beyond the shared 2 MiB limit for large/variable
-  responses; `lookupWithBound`'s outer `Promise.race` still doesn't thread a cancellation signal)
-  remain required only before unattended/production/batch>1 enablement — not before functional
-  closure of the current bounded local/demo deployment model.
-- Whether the CI job for `phase10c3UsageService.test.js` sets `TEST_DATABASE_URL` (carried forward
-  from 10C-3, not re-checked this run — out of scope for a merged-head regression pass).
+**SEC-02.** nginx inherits `add_header` **only if the current level declares none of its own**.
+Rather than repeat the headers in each `location` — which is the same drift that caused the bug —
+the cache policy became a `map` on `$uri`, leaving the `server` block as the file's only
+`add_header` level. No future `location` can silently shadow a header again. The CSP deliberately
+omits `default-src`/`script-src`/`connect-src`: the API origin is a build-time value and normally
+cross-origin, so those directives would have to be generated per deployment, and a CSP that breaks a
+deployment gets switched off rather than fixed.
 
-## Optional endgame — approved, recorded, NOT started
+**SEC-03.** The bound was fixed in the shared `parseResourceId` (19 calling modules) and the
+duplicate parser in `findingReadController.js` was **deleted** rather than patched — a second
+implementation of "is this a valid id?" is exactly how one ends up missing a bound the other has.
 
-Three bounded activities remain, each requiring separate explicit authorization before starting, one
-at a time:
+## Evidence
 
-**A. Security / pentest pass — if time.** Read-only audit/pentest → prioritized evidence → fix P0/P1
-and only the highest-value P2 if time → one targeted re-test → STOP. No endless security loop.
+- Backend `npm test`: **3417 passed / 240 skipped / 0 failed**
+- New: `publicRegistrationClosed.test.js` 9/9, `resourceIdBounds.test.js` 6/6
+- `auth.test.js`, `phase7RateLimiting.test.js`, `phase7RouteCensus.test.js` still green
+- Frontend lint clean (6 pre-existing warnings, none in changed files); production build clean
+- Targeted re-test: registration `403`; all 13 previously-500 routes `400` with `404`/`200` controls
+  intact; all four headers present on every document class and on the hashed asset
+- Real browser: framing refused (*"violates … frame-ancestors 'none'"*), and an `ANALYST` signed in
+  through the containerised UI with the dashboard and Findings rendering live cross-origin data and
+  **zero console errors** — so the CSP breaks nothing
 
-**B. Deep frontend/UI-UX audit + one polish pass.** One rendered, page-by-page audit first (login,
-dashboard, findings, finding detail, cases, settings, navigation, loading/error/empty states,
-mobile/responsive, accessibility, visual cohesion, motion opportunities). Route each recommended
-improvement to the right capability rather than reaching for tools because they exist. Implement one
-approved bounded set, one browser QA pass, STOP. No second polish loop.
+**No live provider was contacted at any point.** Every provider credential was empty in the running
+container, `IOC_ENRICHMENT_PROVIDER=mock`, `AI_ENABLED=false`, worker disabled — verified inside the
+container, not assumed. No destructive testing, no third-party host touched.
 
-**C. Professional final documentation.** After (A)/(B) settle the product surface: README, overview,
-architecture, data-flow diagrams, screenshots, security model, deployment/setup, demo workflow,
-external-data provenance (including the Rapid7/Sonar dependency above), limitations. No AI
-watermarks, no fabricated claims.
+## What the reviewer should look at hardest
+
+1. **`ALLOW_PUBLIC_REGISTRATION` default-false is a behaviour change to a shipped endpoint.** It is
+   the intended fix, but confirm nothing in the demo runbook, CI or the evaluators depends on open
+   registration. Nothing found does: the frontend has no registration UI and `api.js` has no
+   register call.
+2. **The nginx `map` rewrite** — confirm the cache policy is genuinely equivalent for assets
+   (`immutable` preserved) and documents (`no-store` preserved), and that the `map` sits in `http`
+   context correctly. `nginx -t` passes and the served headers were measured, but this is the change
+   with the least automated coverage: no test asserts response headers.
+3. **Residual risk §9 of the report** — in particular that closing registration is *not*
+   retroactive. If a deployed instance ever had it open, the `User` table needs an audit.
 
 ## Next action
 
-Wait for explicit authorization to begin (A), (B), or (C). Do not invent a Phase 11. Do not reopen
-10A–10C5 without genuine new P0/P1 evidence.
+Independent review by a provider other than the author, then the merge decision. **No second
+pentest cycle.** The remaining approved optional activities are **(B)** the deep rendered
+page-by-page frontend/UI-UX audit and **(C)** final documentation/diagram/demo-data finalization —
+each to be started only on separate explicit authorization, one at a time.
