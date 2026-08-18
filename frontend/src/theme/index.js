@@ -212,7 +212,15 @@ export const theme = createTheme({
       styleOverrides: {
         root: {
           '&:last-child td': { borderBottom: 'none' },
-          '&:hover': { backgroundColor: 'rgba(104, 191, 160, 0.04)' },
+          // 4% was a tint you had to look for. On a near-black canvas that is
+          // indistinguishable from no feedback at all, which is what made rows
+          // read as inert even where they navigate. 9% is still quiet enough
+          // not to compete with the evidence.
+          '&:hover': { backgroundColor: 'rgba(104, 191, 160, 0.09)' },
+          // The row a keyboard user is standing on. The focus ring belongs to
+          // the link inside; this band is what tells them WHICH ROW that link
+          // belongs to, which a 2px outline around one cell's text does not.
+          '&:focus-within': { backgroundColor: 'rgba(104, 191, 160, 0.09)' },
         },
       },
     },

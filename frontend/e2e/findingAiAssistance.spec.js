@@ -22,6 +22,12 @@ async function openFirstFinding(page) {
   await expect(firstRow).toBeVisible()
   await firstRow.click()
   await page.waitForURL(/\/findings\/\d+/)
+  // The finding page is decision-first: the optional subsystems sit last and
+  // folded away, so an analyst does not scroll past two subsystems that are off
+  // by default to reach triage. The panel is still MOUNTED and still loads —
+  // only its visibility is deferred — so opening the disclosure is what this
+  // suite has to do before asserting on what it rendered.
+  await page.locator('summary', { hasText: 'AI assistance' }).click()
 }
 
 test('ANALYST sees the AI-assistance panel, correctly disabled by default, with no console problems', async ({ page }) => {

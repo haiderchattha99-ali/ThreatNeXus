@@ -58,6 +58,16 @@ export const TRIAGE_COLORS = {
 // A dismissal with no stated reason is not defensible, so the form requires one.
 export const TRIAGE_DECISIONS_REQUIRING_REASON = ['DISMISSED']
 
+// WHAT recorded a triage decision (the backend's closed TRIAGE_SOURCES set).
+// The history line used to print the raw enum, which matters more than it looks:
+// `RECURRENCE_REOPEN` is the system reacting to evidence, not a person deciding,
+// and the two must not read alike in an audit trail.
+export const TRIAGE_SOURCE_LABELS = {
+  ANALYST_DECISION: 'recorded by an analyst',
+  CASE_LINK: 'set when the finding joined a case',
+  RECURRENCE_REOPEN: 'set automatically when the finding recurred',
+}
+
 export const ORGANIZATION_RESPONSE_TYPES = [
   'ACKNOWLEDGED',
   'INVESTIGATING',

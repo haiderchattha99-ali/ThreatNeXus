@@ -249,12 +249,37 @@ export const DELIVERY_STATUS = Object.freeze({
   UNKNOWN: { label: 'Unknown', tone: 'neutral', icon: 'question' },
 })
 
-// Ownership resolution confidence (Prisma OwnershipConfidence / status).
+// Ownership resolution confidence (Prisma OwnershipConfidence).
 export const OWNERSHIP_CONFIDENCE = Object.freeze({
   CONFIRMED: { label: 'Confirmed', tone: 'success', icon: 'check' },
   HIGH: { label: 'High confidence', tone: 'accent', icon: 'dot' },
   MEDIUM: { label: 'Medium confidence', tone: 'info', icon: 'dot' },
   LOW: { label: 'Low confidence (ISP)', tone: 'warning', icon: 'dot' },
+})
+
+// Ownership resolution outcome (Prisma OwnershipResolutionStatus). Previously
+// printed raw — an analyst read `AMBIGUOUS` in a mono font and had to know the
+// enum to know whether that was good news.
+export const OWNERSHIP_STATUS = Object.freeze({
+  RESOLVED: { label: 'Owner resolved', tone: 'success', icon: 'check' },
+  OVERRIDDEN: { label: 'Set by an analyst', tone: 'accent', icon: 'edit' },
+  AMBIGUOUS: { label: 'Ambiguous', tone: 'warning', icon: 'warning' },
+  UNRESOLVED: { label: 'No owner found', tone: 'neutral', icon: 'minus' },
+})
+
+// How the owner was decided, or why no owner was taken (the resolver's own
+// closed REASON_CODES vocabulary). Rendered as words WITH the code beside them:
+// the sentence is what an analyst reads, the code is what they quote.
+export const OWNERSHIP_REASON = Object.freeze({
+  OWNERSHIP_ANALYST_OVERRIDE: 'An analyst set this owner explicitly.',
+  OWNERSHIP_EXACT_IP_MATCH: 'The exact address is registered to this organization.',
+  OWNERSHIP_CIDR_MATCH: 'Matched the longest registered address range.',
+  OWNERSHIP_ASN_MATCH: 'Matched only at the network-operator (ASN) level.',
+  OWNERSHIP_AMBIGUOUS_EXACT_IP: 'Several organizations claim this exact address, so none was chosen.',
+  OWNERSHIP_AMBIGUOUS_CIDR: 'Several organizations tie on the same address range, so none was chosen.',
+  OWNERSHIP_AMBIGUOUS_ASN: 'Several organizations share this network operator, so none was chosen.',
+  OWNERSHIP_NO_MATCH: 'No registered mapping covers this address.',
+  OWNERSHIP_UNSUPPORTED_INDICATOR: 'This kind of indicator cannot be resolved to an owner.',
 })
 
 // ---------------------------------------------------------------------------
@@ -312,6 +337,8 @@ export default {
   NOTIFICATION_STATE,
   DELIVERY_STATUS,
   OWNERSHIP_CONFIDENCE,
+  OWNERSHIP_STATUS,
+  OWNERSHIP_REASON,
   AVAILABILITY,
   TLP,
 }

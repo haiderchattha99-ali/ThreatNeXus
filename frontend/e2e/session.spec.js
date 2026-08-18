@@ -73,8 +73,13 @@ test('a capability-gated route denies in place and leaves the session intact', a
   // VIEWER does not hold read:notifications. The route denies, and says the
   // server would refuse the underlying request regardless of what renders here.
   await page.goto('/notifications')
-  await expect(page.getByRole('heading', { name: '403 - Access Denied' })).toBeVisible()
+  // One refusal language product-wide: the same DeniedState a panel renders,
+  // promoted to the page's <h1>. The status code stays a stated fact in the body.
+  await expect(
+    page.getByRole('heading', { name: 'You do not have access to this view' })
+  ).toBeVisible()
   await expect(page.getByText(/The\s+server\s+enforces\s+this\s+independently/)).toBeVisible()
+  await expect(page.getByText(/HTTP 403/)).toBeVisible()
 
   expect(await page.evaluate(() => window.localStorage.getItem('token'))).toBe(tokenBefore)
 

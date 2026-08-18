@@ -12,7 +12,7 @@
 // capability regardless of what this shell chose to render.
 
 import React from 'react'
-import { Link as RouterLink, useNavigate } from 'react-router-dom'
+import { Link as RouterLink, useLocation, useNavigate } from 'react-router-dom'
 import {
   AppBar,
   Box,
@@ -28,9 +28,10 @@ import { useTheme } from '@mui/material/styles'
 import { FiMenu, FiLogOut, FiUser, FiChevronDown, FiX } from 'react-icons/fi'
 
 import { useAuth } from '../hooks/useAuth'
+import { useReducedMotion } from '../hooks/useReducedMotion'
 import { SidebarNav, DRAWER_WIDTH } from './Sidebar'
 import { BrandMark } from './ui/Brand'
-import { color, layout, radius, type, font } from '../theme/tokens'
+import { color, layout, motion, radius, type, font } from '../theme/tokens'
 
 const SKIP_TARGET_ID = 'tnx-main-content'
 
@@ -91,6 +92,8 @@ export function AppShell({ children }) {
   const theme = useTheme()
   const isDesktop = useMediaQuery(theme.breakpoints.up('md'))
   const navigate = useNavigate()
+  const { pathname, hash } = useLocation()
+  const reducedMotion = useReducedMotion()
   const { user, capabilities, logout } = useAuth()
 
   const [mobileOpen, setMobileOpen] = React.useState(false)
@@ -102,6 +105,19 @@ export function AppShell({ children }) {
   React.useEffect(() => {
     if (isDesktop) setMobileOpen(false)
   }, [isDesktop])
+
+  // React Router does not restore scroll, so opening a finding from halfway
+  // down the Findings list used to drop the analyst halfway down the finding —
+  // past its own heading, with no indication that the page had changed at all.
+  //
+  // Instant, never smooth: this is a navigation, not an animation, and a
+  // scripted smooth scroll is exactly the kind of motion prefers-reduced-motion
+  // exists to refuse. An in-page anchor (the Finding detail section rail) is
+  // left alone, because there the hash IS the intended destination.
+  React.useEffect(() => {
+    if (hash) return
+    window.scrollTo({ top: 0, left: 0, behavior: 'auto' })
+  }, [pathname, hash])
 
   const handleSignOut = () => {
     setMenuAnchor(null)
@@ -288,12 +304,28 @@ export function AppShell({ children }) {
         }}
       >
         <Box
+          // Route continuity, at the smallest dose that reads as continuity.
+          //
+          // Keyed on the pathname so a navigation replays it and a filter change
+          // (same path, new query) does not. Opacity only, ~one frame budget
+          // over the theme's fast step, no transform, nothing position-shifted
+          // and nothing pointer-blocked: the page is interactive from its first
+          // painted frame. Under reduced motion — OS setting or the in-app
+          // opt-out — no animation is declared at all, rather than one declared
+          // and then zeroed.
+          key={reducedMotion ? undefined : pathname}
           sx={{
             maxWidth: layout.contentMaxWidth,
             mx: 'auto',
             px: { xs: 2, sm: 3, lg: 4 },
             py: { xs: 3, md: 4 },
             pb: { xs: 6, md: 8 },
+            ...(reducedMotion
+              ? null
+              : {
+                  animation: `tnxRouteIn ${motion.fast}ms ${motion.easeOut} both`,
+                  '@keyframes tnxRouteIn': { from: { opacity: 0.35 }, to: { opacity: 1 } },
+                }),
           }}
         >
           {children}

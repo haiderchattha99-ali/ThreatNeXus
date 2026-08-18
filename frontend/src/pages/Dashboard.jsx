@@ -1,5 +1,5 @@
 import React from 'react'
-import { Box } from '@mui/material'
+import { Box, Skeleton } from '@mui/material'
 import { useGSAP } from '@gsap/react'
 import gsap from 'gsap'
 import { ScrollTrigger } from 'gsap/ScrollTrigger'
@@ -7,7 +7,7 @@ import { ScrollTrigger } from 'gsap/ScrollTrigger'
 import { dashboardService } from '../services/api'
 import { useAuth } from '../hooks/useAuth'
 import { useReducedMotion } from '../hooks/useReducedMotion'
-import { ErrorState, LoadingState, PageHeader, Panel, ScopeNote } from '../components/ui'
+import { ErrorState, PageHeader, Panel, ScopeNote, SectionLabel } from '../components/ui'
 import {
   AgeingDistribution,
   IngestionActivity,
@@ -34,6 +34,81 @@ gsap.registerPlugin(ScrollTrigger, useGSAP)
 
 function isReadable(section) {
   return section?.availability === 'AVAILABLE'
+}
+
+// Below the first screen this page was eleven panels in a row, all the same
+// weight, with no statement of what the run of them was for. A reader who
+// scrolled past the queue had no way to tell whether the next panel continued
+// the same thought or started a new one, so the whole lower half read as
+// "additional charts".
+//
+// Two named bands, and nothing else: no re-layout, no reordering, no panel
+// moved between grids. A hairline and a label are enough to say "this run is
+// about WHY the risk looks like this" and "this run is about WORK IN FLIGHT".
+function Band({ label, note }) {
+  return (
+    <Box
+      component="header"
+      sx={{
+        mt: 4,
+        mb: 2,
+        pt: 2.5,
+        borderTop: `1px solid ${color.border}`,
+        display: 'flex',
+        alignItems: 'baseline',
+        gap: 2,
+        flexWrap: 'wrap',
+      }}
+    >
+      <SectionLabel component="h2">{label}</SectionLabel>
+      {note && <Box sx={{ ...type.caption, color: color.textFaint }}>{note}</Box>}
+    </Box>
+  )
+}
+
+// Shaped like the dashboard it stands in for: command header, the four-cell
+// metric strip, then the two first-screen panels. The generic three-bar
+// skeleton it replaces was the same on every screen, so the layout arrived by
+// popping into place rather than by filling in.
+function DashboardSkeleton() {
+  return (
+    <Box role="status" aria-live="polite" aria-busy="true">
+      <Box className="tnx-visually-hidden">Loading your operational workspace…</Box>
+      <Box sx={{ borderBottom: `1px solid ${color.border}`, mb: 2.25, pb: 2.5 }}>
+        <Skeleton variant="text" width={260} height={16} />
+        <Skeleton variant="text" width="38%" height={44} sx={{ mt: 1 }} />
+        <Skeleton variant="text" width="60%" height={18} />
+      </Box>
+      <Box
+        sx={{
+          display: 'grid',
+          gridTemplateColumns: { xs: '1fr 1fr', lg: 'repeat(4, minmax(0, 1fr))' },
+          border: `1px solid ${color.border}`,
+          borderRadius: `${radius.md}px`,
+          overflow: 'hidden',
+        }}
+      >
+        {Array.from({ length: 4 }).map((_, i) => (
+          <Box key={i} sx={{ p: { xs: 1.5, sm: 2 }, borderLeft: { lg: i ? `1px solid ${color.border}` : 0 } }}>
+            <Skeleton variant="text" width="55%" height={14} />
+            <Skeleton variant="text" width="40%" height={34} sx={{ mt: 0.7 }} />
+            <Skeleton variant="text" width="70%" height={12} />
+          </Box>
+        ))}
+      </Box>
+      <Box
+        sx={{
+          mt: 2,
+          display: 'grid',
+          gridTemplateColumns: { xs: 'minmax(0, 1fr)', lg: 'minmax(500px, 1.35fr) minmax(310px, .65fr)' },
+          gap: 2,
+        }}
+      >
+        <Skeleton variant="rectangular" height={330} sx={{ borderRadius: `${radius.md}px` }} />
+        <Skeleton variant="rectangular" height={330} sx={{ borderRadius: `${radius.md}px` }} />
+      </Box>
+    </Box>
+  )
 }
 
 export const Dashboard = () => {
@@ -185,7 +260,7 @@ export const Dashboard = () => {
     }
   }, { scope: shellRef, dependencies: [overview?.generatedAt, reducedMotion], revertOnUpdate: true })
 
-  if (loading && !overview) return <LoadingState label="Loading your operational workspace" />
+  if (loading && !overview) return <DashboardSkeleton />
   if ((error && !overview) || !overview) {
     return <Panel><ErrorState onRetry={load}>The overview could not be loaded. No assumed figures are shown.</ErrorState></Panel>
   }
@@ -250,13 +325,18 @@ export const Dashboard = () => {
         <ScopeNote>{overview.datasetScope}</ScopeNote>
       </Box>
 
+      <Band
+        label="Why the risk looks like this"
+        note="Persisted evidence behind the figures above. Nothing here is a projection or a forecast."
+      />
+
       {/* Phase 6.2 — the one new primary visualization. Full width, and placed
           directly after the first viewport rather than inside it: the question
           it answers ("which factors are producing this risk, and which had no
           readable evidence?") is the SECOND question an analyst asks, after
           "what needs me now?" — which the queue and metrics above already
           answer. Putting it higher would push the queue off the first screen. */}
-      <Box data-secondary-section data-factor-section sx={{ mt: 2 }}>
+      <Box data-secondary-section data-factor-section>
         {isReadable(sections.riskFactorPressure)
           ? <RiskFactorPressure pressure={sections.riskFactorPressure} />
           : <Panel title="What is driving current risk"><SectionFallback section={sections.riskFactorPressure} /></Panel>}
@@ -275,7 +355,12 @@ export const Dashboard = () => {
         </Box>
       </Box>
 
-      <Box sx={{ mt: 2, display: 'grid', gridTemplateColumns: { xs: 'minmax(0, 1fr)', lg: 'minmax(0, 1fr) minmax(0, 1fr)' }, gap: 2 }}>
+      <Band
+        label="Work in flight"
+        note="Investigation states, the role-appropriate notification queue, and what the system has already stored from providers."
+      />
+
+      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'minmax(0, 1fr)', lg: 'minmax(0, 1fr) minmax(0, 1fr)' }, gap: 2 }}>
         <Box data-secondary-section sx={{ minWidth: 0 }}>
           {isReadable(cases)
             ? <WorkflowPressure cases={cases} notificationQueue={sections.notificationQueue} role={role} />

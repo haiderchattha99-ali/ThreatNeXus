@@ -4,6 +4,7 @@ import { Box } from '@mui/material'
 import { useAuth } from '../hooks/useAuth'
 import { hasCapability } from '../utils/permissions'
 import { BrandMark } from './ui/Brand'
+import { DeniedState } from './ui/States'
 import { color, type, radius } from '../theme/tokens'
 
 // Frontend route protection is UX only — it decides what renders, not what is
@@ -80,33 +81,31 @@ export const ProtectedRoute = ({ children, requiredCapability, requireAuthOnly =
     : Boolean(requiredCapability) && hasCapability(capabilities, requiredCapability)
 
   if (!authorized) {
+    // ONE refusal language. This used to be a bespoke "403 - Access Denied"
+    // card, which meant the product shipped two different ways of saying the
+    // same thing — a shouty status-code heading at the route level and the
+    // crafted, icon-and-words DeniedState inside panels. The route case keeps
+    // what was genuinely right about it: an <h1>, because this replaces a whole
+    // page, and role="alert", because arriving somewhere you cannot see is an
+    // unexpected outcome of a deliberate navigation.
     return (
-      <Box
-        role="alert"
-        sx={{ minHeight: '60vh', display: 'grid', placeItems: 'center', px: 3, py: 6 }}
-      >
+      <Box sx={{ minHeight: '60vh', display: 'grid', placeItems: 'center', px: 3, py: 6 }}>
         <Box
           sx={{
-            maxWidth: 460,
-            textAlign: 'center',
+            maxWidth: 560,
             border: `1px solid ${color.border}`,
             borderRadius: `${radius.md}px`,
             backgroundColor: color.surface,
-            px: 4,
-            py: 5,
           }}
         >
-          <Box component="h1" sx={{ ...type.display, color: color.text, m: 0 }}>
-            403 - Access Denied
-          </Box>
-          <Box sx={{ ...type.body, color: color.textMuted, mt: 1.5 }}>
-            Your role does not hold the capability this screen requires. The
-            server enforces this independently — it would refuse the underlying
-            request even if this page were rendered.
-          </Box>
-          {/* The specific capability is deliberately NOT printed: naming the
+          {/* The specific capability is deliberately NOT passed: naming the
               exact grant a caller lacks is a small enumeration aid, and the
               analyst does not need it to know who to ask. */}
+          <DeniedState titleLevel="h1" role="alert">
+            Your role does not hold the capability this screen requires. The
+            server enforces this independently — it would refuse the underlying
+            request (HTTP 403) even if this page were rendered.
+          </DeniedState>
         </Box>
       </Box>
     )

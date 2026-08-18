@@ -55,11 +55,21 @@ const ICONS = {
 
 const FALLBACK = { label: null, tone: 'neutral', icon: 'question' }
 
+// `quiet` drops the semantic FILL, keeping the icon, the words and the border.
+//
+// It exists for one specific hierarchy problem. In a Findings row, amber used to
+// mean three unrelated things at once — an OPEN exposure state, a PERSISTENT
+// lifecycle and a HIGH risk band — so the row shouted three times and ranked
+// nothing. Severity is the thing that should carry colour in a priority list, so
+// the non-severity badges go quiet there. Nothing is lost: the icon and the
+// label are the two redundant signals the accessibility rule actually requires,
+// and colour was never allowed to be the only carrier in the first place.
 export function StatusBadge({
   dictionary,
   value,
   size = 'medium',
   live = false,
+  quiet = false,
   sx = {},
 }) {
   if (value === null || value === undefined || value === '') return null
@@ -85,9 +95,9 @@ export function StatusBadge({
         px: small ? 0.75 : 1,
         py: small ? '2px' : '3px',
         borderRadius: `${radius.sm}px`,
-        border: `1px solid ${fg}55`,
-        backgroundColor: bg,
-        color: fg,
+        border: `1px solid ${quiet ? color.border : `${fg}55`}`,
+        backgroundColor: quiet ? 'transparent' : bg,
+        color: quiet ? color.textMuted : fg,
         fontSize: small ? 11 : 12,
         fontWeight: 600,
         lineHeight: 1.4,

@@ -24,7 +24,20 @@ import {
 } from 'react-icons/fi'
 import { color, type, radius } from '../../theme/tokens'
 
-function Shell({ icon: Icon, tone, title, children, action, role = 'status', dense = false }) {
+function Shell({
+  icon: Icon,
+  tone,
+  title,
+  children,
+  action,
+  role = 'status',
+  dense = false,
+  // A state that REPLACES a whole page owns that page's heading. Passing a
+  // level renders the title as a real <h1>/<h2> at display size instead of a
+  // styled div, so the page is not left headingless for a screen-reader user
+  // navigating by outline.
+  titleLevel,
+}) {
   return (
     <Box
       role={role}
@@ -55,7 +68,12 @@ function Shell({ icon: Icon, tone, title, children, action, role = 'status', den
       >
         <Icon size={18} />
       </Box>
-      <Box sx={{ ...type.bodyStrong, color: color.text }}>{title}</Box>
+      <Box
+        component={titleLevel || 'div'}
+        sx={{ ...(titleLevel ? type.display : type.bodyStrong), color: color.text, m: 0 }}
+      >
+        {title}
+      </Box>
       {children && (
         <Box sx={{ ...type.small, color: color.textMuted, maxWidth: '52ch' }}>{children}</Box>
       )}
@@ -147,9 +165,22 @@ export function ErrorState({
 // Permission denied. Deliberately explicit that the backend is the authority —
 // hiding the control would be a lie about why it is not there, and the backend
 // refuses the request either way.
-export function DeniedState({ capability, children, dense }) {
+//
+// This is the ONE refusal language in the product. `ProtectedRoute` used to
+// render its own "403 - Access Denied" card, so the same fact arrived in two
+// visual and verbal dialects depending on whether a route or a panel refused;
+// `titleLevel` and `role` exist so the route case can own the page heading and
+// keep its assertive announcement without forking the component.
+export function DeniedState({ capability, children, dense, titleLevel, role }) {
   return (
-    <Shell icon={FiLock} tone={color.neutral} title="You do not have access to this view" dense={dense}>
+    <Shell
+      icon={FiLock}
+      tone={color.neutral}
+      title="You do not have access to this view"
+      dense={dense}
+      titleLevel={titleLevel}
+      role={role}
+    >
       {children || (
         <>
           Your role does not hold the capability required for this screen
