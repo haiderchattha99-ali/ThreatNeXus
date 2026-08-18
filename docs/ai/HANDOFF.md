@@ -128,13 +128,29 @@ folded at all — each zero is then the entire answer.
 | backend | `git status --porcelain backend/` empty |
 | dependencies | no `package.json` / lockfile change anywhere |
 
-**CI: green on the first push**, at the exact PR tip `5097367` —
+**CI: green on the first push**, at the code tip `5097367` —
 [run 32192035942](https://github.com/haiderchattha99-ali/ThreatNeXus/actions/runs/32192035942). All
 six required jobs succeeded: Secrets and generated artifacts, Prisma schema and migration history,
 Backend tests, Frontend lint/tests/build, Browser suite (Chromium), Core evaluators. "Mutation and
-concurrency gates" is manual-trigger-only and correctly skipped.
+concurrency gates" is manual-trigger-only and correctly skipped. **Green again at the final PR tip
+`206254a`** — [run 32192517312](https://github.com/haiderchattha99-ali/ThreatNeXus/actions/runs/32192517312).
 
 PR: <https://github.com/haiderchattha99-ali/ThreatNeXus/pull/30>
+
+### One red on the way there, and why it was not a regression
+
+The docs-only commit's first CI attempt failed **one** test:
+`tests/integration/dedupServiceConcurrency.test.js` › *concurrent new-Finding race*. That was
+diagnosed rather than assumed:
+
+- `git diff --name-only 5097367 206254a -- backend/` is **empty** — the entire delta is two
+  `docs/ai/` files.
+- The identical backend code had passed that same job minutes earlier at `5097367`.
+- Re-running the failed job **on unchanged code passed**.
+
+It is a genuine real-PostgreSQL race proof and worth keeping, but it is contention-sensitive on a
+shared GitHub-hosted runner. **A future writer should not read a single red from it as a regression
+without first checking whether `backend/` changed at all.**
 
 ### Red-check — and the one that initially failed to fail
 
