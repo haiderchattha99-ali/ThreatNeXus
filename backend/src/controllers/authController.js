@@ -71,8 +71,33 @@ function auditableEmail(email) {
   return isValidEmail(email) ? email : null;
 }
 
+// Fixed message. It states the policy without telling an anonymous caller
+// which switch would change it.
+const REGISTRATION_CLOSED_MESSAGE =
+  "Self-service registration is disabled. Accounts are provisioned by an administrator.";
+
 const register = async (req, res) => {
   const body = getBody(req);
+
+  // Checked FIRST — before any field is validated, any user lookup runs and
+  // any bcrypt hash is computed. A closed door must not also be an
+  // email-existence oracle or a way to make the server do work.
+  if (!env.ALLOW_PUBLIC_REGISTRATION) {
+    await audit(req, {
+      action: REGISTER_ACTION,
+      outcome: AUDIT_OUTCOMES.DENIED,
+      entityType: "User",
+      // Recorded only when well-formed, exactly as every other branch here
+      // does, so arbitrary input is never persisted verbatim.
+      actorEmail: auditableEmail(normalizeEmail(body.email)),
+      reason: "Registration refused: public self-service registration is disabled",
+    });
+
+    return res.status(403).json({
+      success: false,
+      message: REGISTRATION_CLOSED_MESSAGE,
+    });
+  }
 
   const name = normalizeName(body.name);
   const email = normalizeEmail(body.email);

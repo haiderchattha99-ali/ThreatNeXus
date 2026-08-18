@@ -1,79 +1,92 @@
-{
-    "schema_version":  1,
-    "ticket":  "THREATNEXUS-FUNCTIONAL-CLOSURE",
-    "title":  "Final functional closure of the core ThreatNeXus engineering build (Phases 0 through TNX-P10C5)",
-    "status":  "core_functionally_closed",
-    "owner":  "claude",
-    "reviewer":  "Reconciliation-only. No new implementation review dispatched this run - closure verifies already-reviewed, already-merged work (10A through 10C5, each independently reviewed and CI-green at merge) rather than re-reviewing it.",
-    "branch":  "docs/tnx-functional-closure",
-    "worktree":  "F:\\AI-Worktrees\\ThreatNeXus\\closure",
-    "starting_commit":  "eb19f4e0c16ea6c7a2ebbb4372f4d44d733f072b",
-    "goal":  "Declare CORE FUNCTIONAL STATUS: CLOSED for ThreatNeXus if no P0/P1 blocker exists in the current merged main, following TNX-P10C5's merge (PR #27). Reconciliation and evidence-checking only - no new engineering, no reopened tickets, no optional endgame work (pentest/frontend polish/documentation finalization) started.",
-    "current_work":  "",
-    "files_changed":  [
-                          "README.md",
-                          "docs/ai/STATE.yaml",
-                          "docs/ai/HANDOFF.md"
-                      ],
-    "scope":  {
-                  "included":  [
-                                   "Reconciled the merged main tip (eb19f4e, PR #27 merge) against canonical project truth: CLAUDE.md/AGENTS.md invariants, docs/ai/PRODUCT.md, docs/ai/DECISIONS.md (all D-P10x entries), and this session's own first-hand implementation/review/CI record for the entire 10A-10C5 sequence",
-                                   "Verified every merge-to-main CI run from PR #23 (10C1) through PR #27 (10C5) completed successfully - the direct, cheapest answer to 'did merging these tickets together introduce a functional regression'",
-                                   "Spot-checked (not re-derived from scratch) the safety-critical default-off invariants at the current merged tip: AI_ENABLED, ENRICHMENT_WORKER_ENABLED, AUTO_ENRICHMENT_ENABLED and IOC_ENRICHMENT_PROVIDER all resolve to their safe default in both backend/src/config/env.js and docker-compose.yml",
-                                   "Confirmed the core Prisma models required by the product's core journeys are present at the merged tip: User, AuditLog, Case, Notification, Finding, RiskScore, GreyNoiseEnrichment (plus the other five provider evidence tables by established pattern)",
-                                   "Confirmed the frontend route surface required by the product's core journeys is present: Dashboard, Findings, FindingDetail, Cases, CaseDetail, Notifications, NotificationDetail, Organizations, Settings, Profile, Analytics, AttackNavigator, Login",
-                                   "Identified that docs/ai/TASKS.md and ../ThreatNeXus-Planning/planning/NEXT_STEPS.md are both stale artifacts from early in the project (TASKS.md stops at Phase 6.3 'in verification'; NEXT_STEPS.md still says 'no implementation work has started') - correctly treated as historical wording, not reopened as blockers, per this run's own explicit instruction not to reopen closed work merely because old docs disagree",
-                                   "Updated README.md's 'Current status' table and heading (previously frozen at Phase 9B.1) with one row each for 10A, 10B, 10C1-10C3 (grouped), 10C4, and 10C5, plus the matching Roadmap anchor-link update - a minimal truthful correction, not the professional documentation finalization deferred to optional endgame phase C",
-                                   "Added one new truthful Roadmap bullet recording the still-pending external Shadowserver-style Accessible-RDP report/access request (Rapid7 Open Data or comparable), explicitly framed as an external data/access dependency rather than an application defect, noting the synthetic dataset already exercises the full path and that a substitute demo dataset would need truthful provenance if ever used"
-                               ],
-                  "excluded":  [
-                                   "Any reopening of 10A, 10B, 10C1, 10C2, 10C3, 10C4, or 10C5 - no P0/P1 regression was found in any of them at the merged tip",
-                                   "Any conversion of historical P2/P3 review notes into new required tickets",
-                                   "RETRY_WAIT cleanup - not implemented, not scoped to this closure",
-                                   "Any Phase 11 - none is defined; none was invented",
-                                   "The three approved optional endgame activities (security/pentest pass, deep frontend/UI-UX audit + one polish pass, professional documentation/diagram/demo-data finalization) - recorded below as approved future work, NOT started, NOT executed, NOT even scoped into sub-tickets this run",
-                                   "Any live provider contact - none occurred; the GreyNoise canary from TNX-P10C4 was not repeated",
-                                   "Re-running the full local backend/frontend suites - deliberately not repeated at the closure boundary since (a) TNX-P10C5's own closure run already proved the exact same merged tree green with 3640/3642 backend tests and a real-Postgres suite, and (b) merged-main's own CI (PR #27's merge run, and every merge before it back through PR #23) already independently proved the composed result green - repeating either would be redundant local ceremony the instructions explicitly discourage ('avoid repeating expensive local suites that were already proven at exact feature tips')"
-                               ]
-              },
-    "completed":  [
-                      "Fetched and resolved the exact current origin/main after PR #27's merge: eb19f4e0c16ea6c7a2ebbb4372f4d44d733f072b. Created an isolated closure worktree at F:\\AI-Worktrees\\ThreatNeXus\\closure on a new docs-only branch from that exact commit, acquired the writer lease (a4fd8dbb), and verified the protected primary checkout was never touched",
-                      "Confirmed via `git merge-base --is-ancestor` that the TNX-P10C5 feature branch is a genuine ancestor of origin/main (i.e. actually merged, not merely pushed)",
-                      "Checked `gh run list --branch main` for every merge-to-main CI run across PR #23 through PR #27 (TNX-P10C1 through TNX-P10C5): all five report `completed / success`. This is the merged-head regression evidence the closure standard calls for - not a re-run of local suites",
-                      "Read the current docs/ai/PRODUCT.md, docs/ai/DECISIONS.md (all entries through D-P10C5-01), CLAUDE.md/AGENTS.md's binding invariants list, and this session's own first-hand record of implementing, testing, and reviewing 10A through 10C5 end to end - used as canonical truth per the run's own instruction to reconcile against canonical state rather than perform a giant rediscovery exercise",
-                      "Grep-verified the default-off safety invariants directly in the merged source rather than trusting memory: AI_ENABLED, ENRICHMENT_WORKER_ENABLED, AUTO_ENRICHMENT_ENABLED all default false in backend/src/config/env.js AND docker-compose.yml; IOC_ENRICHMENT_PROVIDER defaults to 'mock' in both. No unintended live/provider default is enabled at the merged tip",
-                      "Grep-verified the core Prisma schema models (User, AuditLog, Case, Notification, Finding, RiskScore, GreyNoiseEnrichment) and the frontend's full page/route set are present at the merged tip, confirming the product's core journeys (ingest, triage, case, closure, notification, framework mapping, dashboard/analytics, auth) still exist in the shipped application, not merely in historical commit messages",
-                      "Identified docs/ai/TASKS.md and ../ThreatNeXus-Planning/planning/NEXT_STEPS.md as stale, pre-Phase-10 (in NEXT_STEPS.md's case, pre-Phase-0) planning artifacts that were never updated to track the STATE.yaml-driven execution record this project actually used from Phase 0 onward. Correctly treated as historical wording per this run's explicit instruction, not as a reason to reopen or re-litigate anything",
-                      "Updated README.md: the 'Current status' heading and table gained one row each for Phases 10A, 10B, 10C1-10C3 (grouped, matching how the table already groups sibling sub-phases), 10C4, and 10C5; the Roadmap section's anchor link and delivered-phases claim were corrected to match; one new Roadmap bullet records the still-pending external Shadowserver-style report/access dependency truthfully, without fabricating its contents or marking it complete",
-                      "Rewrote docs/ai/STATE.yaml and docs/ai/HANDOFF.md from TNX-P10C5's now-merged per-ticket state to the project-level functional-closure record"
-                  ],
-    "validation":  {
-                       "passing":  [
-                                       "git merge-base --is-ancestor origin/feat/phase-10c5-bounded-provider-response-bodies origin/main -> confirmed merged",
-                                       "gh run list --branch main -> PR #23 (10C1), #24 (10C2), #25 (10C3), #26 (10C4), #27 (10C5) merge-to-main CI runs all completed/success",
-                                       "grep AI_ENABLED/ENRICHMENT_WORKER_ENABLED/AUTO_ENRICHMENT_ENABLED/IOC_ENRICHMENT_PROVIDER in backend/src/config/env.js and docker-compose.yml -> every default is the safe one (false/false/false/mock)",
-                                       "grep core Prisma models in backend/prisma/schema.prisma -> User, AuditLog, Case, Notification, Finding, RiskScore, GreyNoiseEnrichment all present",
-                                       "find frontend/src/pages -> Dashboard, Findings, FindingDetail, Cases, CaseDetail, Notifications, NotificationDetail, Organizations, Settings, Profile, Analytics, AttackNavigator, Login all present",
-                                       "TNX-P10C5's own closure evidence (already recorded in this session, not repeated): 177/177 provider suites, 56/56 legacy-route integration, 96/96 inertness/evidence/security, 34/34 real-Postgres Phase-10A-2 execution, 3640/3642 full backend suite (2 unrelated pre-existing skips), zero schema/migration diff, zero live provider contact, security-reviewer CLEAR (0 P0/P1)"
-                                   ],
-                       "failing":  [],
-                       "not_applicable_this_gate":  [
-                                       "Re-running the full local backend/frontend suites - superseded by merged-main's own green CI (the stronger, composed-result evidence) plus TNX-P10C5's own already-recorded local evidence",
-                                       "Any live-provider re-verification - the 10C4 canary already proved real contact once; repeating it is explicitly prohibited this run",
-                                       "The three optional endgame activities - correctly out of scope for a closure run, recorded below as approved future work only"
-                                   ],
-                       "independent_review":  "NOT DISPATCHED this run, and not required: this is a reconciliation/closure pass over already-independently-reviewed, already-CI-green, already-merged work (each of 10A-10C5 individually cleared its own review gate before merging). Dispatching a fresh reviewer here would be re-reviewing accepted work, which the run's own instructions explicitly discourage ('do not reopen accepted work... unless current merged source/evidence reveals a genuine P0/P1 regression') - and no such regression was found.",
-                       "primary_checkout":  "VERIFIED UNTOUCHED - only F:\\AI-Worktrees\\ThreatNeXus\\closure was written to this session"
-                   },
-    "known_issues":  [
-                         "EXTERNAL DEPENDENCY, NOT AN APPLICATION DEFECT: the expected Rapid7/Sonar-style Open Data or comparable Shadowserver-style Accessible-RDP report/access response has NOT yet been received. The synthetic dataset already exercises the full ingest-to-closure path; nothing in the ingestion contract depends on receiving the external report. A legitimate alternate demo dataset may be substituted for demonstration if the original continues to be unavailable, provided its provenance is recorded truthfully - not researched or downloaded this run, per explicit instruction.",
-                         "DEFERRED, NOT BLOCKING (documentation-only staleness, now partially corrected): docs/ai/TASKS.md still only tracks tickets through Phase 6.3 and was not updated to track Phase 7 onward; ../ThreatNeXus-Planning/planning/NEXT_STEPS.md and BUILD_PLAN.md remain frozen at the original pre-Phase-0 and Phase-0-through-7 planning scope and were never extended to describe Phase 8 through 10C5. Both are historical planning artifacts, superseded in practice by the STATE.yaml/HANDOFF.md-per-ticket execution record this project actually used - noted here for a future documentation-finalization pass (optional endgame phase C), not treated as a functional gap.",
-                         "DELIBERATE OPTIONAL/DEFERRED (carried forward from D-P10C4-01/D-P10C5-01, unchanged by this closure): the four legacy synchronous provider routes remain an off-ledger, credential-armed contact path, now body-size-bounded (10C-5) but still not retired/hardened - unowned, correctly not converted into a required ticket by this closure run. 10C-5's own residual (provider response-body SIZE hardening for large/variable responses beyond the shared 2 MiB bound, and lookupWithBound's outer Promise.race non-cancellation) remains recorded as required only before unattended/production/batch>1 enablement - not before functional closure of the current bounded local/demo deployment model.",
-                         "CARRIED FORWARD, UNVERIFIED THIS RUN (pre-existing, noted in 10C3's own state): whether the CI job running backend/tests/integration/phase10c3UsageService.test.js sets TEST_DATABASE_URL, or the suite self-skips. Not re-checked this closure run - out of scope for a merged-head regression check and not a new finding."
-                     ],
-    "next_action":  "CORE ENGINEERING COMPLETE — BEGIN OPTIONAL ENDGAME. The core ThreatNeXus product is functionally closed at eb19f4e (main, PR #27 merged). No P0/P1 functional blocker exists. Three bounded, already-approved optional activities remain, to be started only on separate explicit authorization, one at a time: (A) one authorized security/pentest pass if time allows - read-only audit -> prioritized evidence -> fix P0/P1 + highest-value P2 if time -> one targeted re-test -> STOP, no endless loop; (B) one deep rendered page-by-page frontend/UI-UX audit followed by exactly one approved bounded polish pass and one browser QA pass -> STOP, no second polish loop; (C) professional final documentation/diagram/demo-data finalization once the product surface is settled by (A)/(B), including truthful resolution of the still-pending external Shadowserver-style report dependency. This closure run did not start any of the three.",
-    "checkpoint_ref":  "",
-    "pr_url":  "",
-    "updated_at":  "2026-08-18T00:00:00.0000000Z",
-    "next_writer":  "unassigned"
+﻿{
+    "schema_version": 1,
+    "ticket": "TNX-FINAL-SECURITY-PASS",
+    "title": "Single bounded authorized application-security assessment of the functionally closed product",
+    "status": "review",
+    "owner": "claude",
+    "reviewer": "codex",
+    "branch": "security/final-bounded-hardening",
+    "worktree": "F:\\AI-Worktrees\\ThreatNeXus\\final-security",
+    "starting_commit": "90bdb8b",
+    "goal": "One bounded, authorized, non-destructive application-security pass over merged main 90bdb8b: evidence-based findings, fix verified P0/P1 plus the single highest-value P2, one targeted re-test, regression, PR. Not a new engineering phase and not a second audit loop.",
+    "current_work": "Assessment complete, remediation applied and re-tested. Awaiting independent review and merge decision.",
+    "files_changed": [
+        "backend/src/config/env.js",
+        "backend/src/controllers/authController.js",
+        "backend/src/controllers/findingReadController.js",
+        "backend/src/lib/validation.js",
+        "backend/tests/integration/auth.test.js",
+        "backend/tests/integration/publicRegistrationClosed.test.js",
+        "backend/tests/unit/resourceIdBounds.test.js",
+        "backend/.env.example",
+        "docker-compose.yml",
+        "frontend/nginx.conf",
+        "docs/ai/SECURITY.md",
+        "docs/security/FINAL-SECURITY-ASSESSMENT.md"
+    ],
+    "scope": {
+        "included": [
+            "SEC-01 P0 fixed - public self-service registration closed by default, audited refusal, 9 new tests",
+            "SEC-02 P1 fixed - nginx security headers restored on every response class + CSP added",
+            "SEC-03 P2 fixed - resource id bound aligned to int4 at the shared helper, duplicate parser deleted, 6 new tests",
+            "docs/security/FINAL-SECURITY-ASSESSMENT.md - the assessment report",
+            "docs/ai/SECURITY.md - correction recorded against the prior unauthenticated-route claim"
+        ],
+        "excluded": [
+            "SEC-04 P3 (X-Powered-By: Express) - deliberately deferred; cosmetic P3 is outside a bounded pass",
+            "SEC-05 P3 (prisma CLI in runtime dependencies) - deferred; the 3 high advisories are NOT runtime-reachable, and moving it needs its own verification of the Docker migrate-on-start path",
+            "No Prisma schema, migration, route, capability grant, workflow rule or provider behaviour changed",
+            "No frontend source (.jsx) changed - nginx.conf only, so no UI regression surface",
+            "No dependency added, removed or upgraded anywhere",
+            "The primary checkout at C:\\Users\\LENOVO\\Desktop\\ThreatNeXus was never touched"
+        ]
+    },
+    "completed": [
+        "Grounded on the canonical AI Dev Team workflow, project AGENTS.md/CLAUDE.md, docs/ai/{STATE.yaml,HANDOFF.md,SECURITY.md}; confirmed this run is pre-approved optional activity (A) from the closure record",
+        "Created an isolated worktree from origin/main 90bdb8b and acquired writer lease e03d29da; no other writer held the repository",
+        "Built an 11-hypothesis test plan from the ACTUAL architecture: User carries no organizationId, so ThreatNeXus is single-tenant and cross-tenant IDOR/BOLA is not a meaningful class - effort went to vertical authorization, workflow integrity and the provider boundary",
+        "Stood up a disposable Docker stack on non-default ports with every provider credential empty; verified inside the container that no live provider contact was possible at any point",
+        "Independently re-derived the guard on every mounted route: 99 routes, exactly 3 unauthenticated and exactly 1 authenticated-but-capability-free, matching the documented exception lists",
+        "Ran 23 negative authorization probes across VIEWER/REVIEWER/ANALYST/self-registered/unauthenticated - every one refused correctly, positive controls 200. No privilege escalation found",
+        "Forged JWTs (alg:none with and without signature, wrong-key HS256, expired, payload tampered to ADMIN) - all rejected with an identical generic 401",
+        "Uploaded a 10-file hostile CSV corpus (formula injection, XSS, out-of-range port, 20k field, NUL byte, wrong schema, header-only, binary, wrong extension, traversal filename) - every one a distinct controlled reason code, nothing written outside the upload dir",
+        "Proved rate limiting live (upload bucket refused at 20/15min with Retry-After) and confirmed refused registrations still consume the credential budget",
+        "Confirmed force:true does not bypass provider controls (ALREADY_PENDING / SKIPPED_DISABLED) and the ledger truthfully reports PAUSED_WORKER_DISABLED",
+        "Fixed SEC-01/SEC-02/SEC-03 at their roots, not at their symptoms - the id fix went into the shared helper and deleted the duplicate rather than patching one controller",
+        "Targeted re-test: registration 403 and the account cannot exist; all 13 previously-500 routes now 400 with 404/200 controls intact; all four security headers present on every document class and the hashed asset",
+        "Proved the clickjacking fix in a real browser - the console refused the frame with 'violates ... frame-ancestors none'; signed in as ANALYST through the containerised UI and confirmed the dashboard and Findings render live cross-origin data with ZERO console errors, so the CSP breaks nothing"
+    ],
+    "validation": {
+        "passing": [
+            "backend: npm test - 3417 passed / 240 skipped / 0 failed (exit 0)",
+            "backend: targeted - publicRegistrationClosed.test.js 9/9, resourceIdBounds.test.js 6/6",
+            "backend: auth.test.js, phase7RateLimiting.test.js, phase7RouteCensus.test.js all still green",
+            "frontend: npm run lint - clean (6 pre-existing fast-refresh warnings, none in changed files)",
+            "frontend: npm run build - clean production build",
+            "nginx -t - configuration syntax ok in the running container"
+        ],
+        "failing": [],
+        "sec01_retest": "PASS - anonymous POST /api/auth/register returns 403 with the fixed message; login as the never-created account returns 401",
+        "sec02_retest": "PASS - /, /index.html, /findings, /cases/1 and the hashed asset all carry X-Content-Type-Options, X-Frame-Options, Referrer-Policy and the CSP; cache policy still correct and no longer duplicated; browser refuses to frame the console",
+        "sec03_retest": "PASS - all 13 previously-500 entity-by-id routes now 400; 2147483647 still 404; real records still 200",
+        "no_live_provider_calls": "PASS - every provider credential empty in the running container, IOC_ENRICHMENT_PROVIDER=mock, AI_ENABLED=false, ENRICHMENT_WORKER_ENABLED=false. No third party was contacted at any point",
+        "no_destructive_testing": "PASS - no resource-exhaustion, no concurrency exploitation, no internet host touched, no third-party credential used",
+        "secret_sweep": "PASS - no .env or key material tracked; served bundle carries no secret-shaped value; 0 secrets in server logs; 0 of 141 audit rows contained a secret-shaped value",
+        "staging_discipline": "PASS - explicit paths only, never git add -A; git status reviewed before and after"
+    },
+    "known_issues": [
+        "Closing registration is NOT retroactive: any account created while it was open remains valid. Operators should audit the User table and the auth.register audit trail before relying on the fix",
+        "SEC-04 (X-Powered-By: Express) and SEC-05 (prisma CLI in runtime dependencies) are confirmed and deliberately deferred - see the report's section 5 for the reasoning",
+        "The shipped CSP has no script-src/connect-src, so XSS mitigation still rests on React escaping and the verified absence of HTML sinks. A per-deployment CSP pinning the API origin would be stronger",
+        "Sessions are bearer tokens in localStorage with a 24h default and no server-side revocation. A design property of the system, not introduced or fixed here",
+        "Legacy synchronous provider routes remain outside the Phase-10 usage ledger (excludedPaths), so an attempt-row count is not by itself a no-contact proof. The no-contact claim rests on every credential being empty, verified in the container",
+        "This was ONE bounded pass by ONE reviewer. No DAST/SAST engine was run (reasoning in report section 4) and absence of a finding is not proof of absence of a vulnerability"
+    ],
+    "next_action": "Independent review of this branch by Codex (a provider other than the author), then the merge decision. Do NOT run a second pentest cycle. The remaining approved optional activities are (B) the deep rendered page-by-page frontend/UI-UX audit and (C) final documentation/demo finalization, each to be started only on separate explicit authorization.",
+    "checkpoint_ref": "",
+    "pr_url": "",
+    "updated_at": "2026-08-18T09:20:00.0000000Z",
+    "next_writer": "codex",
+    "root_cause": "SEC-01 (P0): POST /api/auth/register was open AND a self-registered account is a VIEWER, which holds read:dashboard/read:findings/read:cases. Each decision is defensible alone; composed they let any anonymous caller create an account and read every finding (victim address, port, owning organization), every case (including analyst email addresses) and the dashboard - two unauthenticated requests, no user interaction. The frontend never called the route at all. SEC-02 (P1): nginx does not merge add_header down a level - it inherits ONLY if the current level defines none. server-level security headers were therefore discarded by the two location blocks that declared their own Cache-Control add_header, and because location / serves the SPA through try_files whose last argument is an internal redirect, EVERY HTML document landed on location = /index.html. All documents and all hashed assets shipped with no X-Frame-Options, no X-Content-Type-Options, no Referrer-Policy and no CSP. SEC-03 (P2): parseResourceId bounded ids with Number.isSafeInteger (2^53-1) while every id column is PostgreSQL int4 (2^31-1), so values in between passed validation and reached Prisma as an unhandled error - 500 on 13 entity-by-id routes where 2147483647 correctly returned 404.",
+    "final_contract": "ALLOW_PUBLIC_REGISTRATION defaults false in EVERY environment including test; the route stays mounted and answers an audited 403 before any user lookup or bcrypt work. nginx computes cache policy with a map on $uri so the server block is the only add_header level in the file, plus a CSP of frame-ancestors 'none'; base-uri 'self'; object-src 'none'; form-action 'self' - deliberately no default-src/script-src/connect-src, because the API origin is a build-time value and a per-deployment CSP that breaks gets switched off rather than fixed. MAX_RESOURCE_ID=2147483647 bounds parseResourceId for all 19 calling modules and the duplicate parser in findingReadController.js is deleted. No authorization decision, capability grant, workflow rule, schema, migration or provider behaviour was changed."
 }

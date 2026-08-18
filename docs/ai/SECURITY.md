@@ -38,6 +38,19 @@ guard. Exactly two exception lists exist, each entry carrying its reason:
 - **Unauthenticated by necessity** — `POST /api/auth/login`, `POST /api/auth/register`, `GET /`.
   The first two cannot require a credential the caller does not yet have; the third is a fixed
   liveness banner that reads nothing.
+
+  **Correction (final security pass).** "Cannot require a credential" was true of registration and
+  was not the whole answer. The route was also *open*, and a self-registered account is a `VIEWER`,
+  which holds `read:dashboard`, `read:findings` and `read:cases`. Each decision is right on its own;
+  composed, they meant any anonymous caller could create an account and then read every finding
+  (victim address, port, owning organization), every case and the operational dashboard — measured
+  against a running stack, not argued from the source. `POST /api/auth/register` is now **closed by
+  default in every environment**, answering `403` with an audited `auth.register` / `DENIED` event
+  unless `ALLOW_PUBLIC_REGISTRATION=true`. The route stays mounted, so this exception entry stays
+  accurate; accounts are provisioned by `seedUsers.js`.
+  `tests/integration/publicRegistrationClosed.test.js` asserts the shipped default, that the refusal
+  happens before any user lookup or bcrypt work (so it is not an email-existence oracle), and that
+  only a literal `"true"` opens it.
 - **Authenticated but capability-free** — `GET /api/profile` only. It echoes the caller's own
   token-derived identity and the capability list implied by their role. A capability answers "may
   this role reach other people's data?", which is not a meaningful question for an endpoint that

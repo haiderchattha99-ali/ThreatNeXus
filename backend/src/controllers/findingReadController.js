@@ -12,12 +12,14 @@ const {
   getFindingDetail,
   FindingQueryError,
 } = require("../services/findings/findingReadService");
+const { parseResourceId } = require("../lib/validation");
 
-function parseId(raw) {
-  const id = Number(raw);
-  if (!Number.isInteger(id) || id < 1) return null;
-  return id;
-}
+// This file used to carry its own `Number(raw)` id parser. It is deleted
+// rather than patched: a second implementation of "is this a valid id?" is how
+// one of them ends up with a bound the other lacks, which is exactly what
+// happened — the local copy accepted every integer above the int4 range and
+// handed it straight to Prisma. All controllers now share parseResourceId.
+const parseId = parseResourceId;
 
 async function getFindings(req, res, next) {
   try {

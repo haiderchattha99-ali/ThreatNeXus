@@ -47,13 +47,28 @@ function normalizeName(value) {
 // so call sites reading "normalizeName(title)" don't look like a mistake.
 const normalizeRequiredString = normalizeName;
 
+// Every id column in schema.prisma is a Prisma `Int`, i.e. PostgreSQL int4.
+// A value above this cannot identify a row — it is out of range for the very
+// column it would be compared against.
+const MAX_RESOURCE_ID = 2147483647;
+
 // Route params are untrusted strings. Number("") is 0 and Number("1abc") is
 // NaN, either of which would reach Prisma as a bogus `where: { id }`, so ids
 // are parsed strictly here: only a plain positive integer is accepted and
 // anything else returns null for the caller to turn into a controlled 400.
+//
+// The upper bound is MAX_RESOURCE_ID, not Number.isSafeInteger. Bounding at the
+// safe-integer limit (2^53-1) validated the wrong property: it asks "does
+// JavaScript hold this exactly?" when the question is "can this be an id in
+// this database?". Every value in (2^31-1, 2^53-1] passed that check, reached
+// Prisma, and was refused there instead — turning a caller-supplied path
+// segment into an unhandled PrismaClientUnknownRequestError and a 500 on every
+// entity-by-id route, where an out-of-range id has to mean 400.
 function parseResourceId(value) {
   if (typeof value === "number") {
-    return Number.isSafeInteger(value) && value > 0 ? value : null;
+    return Number.isInteger(value) && value > 0 && value <= MAX_RESOURCE_ID
+      ? value
+      : null;
   }
   if (typeof value !== "string") return null;
 
@@ -61,7 +76,9 @@ function parseResourceId(value) {
   if (!/^\d+$/.test(trimmed)) return null;
 
   const parsed = Number(trimmed);
-  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+  return Number.isInteger(parsed) && parsed > 0 && parsed <= MAX_RESOURCE_ID
+    ? parsed
+    : null;
 }
 
 // Copies only the listed keys that the caller actually supplied. Two reasons:
@@ -86,6 +103,7 @@ module.exports = {
   MAX_EMAIL_LENGTH,
   MIN_PASSWORD_LENGTH,
   MAX_PASSWORD_LENGTH,
+  MAX_RESOURCE_ID,
   normalizeEmail,
   isValidEmail,
   isValidPassword,

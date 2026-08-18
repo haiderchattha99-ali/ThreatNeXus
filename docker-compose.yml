@@ -80,6 +80,12 @@ services:
       # with a clear message rather than starting with a guessable secret.
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET, e.g. JWT_SECRET="$(openssl rand -base64 48)" docker compose up}
       JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-24h}
+      # Public self-service registration, closed by default. A self-registered
+      # account is a VIEWER, and VIEWER can read every finding, every case and
+      # the dashboard — so an open registration endpoint is an anonymous read
+      # of the constituent exposure data. Provision accounts with
+      # `docker compose exec ... npm run seed:users` instead.
+      ALLOW_PUBLIC_REGISTRATION: ${ALLOW_PUBLIC_REGISTRATION:-false}
       CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:5173}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       UPLOAD_MAX_BYTES: ${UPLOAD_MAX_BYTES:-5242880}
