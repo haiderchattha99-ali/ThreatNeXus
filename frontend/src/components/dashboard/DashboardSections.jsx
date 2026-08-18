@@ -117,26 +117,39 @@ export function MetricStrip({ metrics }) {
   )
 }
 
+// Severity leads here for the same reason it leads the Findings table: this is a
+// priority queue, and a queue that ranks by risk should be READABLE as ranked.
+// The band moves to the leading edge behind a coloured spine, and the row's
+// supporting facts stay where they were. The band name is still spelled out
+// beside the spine, so the colour is reinforcement and never the carrier.
 function FindingQueueRow({ item }) {
+  const band = item.risk?.state === 'SCORED' ? item.risk.band : null
   return (
-    <Box component={RouterLink} to={`/findings/${item.id}`} data-queue-row sx={queueRowSx}>
-      <Box sx={{ minWidth: 0 }}>
-        <Box sx={{ ...type.code, color: color.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {item.indicatorValue}{item.port ? `:${item.port}` : ''}
+    <Box
+      component={RouterLink}
+      to={`/findings/${item.id}`}
+      data-queue-row
+      sx={{ ...queueRowSx, borderLeft: `3px solid ${band ? riskBandColor[band] || color.neutral : 'transparent'}` }}
+    >
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, minWidth: 0 }}>
+        <Box sx={{ flexShrink: 0, minWidth: { xs: 0, sm: 116 } }}>
+          {band
+            ? <RiskBandBadge band={band} score={item.risk.displayScore} size="small" />
+            : <Chip size="small" label="Not scored" variant="outlined" />}
         </Box>
-        <Box sx={{ ...type.caption, color: color.textMuted, mt: 0.35, display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
-          <span>{item.reportType?.replace(/_/g, ' ') || 'Unknown report type'}</span>
-          <span aria-hidden="true">·</span>
-          <span>{item.occurrenceCount} observation{item.occurrenceCount === 1 ? '' : 's'}</span>
-          {item.recurred && <><span aria-hidden="true">·</span><span style={{ color: color.danger }}>Recurred</span></>}
+        <Box sx={{ minWidth: 0 }}>
+          <Box sx={{ ...type.code, color: color.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {item.indicatorValue}{item.port ? `:${item.port}` : ''}
+          </Box>
+          <Box sx={{ ...type.caption, color: color.textMuted, mt: 0.35, display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
+            <span>{item.reportType?.replace(/_/g, ' ') || 'Unknown report type'}</span>
+            <span aria-hidden="true">·</span>
+            <span>{item.occurrenceCount} observation{item.occurrenceCount === 1 ? '' : 's'}</span>
+            {item.recurred && <><span aria-hidden="true">·</span><span style={{ color: color.danger }}>Recurred</span></>}
+          </Box>
         </Box>
       </Box>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexShrink: 0 }}>
-        {item.risk?.state === 'SCORED'
-          ? <RiskBandBadge band={item.risk.band} score={item.risk.displayScore} />
-          : <Chip size="small" label="Not scored" variant="outlined" />}
-        <FiArrowRight aria-hidden="true" />
-      </Box>
+      <FiArrowRight aria-hidden="true" style={{ flexShrink: 0 }} />
     </Box>
   )
 }

@@ -291,7 +291,7 @@ test('VIEWER is denied report ingestion in place, sends no upload, and stays sig
   // navigation is what actually proves the route fails closed rather than
   // merely being unlinked.
   await page.goto('/upload')
-  await expect(page.getByRole('alert')).toContainText('Access Denied')
+  await expect(page.getByRole('alert')).toContainText('You do not have access to this view')
 
   // The refusal happens before any request leaves the browser.
   expect(uploadRequests).toEqual([])

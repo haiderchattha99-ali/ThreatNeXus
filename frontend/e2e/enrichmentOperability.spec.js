@@ -94,7 +94,9 @@ test('ANALYST never sees the panel and never triggers the request', async ({ pag
   // ANALYST cannot load the page at all.
   await signIn(page, 'ANALYST')
   await page.goto('/settings')
-  await expect(page.getByRole('heading', { name: '403 - Access Denied' })).toBeVisible()
+  await expect(
+    page.getByRole('heading', { name: 'You do not have access to this view' })
+  ).toBeVisible()
 
   // Give any stray effect a tick before asserting the negative.
   await page.waitForTimeout(500)

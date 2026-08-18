@@ -1,13 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react'
-import {
-  Box,
-  Button,
-  Chip,
-  CircularProgress,
-  MenuItem,
-  TextField,
-  Typography,
-} from '@mui/material'
+import { Box, Button, Chip, MenuItem, TextField, Typography } from '@mui/material'
 import toast from 'react-hot-toast'
 
 import { findingTriageService } from '../services/api'
@@ -19,9 +11,12 @@ import {
   TRIAGE_DECISION_OPTIONS,
   TRIAGE_DECISIONS_REQUIRING_REASON,
   TRIAGE_LABELS,
+  TRIAGE_SOURCE_LABELS,
   describeWorkflowError,
   formatInstant,
 } from '../constants/caseWorkflow'
+import { LoadingState } from './ui/States'
+import { color, type, OWNERSHIP_STATUS } from '../theme/tokens'
 
 /**
  * The current triage state of one Finding, its append-only decision history,
@@ -84,50 +79,57 @@ export function FindingTriagePanel({ findingId, onTriaged }) {
   }
 
   if (loading) {
+    // A bare spinner announced nothing and reserved no space, so the panel
+    // jumped when the real state arrived. LoadingState says what is loading, in
+    // words, to a screen reader.
     return (
-      <Box sx={{ py: 3, textAlign: 'center' }} data-testid="triage-loading">
-        <CircularProgress size={20} />
+      <Box data-testid="triage-loading">
+        <LoadingState label="Loading the triage state" dense />
       </Box>
     )
   }
 
   if (!context) {
     return (
-      <Typography sx={{ color: '#75899E', fontSize: 12 }}>Triage unavailable.</Typography>
+      <Typography sx={{ ...type.caption, color: color.textFaint }}>Triage unavailable.</Typography>
     )
   }
 
   const current = context.decision || 'UNTRIAGED'
+  const ownershipStatus = context.ownership?.status
+  const ownershipLabel = OWNERSHIP_STATUS[ownershipStatus]?.label || ownershipStatus
 
   return (
     <Box sx={{ py: 1 }} data-testid={`triage-panel-${findingId}`}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
-        <Typography sx={{ fontSize: 11, color: '#75899E', textTransform: 'uppercase' }}>
-          Triage
-        </Typography>
+        <Typography sx={{ ...type.label, color: color.textFaint }}>Triage</Typography>
         <Chip
           size="small"
           label={TRIAGE_LABELS[current] || current}
           data-testid={`triage-state-${findingId}`}
           sx={{
-            bgcolor: `${TRIAGE_COLORS[current] || '#7C8AA0'}22`,
-            color: TRIAGE_COLORS[current] || '#7C8AA0',
+            bgcolor: `${TRIAGE_COLORS[current] || color.neutral}22`,
+            color: TRIAGE_COLORS[current] || color.neutral,
             fontWeight: 700,
             fontSize: 10,
           }}
         />
+        {/* Ownership status was printed as its raw enum here. It is the same
+            fact the Finding detail screen shows, so it now reads the same. */}
         {context.ownership ? (
-          <Typography sx={{ fontSize: 11, color: '#75899E' }}>
-            Ownership: {context.ownership.status}
-            {context.ownership.isIspAttribution ? ' (ISP-attributed)' : ''}
+          <Typography sx={{ ...type.caption, color: color.textMuted }}>
+            Ownership: {ownershipLabel}
+            {context.ownership.isIspAttribution ? ' (network operator only)' : ''}
           </Typography>
         ) : (
-          <Typography sx={{ fontSize: 11, color: '#75899E' }}>Ownership: not resolved</Typography>
+          <Typography sx={{ ...type.caption, color: color.textMuted }}>
+            Ownership: not resolved
+          </Typography>
         )}
       </Box>
 
       {context.linkedCases?.length > 0 && (
-        <Typography sx={{ mt: 1, fontSize: 11, color: '#9DAFC2' }}>
+        <Typography sx={{ mt: 1, ...type.caption, color: color.textMuted }}>
           Evidence in{' '}
           {context.linkedCases.map((c) => c.caseReference || `case ${c.id}`).join(', ')}
         </Typography>
@@ -136,9 +138,9 @@ export function FindingTriagePanel({ findingId, onTriaged }) {
       {context.history?.length > 0 && (
         <Box sx={{ mt: 1.5 }} data-testid={`triage-history-${findingId}`}>
           {context.history.map((row) => (
-            <Typography key={row.id} sx={{ fontSize: 11, color: '#9DAFC2', mt: 0.4 }}>
+            <Typography key={row.id} sx={{ ...type.caption, color: color.textMuted, mt: 0.4 }}>
               {formatInstant(row.decidedAt)} · {TRIAGE_LABELS[row.decision] || row.decision} ·{' '}
-              {row.source}
+              {TRIAGE_SOURCE_LABELS[row.source] || row.source}
               {row.isCurrent ? ' · current' : ''}
               {row.reason ? ` — ${row.reason}` : ''}
             </Typography>
@@ -170,13 +172,17 @@ export function FindingTriagePanel({ findingId, onTriaged }) {
             onChange={(e) => setReason(e.target.value)}
             sx={{ minWidth: 260, flex: 1 }}
           />
+          {/* Contained-primary already IS the accent in the theme; the hardcoded
+              hexes this carried predate the design system and would survive a
+              palette change. `saving` is stated, not just disabled — a control
+              that goes quiet without saying why reads as a broken button. */}
           <Button
             variant="contained"
             disabled={saving || (reasonRequired && reason.trim() === '')}
             onClick={submit}
-            sx={{ bgcolor: '#35C477', color: '#06100A', '&:hover': { bgcolor: '#55D28F' } }}
+            aria-busy={saving}
           >
-            Record triage
+            {saving ? 'Recording…' : 'Record triage'}
           </Button>
         </Box>
       )}

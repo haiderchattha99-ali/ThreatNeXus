@@ -7,6 +7,12 @@ import { PAGE_CAPABILITIES } from '../utils/permissions'
 import { CAPABILITIES } from '../constants/capabilities'
 import * as useAuthModule from '../hooks/useAuth'
 
+// The ONE refusal title in the product, rendered by ui/States DeniedState. A
+// route-level denial used to have its own "403 - Access Denied" heading; both a
+// route and a panel now say this, and the assertion names the shared string so a
+// second dialect cannot reappear unnoticed.
+const DENIED_TITLE = 'You do not have access to this view'
+
 function mockAuth(overrides) {
   vi.spyOn(useAuthModule, 'useAuth').mockReturnValue({
     isAuthenticated: false,
@@ -56,8 +62,26 @@ describe('ProtectedRoute', () => {
       requiredCapability: PAGE_CAPABILITIES.cases,
     })
 
-    expect(screen.getByText('403 - Access Denied')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: DENIED_TITLE, level: 1 })).toBeInTheDocument()
     expect(screen.queryByText('Secret content')).not.toBeInTheDocument()
+  })
+
+  it('refuses in the shared DeniedState language, keeps the 403 fact, and never names the missing capability', () => {
+    mockAuth({ isAuthenticated: true, capabilities: [] })
+    renderProtected(<div>Secret content</div>, {
+      requiredCapability: PAGE_CAPABILITIES.cases,
+    })
+
+    // Announced assertively: arriving somewhere unreachable is an unexpected
+    // outcome of a deliberate navigation, not a passive status update.
+    const refusal = screen.getByRole('alert')
+    expect(refusal).toHaveTextContent(DENIED_TITLE)
+    expect(refusal).toHaveTextContent(/The server enforces this independently/)
+    // The status code stays available as a fact even though it is no longer the
+    // heading — an operator reading a screenshot still needs it.
+    expect(refusal).toHaveTextContent(/HTTP 403/)
+    // Naming the exact grant a caller lacks is a small enumeration aid.
+    expect(refusal).not.toHaveTextContent(PAGE_CAPABILITIES.cases)
   })
 
   it('fails closed when no requiredCapability and no requireAuthOnly opt-in is given', () => {
@@ -65,7 +89,7 @@ describe('ProtectedRoute', () => {
     // Simulates a route wired up without a capability declaration by mistake.
     renderProtected(<div>Secret content</div>, {})
 
-    expect(screen.getByText('403 - Access Denied')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: DENIED_TITLE, level: 1 })).toBeInTheDocument()
     expect(screen.queryByText('Secret content')).not.toBeInTheDocument()
   })
 
@@ -83,7 +107,7 @@ describe('ProtectedRoute', () => {
     })
 
     expect(screen.queryByText('Secret content')).not.toBeInTheDocument()
-    expect(screen.queryByText('403 - Access Denied')).not.toBeInTheDocument()
+    expect(screen.queryByText(DENIED_TITLE)).not.toBeInTheDocument()
   })
 })
 
@@ -94,6 +118,6 @@ describe('Sidebar and ProtectedRoute share one capability decision source', () =
 
     renderProtected(<div>Cases content</div>, { requiredCapability: PAGE_CAPABILITIES.cases })
 
-    expect(screen.getByText('403 - Access Denied')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: DENIED_TITLE, level: 1 })).toBeInTheDocument()
   })
 })

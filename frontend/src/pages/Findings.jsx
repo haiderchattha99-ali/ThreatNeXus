@@ -10,7 +10,7 @@
 // count under the table always describes the filter that was actually applied.
 
 import React from 'react'
-import { Link as RouterLink, useSearchParams } from 'react-router-dom'
+import { Link as RouterLink, useNavigate, useSearchParams } from 'react-router-dom'
 import {
   Box,
   Button,
@@ -39,7 +39,15 @@ import {
   Provenance,
   ScopeNote,
 } from '../components/ui'
-import { FINDING_STATUS, OWNERSHIP_CONFIDENCE, color, type, font } from '../theme/tokens'
+import {
+  FINDING_STATUS,
+  OWNERSHIP_CONFIDENCE,
+  OWNERSHIP_STATUS,
+  color,
+  riskBandColor,
+  type,
+  font,
+} from '../theme/tokens'
 
 const RISK_BANDS = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'INFORMATIONAL']
 const SORTS = [
@@ -62,7 +70,18 @@ const LIFECYCLE = {
   RECURRED: { label: 'Recurred', tone: 'danger', icon: 'rotate' },
 }
 
+// The severity spine. A 3px rule down the leading edge of the row, coloured by
+// the locked Risk v1 band, so the eye ranks the table before it reads a word of
+// it. Colour is never the only carrier — the band NAME sits immediately beside
+// it — and an unscored row gets a transparent spine of the same width so the
+// column stays aligned rather than jumping by three pixels.
+function spineFor(finding) {
+  const band = finding.risk?.riskBand
+  return `3px solid ${band ? riskBandColor[band] || color.neutral : 'transparent'}`
+}
+
 export const Findings = () => {
+  const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
 
   const [data, setData] = React.useState(null)
@@ -230,9 +249,13 @@ export const Findings = () => {
             <Table aria-label="Findings">
               <TableHead>
                 <TableRow>
+                  {/* The transparent 3px border matches the spine on the body
+                      cells, so the header text stays aligned with the column. */}
+                  <TableCell scope="col" sx={{ borderLeft: '3px solid transparent' }}>
+                    Risk v1
+                  </TableCell>
                   <TableCell scope="col">Indicator</TableCell>
                   <TableCell scope="col">Owning organization</TableCell>
-                  <TableCell scope="col">Risk v1</TableCell>
                   <TableCell scope="col">Lifecycle</TableCell>
                   <TableCell scope="col">Status</TableCell>
                   <TableCell scope="col">Last observed</TableCell>
@@ -240,7 +263,36 @@ export const Findings = () => {
               </TableHead>
               <TableBody>
                 {items.map((finding) => (
-                  <TableRow key={finding.id} hover>
+                  // The whole row is the target, and the row is not the control.
+                  //
+                  // The indicator is a REAL link — it is what a keyboard reaches,
+                  // what focus-within highlights, and what middle-click, ctrl-click
+                  // and "copy link address" act on. The row-level handler is a
+                  // convenience on top of it, and it stands aside twice: when the
+                  // click landed on the link itself, and when the analyst is
+                  // selecting text. An evidence table whose rows swallow a
+                  // selection is a table you cannot copy an IP address out of.
+                  //
+                  // A stretched-anchor overlay would give the same hit area with
+                  // fewer lines and take text selection with it, which is why it
+                  // is not used here.
+                  <TableRow
+                    key={finding.id}
+                    hover
+                    onClick={(event) => {
+                      if (event.target.closest('a')) return
+                      if (window.getSelection()?.toString()) return
+                      navigate(`/findings/${finding.id}`)
+                    }}
+                    sx={{ cursor: 'pointer' }}
+                  >
+                    <TableCell sx={{ borderLeft: spineFor(finding), whiteSpace: 'nowrap' }}>
+                      {finding.risk ? (
+                        <RiskBandBadge band={finding.risk.riskBand} score={finding.risk.displayScore} />
+                      ) : (
+                        <Box sx={{ ...type.small, color: color.textMuted }}>Not yet scored</Box>
+                      )}
+                    </TableCell>
                     <TableCell>
                       <Link
                         component={RouterLink}
@@ -264,6 +316,7 @@ export const Findings = () => {
                               dictionary={OWNERSHIP_CONFIDENCE}
                               value={finding.ownership.confidence}
                               size="small"
+                              quiet
                             />
                           </Box>
                         </>
@@ -271,26 +324,22 @@ export const Findings = () => {
                         <Box sx={{ ...type.small, color: color.textMuted }}>
                           {finding.ownership?.status === 'AMBIGUOUS'
                             ? 'Ambiguous — several organizations tied'
-                            : 'Unresolved'}
+                            : OWNERSHIP_STATUS[finding.ownership?.status]?.label || 'Unresolved'}
                         </Box>
                       )}
                     </TableCell>
+                    {/* Quiet from here on. Severity owns the colour in this
+                        table; lifecycle and exposure state keep their icon and
+                        their words, which is what carries them. */}
                     <TableCell>
-                      {finding.risk ? (
-                        <RiskBandBadge band={finding.risk.riskBand} score={finding.risk.displayScore} size="small" />
-                      ) : (
-                        <Box sx={{ ...type.caption, color: color.textMuted }}>Not yet scored</Box>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <StatusBadge dictionary={LIFECYCLE} value={lifecycleOf(finding)} size="small" />
+                      <StatusBadge dictionary={LIFECYCLE} value={lifecycleOf(finding)} size="small" quiet />
                       <Box sx={{ ...type.caption, color: color.textMuted, mt: 0.4, fontFamily: font.mono }}>
                         {finding.occurrenceCount}× observed
                         {finding.recurrenceCount > 0 ? ` · ${finding.recurrenceCount}× recurred` : ''}
                       </Box>
                     </TableCell>
                     <TableCell>
-                      <StatusBadge dictionary={FINDING_STATUS} value={finding.status} size="small" />
+                      <StatusBadge dictionary={FINDING_STATUS} value={finding.status} size="small" quiet />
                     </TableCell>
                     <TableCell>
                       <Box

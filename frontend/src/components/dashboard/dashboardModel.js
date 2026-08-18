@@ -136,55 +136,11 @@ export const NOTIFICATION_STATE = Object.freeze({
   APPROVED: { label: 'Approved', tone: 'success', icon: 'check' },
   REJECTED: { label: 'Rejected', tone: 'danger', icon: 'cross' },
 })
-// Phase 6.2 — Risk v1 factor keys, rendered.
-//
-// `label` is the analyst-facing name; `meaning` states what the factor measures
-// in one line, because a factor contributing zero is only interpretable if you
-// know what it was looking for. Both are fixed strings keyed off the engine's
-// own closed vocabulary (RISK_FACTOR_KEYS) — nothing here is generated, and an
-// unknown key falls back to the raw key rather than being hidden.
-export const RISK_FACTOR_LABEL = Object.freeze({
-  sourceSeverity: {
-    label: 'Source severity',
-    meaning: 'Severity carried by the report type the finding came from.',
-  },
-  exposureCriticality: {
-    label: 'Exposure criticality',
-    meaning: 'How critical the exposed service itself is. An exposure, never evidence of intrusion.',
-  },
-  persistence: {
-    label: 'Persistence',
-    meaning: 'How many separate reports have observed this finding.',
-  },
-  recurrence: {
-    label: 'Recurrence',
-    meaning: 'How often it returned after its case was closed.',
-  },
-  daysUnresolved: {
-    label: 'Days unresolved',
-    meaning: 'Elapsed time since the finding was first observed and still open.',
-  },
-  iocReputationContext: {
-    label: 'IOC reputation context',
-    meaning: 'Stored reputation context for the indicator. Supporting context, never proof.',
-  },
-  sectorCriticality: {
-    label: 'Sector criticality',
-    meaning: "Criticality of the owning organization's sector, where ownership resolved.",
-  },
-  cvePresence: {
-    label: 'CVE presence',
-    meaning: 'Whether a CVE is associated with the finding at all.',
-  },
-  kevStatus: {
-    label: 'KEV status',
-    meaning: 'Whether an associated CVE appears on the CISA known-exploited list.',
-  },
-  epssScore: {
-    label: 'EPSS probability',
-    meaning: 'FIRST exploitation-probability score for an associated CVE.',
-  },
-})
+// Risk v1 factor names now live in constants/riskFactors.js, beside the
+// explanation-code sentences, because the Finding detail screen needs the same
+// dictionary and two copies would drift. Re-exported here so every existing
+// dashboard import keeps working.
+export { RISK_FACTOR_LABEL } from '../../constants/riskFactors'
 
 // How a factor's zero contribution should be read. The whole reason this
 // panel exists is that these three are NOT the same thing, and a bar chart

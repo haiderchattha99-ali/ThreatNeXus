@@ -1,92 +1,108 @@
-﻿{
-    "schema_version": 1,
-    "ticket": "TNX-FINAL-SECURITY-PASS",
-    "title": "Single bounded authorized application-security assessment of the functionally closed product",
-    "status": "review",
-    "owner": "claude",
-    "reviewer": "codex",
-    "branch": "security/final-bounded-hardening",
-    "worktree": "F:\\AI-Worktrees\\ThreatNeXus\\final-security",
-    "starting_commit": "90bdb8b",
-    "goal": "One bounded, authorized, non-destructive application-security pass over merged main 90bdb8b: evidence-based findings, fix verified P0/P1 plus the single highest-value P2, one targeted re-test, regression, PR. Not a new engineering phase and not a second audit loop.",
-    "current_work": "Assessment complete, remediation applied and re-tested. Awaiting independent review and merge decision.",
-    "files_changed": [
-        "backend/src/config/env.js",
-        "backend/src/controllers/authController.js",
-        "backend/src/controllers/findingReadController.js",
-        "backend/src/lib/validation.js",
-        "backend/tests/integration/auth.test.js",
-        "backend/tests/integration/publicRegistrationClosed.test.js",
-        "backend/tests/unit/resourceIdBounds.test.js",
-        "backend/.env.example",
-        "docker-compose.yml",
-        "frontend/nginx.conf",
-        "docs/ai/SECURITY.md",
-        "docs/security/FINAL-SECURITY-ASSESSMENT.md"
-    ],
-    "scope": {
-        "included": [
-            "SEC-01 P0 fixed - public self-service registration closed by default, audited refusal, 9 new tests",
-            "SEC-02 P1 fixed - nginx security headers restored on every response class + CSP added",
-            "SEC-03 P2 fixed - resource id bound aligned to int4 at the shared helper, duplicate parser deleted, 6 new tests",
-            "docs/security/FINAL-SECURITY-ASSESSMENT.md - the assessment report",
-            "docs/ai/SECURITY.md - correction recorded against the prior unauthenticated-route claim"
-        ],
-        "excluded": [
-            "SEC-04 P3 (X-Powered-By: Express) - deliberately deferred; cosmetic P3 is outside a bounded pass",
-            "SEC-05 P3 (prisma CLI in runtime dependencies) - deferred; the 3 high advisories are NOT runtime-reachable, and moving it needs its own verification of the Docker migrate-on-start path",
-            "No Prisma schema, migration, route, capability grant, workflow rule or provider behaviour changed",
-            "No frontend source (.jsx) changed - nginx.conf only, so no UI regression surface",
-            "No dependency added, removed or upgraded anywhere",
-            "The primary checkout at C:\\Users\\LENOVO\\Desktop\\ThreatNeXus was never touched"
-        ]
-    },
-    "completed": [
-        "Grounded on the canonical AI Dev Team workflow, project AGENTS.md/CLAUDE.md, docs/ai/{STATE.yaml,HANDOFF.md,SECURITY.md}; confirmed this run is pre-approved optional activity (A) from the closure record",
-        "Created an isolated worktree from origin/main 90bdb8b and acquired writer lease e03d29da; no other writer held the repository",
-        "Built an 11-hypothesis test plan from the ACTUAL architecture: User carries no organizationId, so ThreatNeXus is single-tenant and cross-tenant IDOR/BOLA is not a meaningful class - effort went to vertical authorization, workflow integrity and the provider boundary",
-        "Stood up a disposable Docker stack on non-default ports with every provider credential empty; verified inside the container that no live provider contact was possible at any point",
-        "Independently re-derived the guard on every mounted route: 99 routes, exactly 3 unauthenticated and exactly 1 authenticated-but-capability-free, matching the documented exception lists",
-        "Ran 23 negative authorization probes across VIEWER/REVIEWER/ANALYST/self-registered/unauthenticated - every one refused correctly, positive controls 200. No privilege escalation found",
-        "Forged JWTs (alg:none with and without signature, wrong-key HS256, expired, payload tampered to ADMIN) - all rejected with an identical generic 401",
-        "Uploaded a 10-file hostile CSV corpus (formula injection, XSS, out-of-range port, 20k field, NUL byte, wrong schema, header-only, binary, wrong extension, traversal filename) - every one a distinct controlled reason code, nothing written outside the upload dir",
-        "Proved rate limiting live (upload bucket refused at 20/15min with Retry-After) and confirmed refused registrations still consume the credential budget",
-        "Confirmed force:true does not bypass provider controls (ALREADY_PENDING / SKIPPED_DISABLED) and the ledger truthfully reports PAUSED_WORKER_DISABLED",
-        "Fixed SEC-01/SEC-02/SEC-03 at their roots, not at their symptoms - the id fix went into the shared helper and deleted the duplicate rather than patching one controller",
-        "Targeted re-test: registration 403 and the account cannot exist; all 13 previously-500 routes now 400 with 404/200 controls intact; all four security headers present on every document class and the hashed asset",
-        "Proved the clickjacking fix in a real browser - the console refused the frame with 'violates ... frame-ancestors none'; signed in as ANALYST through the containerised UI and confirmed the dashboard and Findings render live cross-origin data with ZERO console errors, so the CSP breaks nothing"
-    ],
-    "validation": {
-        "passing": [
-            "backend: npm test - 3417 passed / 240 skipped / 0 failed (exit 0)",
-            "backend: targeted - publicRegistrationClosed.test.js 9/9, resourceIdBounds.test.js 6/6",
-            "backend: auth.test.js, phase7RateLimiting.test.js, phase7RouteCensus.test.js all still green",
-            "frontend: npm run lint - clean (6 pre-existing fast-refresh warnings, none in changed files)",
-            "frontend: npm run build - clean production build",
-            "nginx -t - configuration syntax ok in the running container"
-        ],
-        "failing": [],
-        "sec01_retest": "PASS - anonymous POST /api/auth/register returns 403 with the fixed message; login as the never-created account returns 401",
-        "sec02_retest": "PASS - /, /index.html, /findings, /cases/1 and the hashed asset all carry X-Content-Type-Options, X-Frame-Options, Referrer-Policy and the CSP; cache policy still correct and no longer duplicated; browser refuses to frame the console",
-        "sec03_retest": "PASS - all 13 previously-500 entity-by-id routes now 400; 2147483647 still 404; real records still 200",
-        "no_live_provider_calls": "PASS - every provider credential empty in the running container, IOC_ENRICHMENT_PROVIDER=mock, AI_ENABLED=false, ENRICHMENT_WORKER_ENABLED=false. No third party was contacted at any point",
-        "no_destructive_testing": "PASS - no resource-exhaustion, no concurrency exploitation, no internet host touched, no third-party credential used",
-        "secret_sweep": "PASS - no .env or key material tracked; served bundle carries no secret-shaped value; 0 secrets in server logs; 0 of 141 audit rows contained a secret-shaped value",
-        "staging_discipline": "PASS - explicit paths only, never git add -A; git status reviewed before and after"
-    },
-    "known_issues": [
-        "Closing registration is NOT retroactive: any account created while it was open remains valid. Operators should audit the User table and the auth.register audit trail before relying on the fix",
-        "SEC-04 (X-Powered-By: Express) and SEC-05 (prisma CLI in runtime dependencies) are confirmed and deliberately deferred - see the report's section 5 for the reasoning",
-        "The shipped CSP has no script-src/connect-src, so XSS mitigation still rests on React escaping and the verified absence of HTML sinks. A per-deployment CSP pinning the API origin would be stronger",
-        "Sessions are bearer tokens in localStorage with a 24h default and no server-side revocation. A design property of the system, not introduced or fixed here",
-        "Legacy synchronous provider routes remain outside the Phase-10 usage ledger (excludedPaths), so an attempt-row count is not by itself a no-contact proof. The no-contact claim rests on every credential being empty, verified in the container",
-        "This was ONE bounded pass by ONE reviewer. No DAST/SAST engine was run (reasoning in report section 4) and absence of a finding is not proof of absence of a vulnerability"
-    ],
-    "next_action": "Independent review of this branch by Codex (a provider other than the author), then the merge decision. Do NOT run a second pentest cycle. The remaining approved optional activities are (B) the deep rendered page-by-page frontend/UI-UX audit and (C) final documentation/demo finalization, each to be started only on separate explicit authorization.",
-    "checkpoint_ref": "",
-    "pr_url": "",
-    "updated_at": "2026-08-18T09:20:00.0000000Z",
-    "next_writer": "codex",
-    "root_cause": "SEC-01 (P0): POST /api/auth/register was open AND a self-registered account is a VIEWER, which holds read:dashboard/read:findings/read:cases. Each decision is defensible alone; composed they let any anonymous caller create an account and read every finding (victim address, port, owning organization), every case (including analyst email addresses) and the dashboard - two unauthenticated requests, no user interaction. The frontend never called the route at all. SEC-02 (P1): nginx does not merge add_header down a level - it inherits ONLY if the current level defines none. server-level security headers were therefore discarded by the two location blocks that declared their own Cache-Control add_header, and because location / serves the SPA through try_files whose last argument is an internal redirect, EVERY HTML document landed on location = /index.html. All documents and all hashed assets shipped with no X-Frame-Options, no X-Content-Type-Options, no Referrer-Policy and no CSP. SEC-03 (P2): parseResourceId bounded ids with Number.isSafeInteger (2^53-1) while every id column is PostgreSQL int4 (2^31-1), so values in between passed validation and reached Prisma as an unhandled error - 500 on 13 entity-by-id routes where 2147483647 correctly returned 404.",
-    "final_contract": "ALLOW_PUBLIC_REGISTRATION defaults false in EVERY environment including test; the route stays mounted and answers an audited 403 before any user lookup or bcrypt work. nginx computes cache policy with a map on $uri so the server block is the only add_header level in the file, plus a CSP of frame-ancestors 'none'; base-uri 'self'; object-src 'none'; form-action 'self' - deliberately no default-src/script-src/connect-src, because the API origin is a build-time value and a per-deployment CSP that breaks gets switched off rather than fixed. MAX_RESOURCE_ID=2147483647 bounds parseResourceId for all 19 calling modules and the duplicate parser in findingReadController.js is deleted. No authorization decision, capability grant, workflow rule, schema, migration or provider behaviour was changed."
+{
+    "schema_version":  1,
+    "ticket":  "TNX-FINAL-FRONTEND-POLISH",
+    "title":  "Final bounded frontend polish pass — R1 R2 R3 R4 R5 from the approved rendered UI/UX audit",
+    "status":  "pr_open",
+    "owner":  "unassigned",
+    "reviewer":  "unassigned",
+    "branch":  "polish/final-frontend-pass",
+    "worktree":  "F:\\AI-Worktrees\\ThreatNeXus\\frontend-polish",
+    "starting_commit":  "702afee",
+    "goal":  "Implement the five approved recommendations from the read-only rendered frontend audit as ONE coherent frontend pass — decision-first Finding detail (R1), product-wide truth-layer humanization plus the two shipped defects (R2), severity-first Findings and priority queue with accessible full-row interaction (R3), bounded below-fold dashboard hierarchy (R4), and structure-preserving loading with restrained route continuity and truthful pending feedback (R5) — preserving every existing product truth, provenance, risk semantic, capability behaviour, accessibility guarantee and backend contract, and adding no frontend dependency.",
+    "current_work":  "",
+    "files_changed":  [
+                          "frontend/src/constants/riskFactors.js (new)",
+                          "frontend/src/constants/caseWorkflow.js",
+                          "frontend/src/theme/tokens.js",
+                          "frontend/src/theme/index.js",
+                          "frontend/src/components/ui/States.jsx",
+                          "frontend/src/components/ui/StatusBadge.jsx",
+                          "frontend/src/components/ProtectedRoute.jsx",
+                          "frontend/src/components/AppShell.jsx",
+                          "frontend/src/components/FindingTriagePanel.jsx",
+                          "frontend/src/components/dashboard/dashboardModel.js",
+                          "frontend/src/components/dashboard/DashboardSections.jsx",
+                          "frontend/src/pages/FindingDetail.jsx",
+                          "frontend/src/pages/Findings.jsx",
+                          "frontend/src/pages/Dashboard.jsx",
+                          "frontend/src/pages/FindingDetail.test.jsx (new)",
+                          "frontend/src/pages/Findings.test.jsx (new)",
+                          "frontend/src/components/ProtectedRoute.test.jsx",
+                          "frontend/e2e/session.spec.js",
+                          "frontend/e2e/enrichmentOperability.spec.js",
+                          "frontend/e2e/findingsUpload.spec.js",
+                          "frontend/e2e/findingAiAssistance.spec.js",
+                          "frontend/e2e/findingEnrichment.spec.js",
+                          "docs/ai/STATE.yaml",
+                          "docs/ai/HANDOFF.md"
+                      ],
+    "root_cause":  "The read-only rendered audit at 702afee scored the product 7/10 and found the deficits were about ORDER and LANGUAGE, not about missing evidence. FindingDetail was ~3,700px with 'Record triage' LAST, below a disabled AI panel and an all-empty provider table, so the one control that moves work forward sat below everything that was not the decision. The truth layer leaked storage format: FACTOR_LABEL in FindingDetail.jsx was keyed on EXPOSURE_BASE/IOC_REPUTATION/EPSS_PROBABILITY while the engine stores exposureCriticality/iocReputationContext/epssScore, so not one key ever matched, the dictionary was dead code, and raw camelCase storage keys rendered at analysts; explanation codes rendered raw beside them. A second shipped defect: ProtectedRoute rendered its own '403 - Access Denied' card, so the product shipped TWO refusal dialects depending on whether a route or a panel refused, and the crafted accessible DeniedState in ui/States.jsx was bypassed at the route level. Findings rows were not clickable at all (measured: cursor auto, no handler), the risk band was the quietest element in a row while status/lifecycle chips shouted, hover was a 4% tint that is invisible on a near-black canvas, and amber carried three unrelated meanings in one row (OPEN status, PERSISTED lifecycle, HIGH band). Loading used a generic three-bar skeleton that popped into layout, and route changes hard-swapped with no scroll reset.",
+    "final_contract":  "Frontend only. Zero backend, database, migration, auth, capability or provider change — `git status --porcelain backend/` is empty and no package.json anywhere was touched, so no dependency was added (explicitly: no Motion, anime.js, Lenis, Three.js, Rive or new UI kit). Every backend response shape is consumed exactly as before; the new English is a projection of already-stored values through fixed dictionaries keyed off the engine's own closed vocabularies, never generated, with the raw code still rendered beside the sentence so provenance is added to rather than traded away. Risk v1 band colours remain frozen and identical. Login, Cases, Settings and the mobile table treatment are untouched per the brief.",
+    "scope":  {
+                  "included":  [
+                                   "R1 — FindingDetail rebuilt decision-first: a five-cell decision summary strip (risk, exposure, observation pressure, owner, triage) above everything; triage promoted from LAST to the FIRST panel; a sticky section rail under the app bar with scroll-margin-corrected anchors; the two optional subsystems (enrichment coverage, AI assistance) moved last and folded into native <details>, still MOUNTED and still loading so nothing is unmounted or hidden from the network, only deferred visually",
+                                   "R2 — new frontend/src/constants/riskFactors.js is the one place a stored factor key or explanation code becomes words: the repaired factor dictionary (correct camelCase keys), ~60 explanation-code sentences, and a de-casing fallback so a code the engine adds later is legible rather than invisible. dashboardModel.js re-exports RISK_FACTOR_LABEL from it so the dashboard keeps one source. ProtectedRoute now renders the shared DeniedState (with new optional titleLevel/role props so a route denial owns the page <h1> and keeps its assertive announcement), ending the two-dialect refusal. Ownership status and resolver reason codes read as English with the code kept beside them. FindingTriagePanel moved off five hardcoded hexes onto tokens — including #75899E, the exact textFaint value Phase 6.2 RAISED for contrast and which this component had kept",
+                                   "R3 — Findings table reordered severity-first with a 3px risk-band spine on the leading cell; non-severity badges rendered `quiet` (icon and words kept, semantic fill dropped) so severity is the only colour in a row and amber stops meaning three things; whole-row navigation that stands aside for the real link and for an active text selection, so an indicator can still be copied; exactly one link per row preserved. The dashboard priority queue got the same spine and band-leading treatment. Row hover raised 4% -> 9% and a focus-within band added, theme-wide",
+                                   "R4 — two named below-fold dashboard bands ('Why the risk looks like this', 'Work in flight') with a hairline and a one-line note. No panel moved between grids, no re-layout, no reordering",
+                                   "R5 — structure-preserving skeletons shaped like the Finding detail and the dashboard they replace; scroll reset on pathname change (hash-aware, so the R1 section rail still works); a 160ms opacity-only route-continuity animation keyed on pathname, NOT DECLARED AT ALL under reduced motion; truthful pending feedback on the FindingDetail refresh (disabled + 'Refreshing' + aria-busy + an in-place status line stating the visible values are the last confirmed ones) and on the triage submit button",
+                                   "Focused tests: new FindingDetail.test.jsx (10) and Findings.test.jsx (5), plus one new ProtectedRoute test. Five E2E specs updated to the shipped IA and the single refusal language"
+                               ],
+                  "excluded":  [
+                                   "Every backend file — no route, controller, service, middleware, Prisma schema, migration or backend test was modified",
+                                   "package.json / package-lock.json anywhere in the repository — no dependency added, removed or changed",
+                                   "Login, Cases, Settings and the mobile table treatment — explicitly out of scope in the brief",
+                                   "A risk-band SORT on the Findings list: GET /api/findings exposes no such sort value, and adding one is a backend change. The riskBand FILTER already exists and is unchanged",
+                                   "The triage decision select defaulting to IN_REVIEW. It is arguably a pre-selected decision under the anti-automation-bias rule, but changing it is a workflow change, not a polish change, and it predates this pass",
+                                   "A second polish cycle, a further audit, and a post-implementation design review — all excluded by the brief"
+                               ]
+              },
+    "completed":  [
+                      "Mandatory start gate: read project AGENTS.md/CLAUDE.md, the F-drive global role files, docs/ai/STATE.yaml + HANDOFF.md, and the threatnexus-build-guard skill before writing anything",
+                      "Branched from origin/main (702afee — the exact commit the approved audit was performed against) into an isolated worktree. The primary checkout, which carries foreign uncommitted Phase 9C presentation work and is BEHIND origin/main, was never touched",
+                      "Acquired the writer lease via the F-drive start-task script — clean tree, no competing writer",
+                      "Read the ACTUAL stored vocabularies out of backend/src/services/risk/riskConfiguration.js and ownership/ownershipResolver.js rather than inventing labels: 10 RISK_FACTOR_KEYS, ~60 RISK_EXPLANATION_CODES, 4 OwnershipResolutionStatus values, 9 ownership REASON_CODES. Every dictionary entry is keyed off those closed sets",
+                      "Found RISK_FACTOR_LABEL already existed and was CORRECT in components/dashboard/dashboardModel.js while FindingDetail carried its own broken copy — so the repair is a move to a shared constants module plus a re-export, not a second dictionary",
+                      "RED-CHECKED both regression tests. The first attempt at the factor-label test PASSED against the reintroduced defect, because the de-casing fallback happens to render exposureCriticality as 'Exposure criticality' either way — so it was strengthened onto epssScore/kevStatus, where the curated name and the mechanical fallback genuinely diverge, and re-checked failing. The full-row navigation test was confirmed to fail with the row handler removed",
+                      "Stood up a disposable Docker stack (project tnxpolish, postgres 15432, backend 5100, preview 4273, per-run JWT_SECRET, RATE_LIMIT_AUTH_MAX=1000) and drove the REAL production build in real Chromium across the audited viewport matrix 390/768/1024/1366/1440 for ANALYST, and at 1440 for ADMIN/REVIEWER/VIEWER",
+                      "The Playwright suite caught a real responsive defect my own QA script had missed: with the enrichment disclosure OPEN at 390px the document scrolled 607px, because a <details> inside a CSS grid is a grid item whose default `min-width: auto` refuses to shrink below its content's min-content width, so a wide evidence table pushed the document instead of scrolling inside its own TableContainer. Fixed with `minWidth: 0`, and the QA script was extended to open every disclosure at every viewport so it can no longer miss the disclosed state",
+                      "Diagnosed the second Playwright failure as an environment gap rather than a regression: enrichmentOperability.spec.js needs the deliberately FAKE CENSYS_PAT that CI sets to make the EXECUTION_PAUSED readiness state reachable, and the ad-hoc stack had every provider key empty. The stack was corrected to mirror CI's job env exactly, not the assertion relaxed",
+                      "Tore the database down with `down -v`, rebuilt from zero and re-seeded before the final gate, so the browser suite ran against a pristine 11-finding demo dataset rather than one carrying this session's own probe data"
+                  ],
+    "validation":  {
+                       "passing":  [
+                                       "frontend: npm run lint — clean, exactly the 6 pre-existing fast-refresh warnings and no new one",
+                                       "frontend: npm run test — 218 passed, 17 files (baseline 202 in 15 files; +16 new tests, zero regressions)",
+                                       "frontend: npm run build — clean production build",
+                                       "frontend: npx playwright test — 71 / 71 Chromium, real backend + real PostgreSQL, against a rebuilt-from-zero database",
+                                       "rendered QA: 0px horizontal overflow at 390/768/1024/1366/1440 on dashboard, findings and finding detail — collapsed AND with every disclosure open",
+                                       "rendered QA: 0 console errors and 0 console warnings across all four roles",
+                                       "backend untouched: git status --porcelain backend/ is empty",
+                                       "no dependency change: git diff on every package.json / package-lock.json is empty"
+                                   ],
+                       "failing":  [
+
+                                   ],
+                       "red_check":  "PASS (after being strengthened). The factor-label test initially passed against the reintroduced defect because the de-casing fallback coincides with the curated label for camelCase keys; it now asserts 'EPSS probability' and 'KEV status', where fallback and dictionary diverge, and was confirmed FAILING against the broken keys before being restored green. The full-row navigation test was confirmed FAILING with the row handler removed.",
+                       "ia_proof":  "PASS — measured in the rendered app, not from source: triage now sits at 474px on a 2,668px page (it was last on a ~3,700px page). Section order asserted top-down as triage -> identity -> risk -> context -> timeline -> cases -> optional, every section rail target resolves to a real element, and a rail click lands its heading at y=489, clear of the 60px fixed app bar.",
+                       "truth_layer_proof":  "PASS — the rendered risk section contains no raw camelCase factor key (regex over the live DOM for all ten stored keys), while every explanation code is still printed beside its sentence. Ownership renders 'Matched the longest registered address range.' with OWNERSHIP_CIDR_MATCH beneath it.",
+                       "no_flattening_proof":  "PASS — the disclosure that folds away non-contributing factors counts them BY STATE in its own summary line ('7 factors added no points — 2 measured and weighed nothing, 2 with no readable evidence, 3 that cannot apply here'), so shortening the page costs no fact; and when NO factor contributed, nothing is folded at all because each zero is then the whole answer.",
+                       "reduced_motion_proof":  "PASS — under prefers-reduced-motion the route-continuity animation is not declared at all (computed animation-name: none) rather than declared and zeroed, and no dashboard KPI, primary panel, queue row or secondary section is left below opacity 0.99.",
+                       "a11y_preserved":  "PASS — status is still never carried by colour alone (the `quiet` badge drops only the fill, keeping the icon and the words); the route denial is now a real <h1> where it previously was a styled div in one place and an h1 in another; every rail anchor carries a scroll-margin that clears the fixed bar; the clickable row keeps its real link, so the keyboard path and text selection both survive.",
+                       "secret_sweep":  "PASS — no .env committed, no credential-shaped literal, no tracked dist/node_modules. The only credential-shaped string used anywhere was the fake CENSYS_PAT in an uncommitted scratchpad compose override, matching CI's own documented fake value.",
+                       "no_live_provider_calls":  "PASS — ENRICHMENT_WORKER_ENABLED false, AI_ENABLED false, every real provider key empty in the verification stack. The single CENSYS_PAT present is CI's documented non-functional placeholder and the worker that would use it never ran.",
+                       "git_status_before":  "Isolated worktree created clean from origin/main (702afee). The primary checkout's modified tracked files and ~35 untracked Phase 9C paths were never read beyond git status, never staged, never modified.",
+                       "git_status_after":  "22 frontend files plus the two docs/ai state files. Nothing outside frontend/ and docs/ai/ was touched."
+                   },
+    "known_issues":  [
+                         "No manual pass in the user's own Chrome: the claude-in-chrome extension still refuses to connect because its OAuth token belongs to a different claude.ai account than Claude Code is signed into (unchanged since 2026-08-11). Verification was real Chromium via Playwright driving the production build against a real stack, asserting rendered geometry, console output and DOM order — substantively equivalent, but it is a driven browser, not a hand-driven one, and that distinction is recorded rather than smoothed over.",
+                         "The optional subsystems (enrichment coverage, AI assistance) are collapsed by DEFAULT on every visit. They remain mounted and still fetch, so nothing is hidden from the network or from a denial, but an analyst who wants provider coverage on every finding now pays one click. That is the deliberate trade the approved R1 asked for on a page that was ~3,700px; it is a preference worth revisiting if the demo audience reaches for that panel often.",
+                         "The severity spine could not be demonstrated as DISCRIMINATING in the demo dataset: every seeded finding currently scores LOW, so the rendered evidence shows the mechanism working but all one colour. The band colours themselves are the frozen Risk v1 values and were not touched.",
+                         "Two Chromium behaviours worth carrying forward. First, a CLOSED <details> still reports non-zero bounding rects for its content in this Chromium, so the E2E overflow helper's 'widest offenders' diagnostic named an innocent collapsed table while the real overflow came from elsewhere — trust documentElement.scrollWidth and treat the offender list as a hint. Second, that same behaviour means a disclosure-heavy page needs its disclosures OPENED before a responsive check means anything.",
+                         "The Findings list still has no risk-band SORT, only a filter, because the backend exposes none. Severity now leads the row visually but the default order remains lastSeen.",
+                         "No independent review of this pass. The brief explicitly excludes a post-implementation reviewer, which is a deliberate departure from CLAUDE.md's 'do not review your own final work as the only reviewer' rule and is recorded here rather than quietly honoured."
+                     ],
+    "next_action":  "Frontend polish complete and PR opened. Per the brief there is NO second polish cycle and no further audit or design review. The next phase after merge is professional final documentation.",
+    "checkpoint_ref":  "",
+    "updated_at":  "2026-08-19T00:00:00.0000000Z",
+    "next_writer":  "unassigned"
 }
