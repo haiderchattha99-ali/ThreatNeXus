@@ -49,7 +49,7 @@ that leaves the system:
 - **AI decides nothing.** It is off by default, and when on it only drafts and
   suggests — see [AI assistance](#ai-assistance-optional-off-by-default).
 
-## Current status: Phase 9B.1 — premium PKCERT presentation redesign
+## Current status: Core engineering complete — TNX-P10C5 merged, functionally closed
 
 | Phase | Delivered |
 |---|---|
@@ -64,6 +64,11 @@ that leaves the system:
 | **8 / 8B–8F — Live provider stack** | Six live intelligence providers wired behind the existing abstraction: AbuseIPDB and NVD (Phase 2), then Censys (8B), Finding-level AI assistance (8C/8C.1), GreyNoise (8D), Shodan (8E), Netlas (8F) — see [External providers](#external-providers). |
 | **9A — Professional delivery documentation** | This README polish plus a full documentation package in `docs/` — see [Documentation](#documentation) below. |
 | **9B / 9B.1 — PKCERT presentation and demo assets** | A 17-slide deck (redesigned in 9B.1 with a dark, grid-based visual system, real diagrams, and an animation cue sheet) with full speaker notes, a detailed demo walkthrough, and a screenshot/landing-page plan — see [Documentation](#documentation) below and `docs/presentation/`. |
+| **10A — Enrichment orchestration + execution** | A durable per-subject job/attempt/quota ledger (10A-1) made genuinely executable behind `ENRICHMENT_WORKER_ENABLED` (10A-2, default off): atomic reservation, exactly-once finalization, no-refund conservative accounting, and truthful terminal states — see `docs/OPERATIONS_RUNBOOK.md`. |
+| **10B — Enrichment visibility** | Analyst-facing read model for orchestration state on the existing Phase 10 data — additive only, no execution-path change. |
+| **10C1–10C3 — Terminal-state truth, force/refresh, operability** | Truthful terminal states distinguishing "not yet asked" from "asked, no evidence"; a controlled analyst force/re-ask flow with mandatory justification; a safe provider-credential/budget operability panel exposing configuration state without ever exposing a credential value. |
+| **10C4 — Controlled live enrichment go-live** | A read-only pre-live safety preflight (17 machine-checked assertions) and one bounded, human-authorized live GreyNoise call against a benign, already-approved subject in a disposable local stack — proving the real execution path end to end, then verified rollback to default-off. See `docs/OPERATIONS_RUNBOOK.md` → "Controlled live canary". |
+| **10C5 — Bounded provider response bodies** | Every provider HTTP response body is now read through one shared, byte-counted bound (not Content-Length-trusted) before parsing — closing the last disclosed hardening gap from 10C4. The Phase-10 engineering sequence is closed as of this ticket; see `docs/ai/DECISIONS.md` → `D-P10C5-01`. |
 
 ## Documentation
 
@@ -699,7 +704,8 @@ The binding contract for all of the above is `docs/ai/PHASE-10A1-API-CONTRACT.md
 
 ## Roadmap
 
-Phases 0 through 9B.1 are delivered — see [Current status](#current-status-phase-9b1--premium-pkcert-presentation-redesign).
+Phases 0 through 10C5 are delivered and merged — see
+[Current status](#current-status-core-engineering-complete--tnx-p10c5-merged-functionally-closed).
 What remains is deliberately *not* in this release:
 
 - **A landing/showcase page** — deliberately optional; see
@@ -721,6 +727,15 @@ What remains is deliberately *not* in this release:
   labels themselves are an outstanding *human* deliverable: two named team members
   labelling 50–100 findings independently. It must not be AI-generated, so the
   harness reports its absence as a dependency rather than producing a number.
+- **A real Shadowserver-style Accessible-RDP report** (e.g. from Rapid7 Open Data
+  or a comparable exposure-report access request) has been requested but not yet
+  received. This is an **external data/access dependency, not an application
+  defect** — the synthetic dataset already exercises the full ingest-to-closure
+  path today. Once received it replaces the synthetic dataset for demonstration
+  only; nothing in the ingestion contract changes. A legitimate alternate demo
+  dataset may be substituted if the original report continues to be unavailable,
+  provided its provenance is recorded truthfully rather than presented as the
+  original source.
 
 ## Team
 
