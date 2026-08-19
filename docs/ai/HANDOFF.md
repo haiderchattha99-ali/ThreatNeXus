@@ -140,4 +140,50 @@ default-off**. Before presenting: flip the worker on, re-run `demo:preflight`, c
 **MASTER OFFICIAL SYSTEM & HANDOVER DOCUMENT.** Not started — deliberately out of scope here, along
 with the README rewrite and the Playbook/Handbook drafting.
 
-Awaiting CI on `docs/final-demo-evidence` and PR review. **Not merged.**
+**CI: green on the first push**, at the exact PR tip `2612cbc` —
+[run 32239329856](https://github.com/haiderchattha99-ali/ThreatNeXus/actions/runs/32239329856)
+(push) and
+[run 32239427198](https://github.com/haiderchattha99-ali/ThreatNeXus/actions/runs/32239427198)
+(pull_request). All six required jobs succeeded on both: Secrets and generated artifacts, Prisma
+schema and migration history, Backend tests, Frontend lint/tests/build, Browser suite (Chromium),
+Core evaluators. "Mutation and concurrency gates" is manual-trigger-only and correctly skipped.
+
+PR: <https://github.com/haiderchattha99-ali/ThreatNeXus/pull/32> — **open, not merged.**
+
+## Post-CI re-verification (no provider call)
+
+Re-run after CI went green, to confirm the demonstration state survived the rehearsal and the
+rollback rather than assuming it did.
+
+`demo:preflight`, executed inside the **serving** demonstration container, returned **14/16 —
+DEMO NOT READY**. That is the **correct** result for the state the stack is deliberately left in,
+and it reproduces recorded scenario **S7a** character for character:
+
+| | |
+|---|---|
+| **S3** | `ENRICHMENT_WORKER_ENABLED=false, expected=true` |
+| **P3** | `censys=EXECUTION_PAUSED, netlas=EXECUTION_PAUSED, greynoise=EXECUTION_PAUSED` |
+
+Both are consequences of the *single* variable that §10 rollback step 1 turns off. There is no way
+to reach 16/16 with the worker off — `DEMO_EXPECT_WORKER=false` would satisfy S3, but P3 still
+resolves `EXECUTION_PAUSED`, because readiness evaluates the worker before any budget state.
+
+**Every data gate passed**, which is what actually had to be proved:
+
+- **B1–B4** — disposable `threatnexus_demo`, 25/25 migrations applied, Findings `[5,7,8]` present
+- **D1** — `FindingEnrichmentRun` rows on the demo Findings: **0**
+- **D2** — no fresh provider result for any (demo provider × demo subject); the first click cannot
+  be answered "a fresh result already exists"
+- **S1, S2, S4, S5, S6, S7** — automatic enrichment off, automatic budgets 0, manual budgets
+  explicit at 3, **0** legacy `<provider>.lookup.*` audit rows, no live-smoke opt-in, excluded
+  providers uncredentialed
+
+Confirmed independently in PostgreSQL: `FindingEnrichmentRun` **0**, `ProviderLookupJob` **0**,
+`ProviderLookupAttempt` **0**, `ProviderDailyUsage` **0**, `Finding` **11**,
+`Vulnerability` **0**. The demonstration dataset is reset and untouched.
+
+**No provider was contacted by this verification.** `demo:preflight` imports no provider, adapter
+or execution-service module, and the worker was never started.
+
+To present: bring the stack up with the §1 demonstration profile
+(`ENRICHMENT_WORKER_ENABLED=true`), re-run `demo:preflight`, and require **DEMO READY**.

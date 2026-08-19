@@ -25,7 +25,7 @@ have a check that refuses to let you walk into the room otherwise.
 | Provider credentials | absent | only the demo set | An excluded provider with no credential cannot be reached by any path, including the legacy one. |
 | `AI_ENABLED` | `false` | `false` | Every workflow completes with AI off. |
 
-**After the demonstration, return to default-off** (§9). The demonstration
+**After the demonstration, return to default-off** (§10). The demonstration
 profile must never become the repository's default.
 
 ---
@@ -239,8 +239,11 @@ Never fabricate a result.
 
 ## 9. Before the demonstration — checklist
 
-1. `docker compose ... up -d` the disposable stack (database name **must**
-   contain `demo`).
+1. `docker compose ... up -d` the disposable stack **with the §1 demonstration
+   profile** — the database name **must** contain `demo`, and
+   `ENRICHMENT_WORKER_ENABLED=true` is the single deliberate deviation. Omit it
+   and preflight fails **S3** and **P3** (`EXECUTION_PAUSED`); the stack holds a
+   correct data state but cannot execute.
 2. `npm run demo:reset`.
 3. `npm run demo:preflight` → **must print `DEMO READY`**.
 4. Do **not** click Request enrichment again before the audience arrives. Any
@@ -249,7 +252,10 @@ Never fabricate a result.
 ## 10. After the demonstration — rollback
 
 1. Restart the stack with `ENRICHMENT_WORKER_ENABLED=false`.
-2. Confirm provider readiness returns to `EXECUTION_PAUSED`.
+2. Confirm provider readiness returns to `EXECUTION_PAUSED`. `demo:preflight` now
+   reports **DEMO NOT READY** at **14/16**, failing **S3** and **P3** only — that is
+   the *correct* resting result, not a fault. Every data gate (B1–B4, D1, D2, S5)
+   must still pass.
 3. `docker compose -p <project> down -v` to destroy the disposable stack and its
    volume.
 4. Confirm the repository still holds no credential and no demo profile file.
