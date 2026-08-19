@@ -6,6 +6,12 @@
 ThreatNeXus, what was obtained, and what was not — so that the final documentation can cite a
 single factual source instead of inferring availability from the absence of data in the repository.
 
+**Canonical source:** this file is the single canonical record of external data access. A second,
+independently-written record (`docs/evidence/EXTERNAL-DATA-ACCESS.md`, produced on the
+`docs/final-demo-evidence` branch without knowledge of this file) was merged into it on
+**2026-08-19** at commit `fbffbe3`. Every fact unique to that document — the "not national exposure
+statistics" caution in §5 below — was carried forward before the duplicate was marked superseded.
+
 ## How to read this record
 
 Each subject below is split into three clearly separated classes. They are never merged.
@@ -140,3 +146,16 @@ These are opposite ends of the same interaction. Presenting a scanner-reputation
 it could substitute for an exposure inventory — or counting entries from one as though they were
 entries of the other — would misstate what the system knows and what any figure derived from it
 means. The two categories are never to be merged in any document, figure, or count.
+
+## 5. Presentation rule that must be preserved
+
+**No claim anywhere in this project may present its dashboards or counts as national cyber exposure
+statistics.** Every view — dashboard KPI, Findings count, case count — describes the loaded
+demonstration dataset only (category A above), never a real-world or national population. This
+holds regardless of which external-data section above is being discussed; it is a rule about how
+any number from this system may be presented, not a fact about any one data source.
+
+See also `docs/evidence/DEMO-REHEARSAL-EVIDENCE.md` for how provider enrichment (a data source
+independent of report ingestion) was exercised under bounded live authorisation, and
+`docs/evidence/CONTROLLED-LIVE-CANARY-RECORD.md` for the one live provider contact this project has
+ever made.

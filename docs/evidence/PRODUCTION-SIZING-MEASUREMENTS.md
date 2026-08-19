@@ -5,6 +5,15 @@
 **Method:** one bounded measurement session against a disposable local stack, created from zero and
 destroyed afterwards.
 
+**Canonical source:** this file is the single canonical record of production sizing. A second,
+independently-written measurement session (`docs/evidence/PRODUCTION-SIZING.md`, produced on the
+`docs/final-demo-evidence` branch at commit `2612cbc`, four commits ahead of the `2bda0e5` base
+measured here) was merged into it on **2026-08-19** at commit `fbffbe3`. Every measurement unique to
+that session — a second same-day data point on later code — is carried forward in the **Appendix**
+at the end of this file rather than interleaved into M1–M10, so the M1–M10 protocol below remains
+one internally consistent measurement session. The M8 authoritative-baseline distinction required by
+both sessions is resolved explicitly in M8 below.
+
 ## Reading this document
 
 Every figure carries exactly one classification. They are not interchangeable, and a figure without
@@ -255,11 +264,38 @@ different code path.
 
 ## M8 — Development and CI resource cost (MEASURED, partially)
 
+**This section distinguishes two different things that must never be conflated: the authoritative
+backend validation baseline, and one sizing session's local resource-contention observation. The
+contention run below is evidence about wall-clock cost under load on one laptop. It is never the
+validation baseline, and does not replace it.**
+
+### The authoritative backend validation baseline
+
+The pass/fail baseline for this repository is whatever the CI `Backend tests` job reports at a given
+commit — CI runs on dedicated, uncontended infrastructure and is the signal this project treats as
+authoritative for correctness. Two dated snapshots of that baseline are on record:
+
+| Commit | Ticket | Passed | Skipped | Failed | Source |
+|---|---|---|---|---|---|
+| `ee1146b` | Final security pass (PR #29) | **3,417** | 240 | **0** | `docs/security/FINAL-SECURITY-ASSESSMENT.md` §8 |
+| `2612cbc` | Final demo-readiness (PR #32) | **3,460** | 240 | **0** | `docs/ai/STATE.yaml` (168 files, 100.33 s, local `npx vitest run`) |
+
+The difference — 43 tests — is exactly the count of new targeted tests the demo-readiness ticket
+added (`demoReset` 16, `demoPreflight` 27), confirmed against that ticket's own validation record.
+**`3,460 passed / 240 skipped / 0 failed` is therefore the current baseline** as of the latest commit
+under measurement in this document (`fbffbe3`, which contains both PR #29 and PR #32); `3,417` is
+the dated baseline immediately before PR #32's tests were added, retained here for traceability, not
+as a competing current figure.
+
+### This session's local resource-contention observation (a separate, non-authoritative measurement)
+
 The complete backend verification suite, run on the host against a dedicated PostgreSQL database on
-the disposable stack.
+the disposable stack, for the sole purpose of measuring wall-clock and file count — not to
+re-establish correctness, which CI already governs.
 
 | | Value |
 |---|---|
+| Commit measured | `2bda0e5` (this session's base) |
 | Test files | 165 |
 | Tests passed | 3,384 |
 | Tests skipped | 273 |
@@ -268,15 +304,19 @@ the disposable stack.
 
 Five test files failed on 10-second hook timeouts during this run. That is the documented local
 contention pattern on this machine, not a regression: the failures are timeouts in `beforeAll`
-hooks, they differ between runs, and the authoritative signal for this repository is CI, which is
-green at this commit. They are recorded rather than omitted.
+hooks, they differ between runs, and the authoritative signal for this repository is CI, which was
+green at this commit. **The lower pass count and higher skip count here reflect a different, earlier
+commit (`2bda0e5`) than the baseline table above (`ee1146b`/`2612cbc`), not a discrepancy in the same
+codebase** — this measurement predates the additional tests added by PR #32. They are recorded
+rather than omitted, strictly as evidence of contended-machine wall-clock behaviour.
 
 **Peak memory during the suite: NOT MEASURED.** The host process sampler failed on a path-conversion
 error and the run was not repeated. Container-side samples collected during the same window could
 not be cleanly attributed to the suite, so they are discarded rather than reported.
 
 **This figure informs developer and CI machine guidance only.** It says nothing about analyst-facing
-production capacity.
+production capacity, and it must never be quoted as the repository's test-pass baseline — use the
+authoritative baseline table above for that.
 
 ---
 
@@ -408,3 +448,25 @@ today, and no document may draw it as current architecture.
 No concurrency or load test was authorised for this session, and none was performed. Any future
 document that needs one of the figures above must run the test rather than interpolate from this
 record.
+
+---
+
+## Appendix — corroborating same-day measurement (commit `2612cbc`, `docs/final-demo-evidence` branch)
+
+A second, independent sizing session was run the same day (2026-08-19) on the same host, four
+commits ahead of the base measured above. Its conclusions agreed with M1–M10 in every case (idle
+memory well under 130 MiB, cold start in the low tens of seconds, no dependency changes). The
+handful of data points below were captured with a different method than the corresponding M-section
+above and are preserved here rather than discarded, without duplicating the full protocol a second
+time.
+
+| Corresponds to | Method difference | Value |
+|---|---|---|
+| M2 (idle floor) | Single `docker stats` snapshot, not three samples over ten minutes | ≈ 93.6 MiB total (postgres 48.3 MiB, backend 38.4 MiB, frontend 6.9 MiB) — consistent with, and inside, the M2 floor above |
+| M3 (startup peak) | Node process RSS inside the backend container, not Docker container-level memory | Peak **98.57 MiB**, settled **43.73 MiB** (≈ 2.3× ratio). This is a different metric from M3's container-level 167.9 MiB Docker figure — process RSS versus whole-container memory — and the two are not directly comparable, only both MEASURED. |
+| M7 (cold start) | Timed to first `GET /` returning HTTP 200, not to the Docker health probe reporting healthy | **12,286 ms (≈ 12.3 s)** on an already-migrated database (no-op `migrate deploy`) — faster than M7's health-probe timings above because it measures an earlier readiness point and a warm-migration case, not a conflicting result |
+| M8 | See the authoritative-baseline table above — this is where that session's validation figure (3,460 passed / 240 skipped / 0 failed) is reconciled with this session's contention observation |
+
+No new conclusion follows from this appendix; it exists so that two real, differently-scoped
+measurements are both on record rather than one being silently discarded because the other document
+it lived in was superseded.

@@ -90,6 +90,25 @@ Not part of the required sets, but truthful states the documentation may need.
 | `supporting-settings-fullpage.png` | `/settings` | ADMIN | Settings end to end. |
 | `supporting-findings-fullpage.png` | `/findings` | ANALYST | Findings workspace end to end. |
 
+## Demo-readiness supporting captures
+
+Preserved from a second, independently-captured screenshot set (`docs/evidence/screenshots/`,
+`docs/final-demo-evidence` branch, commit `2612cbc`) at the same 2026-08-19 consolidation that merged
+this file's own governing evidence documents. Two of that set's four images were fully redundant
+with the master/playbook/supporting captures above and were not carried forward; these two prove a
+fact nothing above proves — the exact pre-request state the PKCERT live demonstration begins from,
+on the specific primary Finding (`A`) that `docs/demo/DEMO-READINESS.md` selects for it.
+
+| File | Route | Role | State | What it demonstrates |
+|---|---|---|---|---|
+| `demo-readiness-finding-a-decision-first.png` | `/findings/7` | ANALYST | Finding **A** (`203.0.113.11`, 3389/TCP) — the primary demonstration Finding | Decision-first detail for the specific Finding the live demonstration runbook uses, distinct from Finding 3 in the master/playbook set above. |
+| `demo-readiness-enrichment-before-request.png` | `/findings/7` | ANALYST | Same Finding, Enrichment coverage expanded, **pre-request** | Direct evidence that the demonstration's opening state is correct: every provider row reads "Not requested" (no fresh result exists, so the first analyst click cannot be skipped), the offered action is *Request enrichment* not a repeated-run path, NVD truthfully reports no qualifying subject, and AI assistance shows Disabled. Captured only *after* the bounded rehearsal, database reset and non-contact preflight returned `DEMO READY` (16/16) — it does not show a rehearsed or "skipped" state. |
+
+Capture conditions for these two: 1600×1000 viewport at 2× device scale, full page, signed in as
+`analyst@threatnexus.local`, 0 browser console errors, commit `2612cbc`. Differs from the capture
+conditions table above (1440×900, dark scheme, commit `2bda0e5`) because it is a separate capture
+session; neither invalidates the other.
+
 ## States created for capture
 
 Every state in this library was produced by the application itself. One state was created
