@@ -46,18 +46,24 @@ services:
     image: postgres:16
     restart: unless-stopped
     environment:
-      POSTGRES_DB: threatnexus
+      # POSTGRES_DB and the host ports below are parameterised ONLY so a
+      # disposable demonstration stack can run beside a normal one and use a
+      # database whose NAME carries the `demo` marker that `npm run demo:reset`
+      # requires before it will drop anything (docs/demo/DEMO-READINESS.md).
+      # Every default is the previous literal, so a plain `docker compose up`
+      # behaves exactly as it did before.
+      POSTGRES_DB: ${POSTGRES_DB:-threatnexus}
       POSTGRES_USER: threatnexus
       # Local development default only — never used outside a developer's own
       # machine. Override by exporting POSTGRES_PASSWORD before running
       # `docker compose up` if you want a different local value.
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-threatnexus_local_dev_only}
     ports:
-      - "5432:5432"
+      - "${POSTGRES_HOST_PORT:-5432}:5432"
     volumes:
       - threatnexus_postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U threatnexus -d threatnexus"]
+      test: ["CMD-SHELL", "pg_isready -U threatnexus -d ${POSTGRES_DB:-threatnexus}"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -75,7 +81,7 @@ services:
     environment:
       NODE_ENV: development
       PORT: 5000
-      DATABASE_URL: postgresql://threatnexus:${POSTGRES_PASSWORD:-threatnexus_local_dev_only}@postgres:5432/threatnexus?schema=public
+      DATABASE_URL: postgresql://threatnexus:${POSTGRES_PASSWORD:-threatnexus_local_dev_only}@postgres:5432/${POSTGRES_DB:-threatnexus}?schema=public
       # REQUIRED and deliberately un-defaulted. `docker compose up` fails fast
       # with a clear message rather than starting with a guessable secret.
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET, e.g. JWT_SECRET="$(openssl rand -base64 48)" docker compose up}
@@ -102,6 +108,17 @@ services:
       GREYNOISE_API_KEY: ${GREYNOISE_API_KEY:-}
       SHODAN_API_KEY: ${SHODAN_API_KEY:-}
       NETLAS_API_KEY: ${NETLAS_API_KEY:-}
+      # Provider base URLs. Blank means "use the application's own default"
+      # (env.js falls back on an empty string), so these change nothing unless
+      # an operator sets one. They are passed through because the compose file
+      # previously forwarded every provider KEY but no provider ENDPOINT, which
+      # made the demonstration runbook's provider-outage fallback (S10) — point
+      # a provider at an unreachable endpoint and confirm the failure is
+      # recorded truthfully rather than reported as success — impossible to
+      # rehearse without editing this file.
+      CENSYS_BASE_URL: ${CENSYS_BASE_URL:-}
+      GREYNOISE_BASE_URL: ${GREYNOISE_BASE_URL:-}
+      NETLAS_BASE_URL: ${NETLAS_BASE_URL:-}
       # AI is off by default and there is no live provider in this repository.
       AI_ENABLED: ${AI_ENABLED:-false}
       AI_PROVIDER: ${AI_PROVIDER:-null}
@@ -157,7 +174,7 @@ services:
       RATE_LIMIT_UPLOAD_MAX: ${RATE_LIMIT_UPLOAD_MAX:-20}
       RATE_LIMIT_PROVIDER_MAX: ${RATE_LIMIT_PROVIDER_MAX:-60}
     ports:
-      - "5000:5000"
+      - "${BACKEND_HOST_PORT:-5000}:5000"
     volumes:
       # The synthetic and demonstration CSV fixtures, read-only.
       #
@@ -198,7 +215,7 @@ services:
       # 5173 matches the Vite dev port, so CORS_ORIGIN and any bookmarked URL
       # work the same whether the frontend is containerised or run with
       # `npm run dev`.
-      - "5173:80"
+      - "${FRONTEND_HOST_PORT:-5173}:80"
 
 volumes:
   threatnexus_postgres_data:

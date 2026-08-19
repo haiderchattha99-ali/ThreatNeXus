@@ -1,173 +1,189 @@
-# Handoff: TNX-DOC-EVIDENCE-PREP
+# Handoff: TNX-FINAL-DEMO-DOC-EVIDENCE
 
 - From: claude
-- Suggested next writer: unassigned — evidence base complete, PR open
-- Branch: `docs/final-evidence-prep` (from `origin/main` @ `2bda0e5`, the merge of PR #30)
-- Worktree: `F:\AI-Worktrees\ThreatNeXus\final-doc-evidence` (isolated — the primary checkout was never touched)
-- Writer lease: `d3de04ef-2322-42f5-9d38-48752443e3aa`
+- Suggested next writer: unassigned — closure complete, PR open
+- Branch: `docs/final-demo-evidence` (from `origin/main` @ `2bda0e5`)
+- Worktree: `F:\AI-Worktrees\ThreatNeXus\final-demo-doc-evidence` (isolated — the primary checkout was never touched)
+- Writer lock: **released**
 - Updated: 2026-08-19
+- Status: **demo_ready** — demonstration database reset, non-contact preflight **DEMO READY (16/16)**, execution posture back to default-off.
 
-> Note for any future writer: `handoff-task.ps1` overwrites this file with a short template on every
-> run. If you run it, restore the detail below from the prior commit afterwards — the template alone
-> loses the evidence and the traps.
->
-> The previous ticket's handoff (TNX-FINAL-FRONTEND-POLISH, PR #30) remains recoverable in full with
-> `git show 2bda0e5:docs/ai/HANDOFF.md`.
+> Note for any future writer: `handoff-task.ps1` overwrites this file with a five-line template on
+> every run. If you run it, restore the detail below from the prior commit afterwards — the template
+> alone loses the root cause, the evidence and the traps.
 
-**Status: complete.** This ticket wrote **no final document, deleted nothing, reviewed nothing, and
-contacted no provider.** It exists only to close the factual blockers that stood between the merged
-product and the official documentation set.
+No independent reviewer, Codex pass, or second polish cycle was requested or performed. This was a
+bounded closure.
 
-## What this ticket produced
+---
 
-### 1. `docs/evidence/CONTROLLED-LIVE-CANARY-RECORD.md`
+## What this closed
 
-The TNX-P10C4 controlled live GreyNoise canary, rescued out of Git history into a permanent current
-file.
+A rehearsed Finding answered the analyst's first *Request enrichment* click with
+**"Skipped — a fresh result already exists."** Correct production behaviour; unacceptable as the
+opening state of an official demonstration.
 
-**The problem it fixes is structural, and it will recur.** `docs/ai/HANDOFF.md` and
-`docs/ai/STATE.yaml` are *rolling* documents — every ticket overwrites them. The canary evidence was
-merged to `main` at `914d582` and is still in Git, but it is no longer in either file's current
-checkout. The strongest live-provider evidence this project has was one `git log` away from being
-effectively lost.
+**The fix was never to weaken freshness.** It was to make the demonstration environment
+deterministic and to add a check that refuses to let an operator walk into the room on a rehearsed
+database.
 
-Everything required is preserved: ticket, provider, subject `1.1.1.1`, MANUAL lane, explicit human
-authorisation, 17/17 pre-live preflight, run/job/attempt IDs all `1`, exactly one contact,
-`NOT_FOUND` / HTTP 404, job `NO_RECORD`, run `SUCCEEDED`, attempt `FINISHED`/`NOT_FOUND`,
-`contactedProvider=true`, reservation 1 against a budget of 1, no retry, verified rollback to
-worker-off and `EXECUTION_PAUSED`, disposable volume destroyed, no secret exposure, no second
-contact, and 10C-5 closing the response-body residual afterwards.
+## The three facts that shaped it
 
-**No provider was contacted to produce this record and no API key value appears in it.**
+1. **Ingestion is what contaminated the Findings.** `seed:demo` ingests through the real pipeline,
+   and `reportIngestionService` schedules AUTOMATIC-lane enrichment when `AUTO_ENRICHMENT_ENABLED`
+   is true. The rehearsal ran with it on, so all 11 seeded Findings acquired INGESTION-trigger runs.
+   That is why `demo:reset` **refuses** (guard G5) while automatic enrichment is on — a reset in
+   that posture re-creates, during the seed itself, exactly what it exists to clear.
+2. **Freshness is keyed on the SUBJECT, not the Finding.**
+   `findFreshJobForSubject(provider, subjectType, subjectValue)`. So the preflight checks every
+   (demo provider × demo subject) pair, and it calls *that* function rather than defining freshness
+   a second time — a preflight with its own idea of freshness could pass while the product skips.
+3. **A blank `*_MANUAL_DAILY_BUDGET` means UNLIMITED, not zero**
+   (`DEFAULT_MANUAL_DAILY_BUDGET = null`), and every analyst-triggered run is MANUAL lane. Preflight
+   **S4** therefore fails on a blank budget, not just a large one.
 
-The scope limitation is stated as prominently as the success: the canary proves the approved
-GreyNoise *direct-worker* path, and confers no live proof on `abuseipdb`, on the delegated lane, on
-the four legacy synchronous provider routes, or on any non-local environment.
+## The AbuseIPDB question, resolved from evidence
 
-### 2. `docs/evidence/EXTERNAL-DATA-ACCESS-RECORD.md`
+**Mock output is NOT being persisted under a provider label.** The stored `IocEnrichment` row for
+`192.0.2.40` carried `usageType="Reserved"`, `isWhitelisted=true`, `totalReports=5`,
+`lastReportedAt=2026-07-24`. `mockIocEnrichmentProvider` always writes `usageType: null` /
+`isWhitelisted: false` and uses `totalReports` of 0/2/20/150 — never 5. Only the real API knows that
+range is reserved. Structurally, too: `enrichmentRunner` resolves from `record.provider`,
+`enrichmentBatchController` from `job.provider`, and `enrichmentRuntime` explicitly forbids a mock
+fallback.
 
-Three classes that are never blurred: **REPOSITORY-DOCUMENTED FACT**, **PROJECT-TEAM ATTESTATION**,
-**CURRENT STATUS**.
+**The real defect was the inverse, and it is fixed.** `operationalOverviewService` read the vestigial
+`IOC_ENRICHMENT_PROVIDER` (default `"mock"`) and reported `MOCK_PROVIDER` — rendered as "Mock
+provider" by `Settings.jsx` — while a configured deployment contacted the real AbuseIPDB API and
+spent its quota. **No execution path in this repository reads that variable.** The panel now reports
+what the execution path actually asks.
 
-Every repository claim was verified against the file it cites before being written — `STATUS.md` for
-Shadowserver ticket `#7ibziiin`, `PROJECT_PLAYBOOK.md` and `PROVIDER_GUIDE.md` for live scheduled
-ingestion being out of scope, `data/synthetic/README.md` for `accessible-rdp.synthetic.v1` not being
-an official Shadowserver schema, `README.md` for a real report being requested and not received, and
-a direct scan of every address in `data/synthetic` and `data/demo` confirming they all fall inside
-`192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24` or `198.18.0.0/15`.
+**Red-checked:** both regression assertions fail against the old code with
+`expected 'MOCK_PROVIDER' to be 'CONFIGURED'`.
 
-The attestation is recorded in neutral professional language, with no blame, no speculation about
-reasons, and no implication that the software failed or that Shadowserver data was received.
+## Demonstration set
 
-Both Shadowserver and Rapid7 are classified as **external-data / access dependencies**, never as
-software limitations. The record also preserves the category rule that must never be violated:
-**scanner-source IP addresses are not exposed-RDP destination hosts.**
+| | |
+|---|---|
+| Primary **A** | Finding `7` — `203.0.113.11`, 3389/TCP |
+| Backup **B** | Finding `5` — `198.51.100.21` |
+| Backup **C** | Finding `8` — `203.0.113.12` |
+| Providers | **Censys**, **Netlas**, **GreyNoise** |
+| Excluded | **Shodan** (credential returned 403 `INVALID_KEY` — external readiness, not a product defect), **AbuseIPDB** (keeps the delegated lane inert), **NVD** (no qualifying CVE exists) |
 
-### 3. `docs/evidence/PRODUCTION-SIZING-MEASUREMENTS.md`
+**Zero `Vulnerability` and zero `FindingVulnerability` rows exist in the deterministic dataset**, so
+no CVE-bearing Finding is available. No CVE association was fabricated; the honest S8 talking point
+is used instead.
 
-The audit was right that no measured hardware evidence existed. It does now, and none of it was
-invented.
+## Rehearsal
 
-Every figure carries exactly one of **MEASURED**, **REASONED RECOMMENDATION**,
-**NOT LOAD-TESTED / SCALE ASSUMPTION**, or **NOT MEASURED**. Where the evidence did not support a
-number, the document says NOT MEASURED rather than interpolating.
+One bounded rehearsal covering **S1–S11 plus fresh-result prevention**. All passed. **6 real
+external provider contacts** (censys 1, netlas 2, greynoise 3).
 
-**No concurrency or load test was performed. No concurrent-analyst count, requests-per-second
-figure, throughput rate or HA capacity appears anywhere in it.**
+**One unintended contact is recorded honestly.** The first S10 outage attempt set `NETLAS_BASE_URL`
+via `--env-file`, which only supplies compose *substitution* variables and does not inject them into
+the container — so that attempt reached the real Netlas API instead of the intended unreachable
+endpoint. `docker-compose.yml` now forwards provider base URLs explicitly, and the retry produced
+the intended `FAILED` / `TIMEOUT` with no HTTP status.
 
-Two results are worth carrying forward:
+## Post-rehearsal reset — the hard gate
 
-- **A per-finding byte constant would be fiction, and the measurement proves it.** The first M6
-  attempt used the committed historical fixtures; they produced `HISTORICAL` outcomes, created no
-  new Findings, and moved `pg_database_size` by *exactly zero bytes* three times out of four,
-  because PostgreSQL allocates in 8 KiB pages. A deterministic 500-new-indicator report was then
-  ingested three times to get a real denominator: ≈ 4.9 KB per newly created Finding, ≈ 1.2 KB per
-  subsequent observation — both explicitly labelled REASONED RECOMMENDATION, not constants.
-- **The demo database is 11.92 MiB and its `pg_dump` is 282 KB.** Almost none of that 11.92 MiB is
-  data; it is catalog, indexes and pre-allocated pages. Quoting the database size as the cost of 11
-  findings would overstate it by roughly 40×.
+Reset again, then preflight: **16/16, DEMO READY**. Verified in PostgreSQL that
+`FindingEnrichmentRun`, `FindingEnrichmentRunItem`, `ProviderLookupJob`, `ProviderLookupAttempt`,
+`ProviderDailyUsage` and every provider table are at **zero**, and that A/B/C are untouched.
 
-### 4. `docs/assets/screenshots/final/` — 41 masters plus an index
+`IocEnrichment` legitimately holds **11 PENDING** `abuseipdb` rows — ingestion enqueues one per
+indicator regardless of `AUTO_ENRICHMENT_ENABLED`. Nothing drains that queue automatically,
+`queriedAt` is null on every one (no contact), the credential is blank and its budgets are 0.
+Preflight **S7** enforces the credential's absence.
 
-Captured from the **production build at this exact commit**, against a database created from zero
-and seeded deterministically, with providers, worker, automatic enrichment and AI all off. 1440×900
-at device pixel ratio 2, dark scheme, clean Chromium profile, animations frozen, **zero console
-errors across every capture.**
+## Default-off restored
 
-Both Master screenshots and all 18 Playbook captures are present. The index records route, role,
-state, viewport, capture date and source commit for each, and names no AI or tool as author.
+Restarted with `ENRICHMENT_WORKER_ENABLED=false`, confirmed by the **absence of the worker-started
+line in the new container's own logs** — a positive process-level check. (Per the 10C-4 contract the
+absence of a `stopped` audit row is explicitly *not* accepted as evidence, since that
+fire-and-forget write can fail silently.)
 
-### 5. Canonical state reconciled
-
-`docs/ai/STATE.yaml` now carries a `program_status` block recording core engineering **closed**,
-security pass **closed** (PR #29), frontend polish **closed / merged** (PR #30), documentation
-blueprint **approved**, documentation evidence preparation **completed**, and next stage **MASTER
-OFFICIAL DOCUMENT DRAFTING**.
-
-It also carries two new blocks the next writer needs: `documentation_fact_corrections` (the exact
-figures and wording corrections the final documents must apply) and `prior_ticket_evidence` (the
-commits where each previous ticket's evidence remains recoverable — the habit this ticket exists to
-establish).
-
-## Things that were done honestly rather than smoothly
-
-- **One state was created for capture, and it is disclosed.** The demo seed requests *and approves*
-  a closure, so no pending closure request survives it and P-10/P-11 had nothing to photograph. A
-  second closure request was created on case 1 through the real API and deliberately left pending.
-  Its own justification text says why it exists. Nothing else was added and no image was edited.
-- **A literal `RESTRICTED`/`UNAVAILABLE` dashboard KPI tile could not be captured** and is marked
-  **NOT AVAILABLE FROM CURRENT DEMO DATA**. At demonstration scale every dashboard section resolves
-  to a real value; forcing a degraded tile would have meant removing a capability or breaking a data
-  source, i.e. staging a state the system is not in. The truthful distinctions that *are*
-  reproducible were captured instead: the four risk-factor applicability states, the
-  capability-restricted VIEWER section, and the unified route-level refusal.
-- **M8 peak memory is NOT MEASURED.** The host sampler failed on a path conversion and the run was
-  not repeated. Container samples from the same window could not be cleanly attributed, so they were
-  discarded rather than reported as if they meant something.
-- **Five backend test files failed locally on 10-second hook timeouts.** That is this machine's
-  documented contention pattern, not a regression — the failures are `beforeAll` timeouts and differ
-  between runs. Recorded rather than omitted; CI is the authoritative signal.
-- **Docker reports two different sizes for the same image on this host.** Both readings are recorded
-  with their method instead of quietly choosing the more convenient one.
+The disposable stack is left up with the **verified DEMO READY data state** and **execution
+default-off**. Before presenting: flip the worker on, re-run `demo:preflight`, confirm `DEMO READY`.
 
 ## Traps worth carrying forward
 
-- **A `-f` compose overlay concatenates its `ports` list with the base file's rather than replacing
-  it** — the operational note 10C-4 left behind. This session used a dedicated compose file in the
-  scratchpad with absolute build contexts, which avoids it entirely.
-- **The backend image does not contain `tests/`**, so the verification suite cannot be run inside
-  it. M8 has to run on the host.
-- **The backend suite is hermetic by default** (`TNX_SKIP_DOTENV`), and its real-PostgreSQL
-  integration tests gate on `TEST_DATABASE_URL`, not `DATABASE_URL`. Without it they self-skip and
-  the suite still reports green — 273 tests were skipped even *with* it set.
-- **Run `npx prisma generate` after `npm ci`.** A stale client is the documented cause of a large
-  block of phantom failures.
-- **`pg_database_size` moves in page-sized steps.** Any single before/after ingestion reading can
-  legitimately be `+0`. Measure across a batch large enough to clear page granularity.
-- **The dashboard KPI is a GSAP count-up.** Read `data-count-to`, never rendered text.
+- **`--env-file` is compose substitution only.** A variable not named in the service's
+  `environment:` block never reaches the container. This silently cost one real provider call.
+- **`docker exec` needs `MSYS_NO_PATHCONV=1`** in Git Bash, or `/app/x.js` becomes `F:/Git/app/x.js`.
+- **A FAILED lookup gets a ~5 minute freshness window**, not the 24 h a success gets — so a failed
+  provider can simply be retried shortly after, or forced with a justification.
+- **`contactedProvider=true` means contact was *initiated*,** not that a provider answered. The
+  timeout row carries it with no HTTP status.
+- **`isProviderCredentialConfigured('nvd')` is unconditionally true**, so an NVD credential
+  assertion is vacuous. Excluded from P2 on purpose.
+- **`EXECUTION_PAUSED` is evaluated before any budget state** and masks
+  `BUDGET_ZERO`/`BUDGET_EXHAUSTED`, which is why S4 reads budgets directly rather than inferring
+  them from readiness.
+- **The legacy path's only unique signature is a `<provider>.lookup.*` audit action.** A
+  provider-table row count proves nothing, because the orchestration path writes those same tables.
 
-## Protected boundaries honoured
+## Where the evidence lives
 
-- The primary checkout `C:\Users\LENOVO\Desktop\ThreatNeXus` was **never modified** — its foreign
-  presentation changes are exactly as found. All work happened in an isolated worktree.
-- A separate `tnxdemo` stack was already running on the default ports and was **left untouched**;
-  the measurement stack used isolated ports under its own compose project and was destroyed with
-  `docker compose down -v`.
-- No `git add -A`; every commit staged explicit paths.
-- `backend/.env` was never opened, read, printed or referenced.
-- No product source file, dependency, migration, schema or configuration was changed.
+| | |
+|---|---|
+| Operator runbook | `docs/demo/DEMO-READINESS.md` |
+| Rehearsal, S1–S11, contact count | `docs/evidence/DEMO-REHEARSAL-EVIDENCE.md` |
+| Phase-10C4 canary (rescued from `914d582`, not re-run) | `docs/evidence/CONTROLLED-LIVE-CANARY.md` |
+| Shadowserver / Rapid7 chronology | `docs/evidence/EXTERNAL-DATA-ACCESS.md` |
+| M1–M10 sizing, every figure classified | `docs/evidence/PRODUCTION-SIZING.md` |
+| Final screenshots | `docs/evidence/screenshots/` |
 
-## Next action
+## Next
 
-**STOP.** Do not begin drafting in this session.
+**MASTER OFFICIAL SYSTEM & HANDOVER DOCUMENT.** Not started — deliberately out of scope here, along
+with the README rewrite and the Playbook/Handbook drafting.
 
-The next stage is the **ThreatNeXus Official System & Handover Document** (18-page target, 20-page
-hard maximum), then the **Analyst & Operations Playbook**, then the **Knowledge & Defence
-Handbook**, and **README last**. Old-document cleanup does not begin until the new set exists.
+**CI: green on the first push**, at the exact PR tip `2612cbc` —
+[run 32239329856](https://github.com/haiderchattha99-ali/ThreatNeXus/actions/runs/32239329856)
+(push) and
+[run 32239427198](https://github.com/haiderchattha99-ali/ThreatNeXus/actions/runs/32239427198)
+(pull_request). All six required jobs succeeded on both: Secrets and generated artifacts, Prisma
+schema and migration history, Backend tests, Frontend lint/tests/build, Browser suite (Chromium),
+Core evaluators. "Mutation and concurrency gates" is manual-trigger-only and correctly skipped.
 
-Before drafting, read `docs/ai/STATE.yaml` → `documentation_fact_corrections`. It carries the
-current counts (25 migrations, 165 backend test files, 17 frontend test files, 11 Playwright specs),
-the fact that a bounded security assessment *was* completed and that `README.md` currently contains
-a false statement to the contrary, the required Finding-versus-Case wording correction, the
-architecture-labelling rule, and the frozen document-control decisions on authorship, review status
-and adoption language.
+PR: <https://github.com/haiderchattha99-ali/ThreatNeXus/pull/32> — **open, not merged.**
+
+## Post-CI re-verification (no provider call)
+
+Re-run after CI went green, to confirm the demonstration state survived the rehearsal and the
+rollback rather than assuming it did.
+
+`demo:preflight`, executed inside the **serving** demonstration container, returned **14/16 —
+DEMO NOT READY**. That is the **correct** result for the state the stack is deliberately left in,
+and it reproduces recorded scenario **S7a** character for character:
+
+| | |
+|---|---|
+| **S3** | `ENRICHMENT_WORKER_ENABLED=false, expected=true` |
+| **P3** | `censys=EXECUTION_PAUSED, netlas=EXECUTION_PAUSED, greynoise=EXECUTION_PAUSED` |
+
+Both are consequences of the *single* variable that §10 rollback step 1 turns off. There is no way
+to reach 16/16 with the worker off — `DEMO_EXPECT_WORKER=false` would satisfy S3, but P3 still
+resolves `EXECUTION_PAUSED`, because readiness evaluates the worker before any budget state.
+
+**Every data gate passed**, which is what actually had to be proved:
+
+- **B1–B4** — disposable `threatnexus_demo`, 25/25 migrations applied, Findings `[5,7,8]` present
+- **D1** — `FindingEnrichmentRun` rows on the demo Findings: **0**
+- **D2** — no fresh provider result for any (demo provider × demo subject); the first click cannot
+  be answered "a fresh result already exists"
+- **S1, S2, S4, S5, S6, S7** — automatic enrichment off, automatic budgets 0, manual budgets
+  explicit at 3, **0** legacy `<provider>.lookup.*` audit rows, no live-smoke opt-in, excluded
+  providers uncredentialed
+
+Confirmed independently in PostgreSQL: `FindingEnrichmentRun` **0**, `ProviderLookupJob` **0**,
+`ProviderLookupAttempt` **0**, `ProviderDailyUsage` **0**, `Finding` **11**,
+`Vulnerability` **0**. The demonstration dataset is reset and untouched.
+
+**No provider was contacted by this verification.** `demo:preflight` imports no provider, adapter
+or execution-service module, and the worker was never started.
+
+To present: bring the stack up with the §1 demonstration profile
+(`ENRICHMENT_WORKER_ENABLED=true`), re-run `demo:preflight`, and require **DEMO READY**.

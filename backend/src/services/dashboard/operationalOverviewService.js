@@ -447,23 +447,36 @@ async function buildProvidersSection(client, asOf) {
     }),
   ]);
 
-  const selectedIocProvider = String(env.IOC_ENRICHMENT_PROVIDER || "mock").toLowerCase();
   const abuseIpdbKeyPresent = Boolean(env.ABUSEIPDB_API_KEY);
 
+  // The IOC reputation provider this panel reports is the one the EXECUTION
+  // path actually asks, which is always `abuseipdb`:
+  //
+  //   - enrichmentRunService.establishDelegate() builds the delegate identity
+  //     with a hardcoded `provider: "abuseipdb"`;
+  //   - enrichmentRunner resolves the adapter from the STORED row
+  //     (`providerRegistry.resolve(record.provider)`), never from a selector;
+  //   - enrichmentBatchController likewise executes `job.provider`;
+  //   - enrichmentRuntime documents and enforces that an unregistered name
+  //     resolves to nothing rather than silently falling back to MockProvider.
+  //
+  // `IOC_ENRICHMENT_PROVIDER` is read by NO execution path in this repository
+  // (only by seedDemo.js, which sets it, and the canary preflight, which
+  // asserts on it). Reporting it here meant the operational overview announced
+  // "Mock provider" while a configured deployment was contacting the real
+  // AbuseIPDB API and spending its quota — a mock label over real third-party
+  // evidence, which is the same class of defect as a real label over mock
+  // evidence, and exactly what this panel exists to prevent. MockProvider is
+  // reachable only by a job that explicitly stored `provider: "mock"`, and the
+  // orchestration path never creates one.
+  //
   // "Configured" reports only whether a key is present, never its value or any
   // fragment of it.
   const iocProvider = {
     id: "ioc-reputation",
     name: "IP reputation",
-    selected: selectedIocProvider,
-    // The mock provider needs no key and is always usable; the real one is
-    // usable only when a key exists.
-    status:
-      selectedIocProvider === "mock"
-        ? "MOCK_PROVIDER"
-        : abuseIpdbKeyPresent
-          ? "CONFIGURED"
-          : "NOT_CONFIGURED",
+    selected: "abuseipdb",
+    status: abuseIpdbKeyPresent ? "CONFIGURED" : "NOT_CONFIGURED",
     ...providerFreshness(lastIocSuccess?._max?.queriedAt, asOf),
     source: "IocEnrichment.queriedAt WHERE status = SUCCESS",
   };

@@ -204,7 +204,18 @@ describe("operationalOverviewService — no live provider traffic", () => {
     }
 
     // Status reports PRESENCE only, and only from the closed set of values.
-    expect(providers.ioc.status).toMatch(/^(MOCK_PROVIDER|CONFIGURED|NOT_CONFIGURED)$/);
+    // MOCK_PROVIDER is deliberately NOT in this set: the IOC reputation panel
+    // reports the provider the execution path actually asks (always
+    // `abuseipdb`), never the vestigial IOC_ENRICHMENT_PROVIDER selector.
+    expect(providers.ioc.status).toMatch(/^(CONFIGURED|NOT_CONFIGURED)$/);
+
+    // This file's environment sets IOC_ENRICHMENT_PROVIDER=mock AND a blank
+    // ABUSEIPDB_API_KEY. Before the fix that combination reported
+    // MOCK_PROVIDER; the truthful answer is that no key is configured. The
+    // key-present half of this contract lives in
+    // operationalOverviewIocProviderTruth.test.js.
+    expect(providers.ioc.status).toBe("NOT_CONFIGURED");
+    expect(providers.ioc.selected).toBe("abuseipdb");
     for (const provider of providers.vulnerability) {
       expect(provider.status).toMatch(
         /^(CONFIGURED_WITH_KEY|KEYLESS_PUBLIC_RATE_LIMIT|NO_KEY_REQUIRED)$/
