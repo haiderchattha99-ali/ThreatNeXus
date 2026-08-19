@@ -1,44 +1,26 @@
-# Final demonstration screenshots
+# Superseded — see docs/assets/screenshots/final/
 
-Captured **2026-08-19** against the disposable demonstration stack
-(`threatnexus_demo`) running current `origin/main` (`2bda0e5`) plus this branch.
+**Superseded by:** [`docs/assets/screenshots/final/`](../../assets/screenshots/final/)
+**Date:** 2026-08-19
+**Source commit (consolidation):** `fbffbe325e94969d459b690cee4bf46414f970ed`
+**Original content authored at:** `2612cbcb5691b4d5348920ff239c5e7de75acea4`
 
-**Captured only AFTER** the bounded rehearsal was completed, the demonstration
-database was reset, and the non-contact preflight returned **`DEMO READY`
-(16/16)**. None of these images shows a rehearsed or "skipped — a fresh result
-already exists" state.
+This directory held four screenshots captured on the `docs/final-demo-evidence` branch. The
+`docs/assets/screenshots/final/` library (41 files, `docs/final-evidence-prep` branch) is the
+canonical screenshot set for the final documentation: broader coverage (master, playbook and
+supporting captures across every role), a fuller capture-conditions record, and produced from the
+final frontend build.
 
-Signed in as the seeded `analyst@threatnexus.local` account. **0 browser console
-errors** during capture. 1600×1000 viewport at 2× device scale, full page.
+- `01-dashboard.png` and `02-findings.png` were fully redundant with that library's dashboard and
+  findings captures and were removed. No unique evidence was lost — compare
+  `master-dashboard-analyst.png`, `playbook-02-dashboard.png`, `playbook-03-findings-filters.png`
+  and `supporting-findings-fullpage.png`.
+- `03-finding-detail-decision-first.png` and `04-enrichment-coverage-before-request.png` proved a
+  fact the other library did not capture — the specific pre-request enrichment state of the primary
+  demonstration Finding. They were moved, pixels unaltered, to
+  `docs/assets/screenshots/final/demo-readiness-finding-a-decision-first.png` and
+  `docs/assets/screenshots/final/demo-readiness-enrichment-before-request.png`, and documented under
+  "Demo-readiness supporting captures" in that directory's `README.md`.
 
-| File | What it shows |
-|---|---|
-| `01-dashboard.png` | Operational overview. Every figure carries a source and an as-of; unreadable or uncomputable sections report RESTRICTED/UNAVAILABLE rather than a silent zero. |
-| `02-findings.png` | The Findings workspace over the loaded demonstration dataset (11 synthetic Accessible-RDP Findings). |
-| `03-finding-detail-decision-first.png` | Finding **A** (`203.0.113.11`, 3389/TCP) — risk, ownership and confidence, triage, evidence provenance, observation history. |
-| `04-enrichment-coverage-before-request.png` | The same Finding with Enrichment coverage expanded, in the **pre-request** state the demonstration begins from. |
-
-## Why `04` is the important one
-
-It is the direct evidence that the demonstration's opening state is correct:
-
-- every provider row reads **"Not requested"** — no fresh result exists, so the
-  first analyst click cannot be skipped;
-- the primary action offered is **Request enrichment**, not the repeated-run
-  path;
-- **"Execution active"** confirms the worker will pick up recorded work;
-- **NVD** truthfully reports **no qualifying subject on this Finding** — no CVE
-  was fabricated to enable an NVD demonstration;
-- the IP reputation panel shows **Queued**, not a value, and says so: *"No
-  reputation values are shown, because the lookup did not succeed. This is not a
-  clean result."* That is the legacy `IocEnrichment` queue row ingestion always
-  creates, rendered honestly rather than as evidence;
-- **AI assistance is Disabled**, and the risk score is reconstructed from stored
-  factor contributions — including three factors explicitly marked *Not
-  applicable* because no CVE is associated.
-
-## Contents
-
-All data is synthetic. Organizations are fictional and every address is an
-RFC 5737 / RFC 2544 reserved range. **No real constituent data, and no
-credential or credential fragment, appears in any image.**
+Do not add files to this directory further. The full original directory remains in Git history at
+commit `2612cbc` for archaeology.

@@ -7,6 +7,13 @@
 **Governing contract:** `docs/ai/PHASE-10C4-CONTROLLED-LIVE-ENRICHMENT-CONTRACT.md` (revision 2, frozen)
 **Decision reference:** `D-P10C4-01`
 
+**Canonical source:** this file is the single canonical record of the 10C-4 canary. A second,
+independently-written record (`docs/evidence/CONTROLLED-LIVE-CANARY.md`, produced on the
+`docs/final-demo-evidence` branch without knowledge of this file) was merged into it on
+**2026-08-19** at commit `fbffbe3`. Every fact unique to that document — the port-mapping
+observation in "Operational note" below — was carried forward before the duplicate was marked
+superseded. Nothing in either source document was discarded.
+
 ## Why this record exists
 
 The evidence below was written into `docs/ai/HANDOFF.md` and `docs/ai/STATE.yaml` at commit
@@ -203,3 +210,10 @@ The preferred independent cross-provider reviewer (Codex) was unavailable for th
 to a usage limit resetting 2026-08-21. This is recorded rather than concealed: the internal
 fallback reviewer carried that scope per the team workflow, the same substitution already used for
 10C-3. Both gates closed 0 P0 / 0 P1 before the live call was authorised.
+
+## Operational note recorded at the time (not a defect)
+
+The compose overlay's `ports` list **concatenated** with the base file's rather than replacing it,
+so the disposable backend was also briefly reachable on host port 5000 in addition to the intended
+15000 during the canary. No collision occurred and nothing was contacted through the unintended
+port. A dedicated compose file is preferable to `-f` layering if this procedure is repeated.

@@ -1,104 +1,74 @@
 ﻿{
-    "schema_version":  1,
-    "ticket":  "TNX-FINAL-DEMO-DOC-EVIDENCE",
-    "title":  "Final PKCERT demonstration readiness and documentation-evidence closure",
-    "status":  "pr_open",
-    "owner":  "unassigned",
-    "reviewer":  "none (bounded closure; no independent review requested)",
-    "branch":  "docs/final-demo-evidence",
-    "worktree":  "F:\\AI-Worktrees\\ThreatNeXus\\final-demo-doc-evidence",
-    "starting_commit":  "2bda0e5",
-    "goal":  "Make the PKCERT live demonstration deterministic, repeatable and truthful: a guarded disposable-database reset, a non-contact readiness preflight whose hard gate is that the first analyst enrichment click cannot be answered \u0027a fresh result already exists\u0027, one bounded live rehearsal of all eleven audience-interruption scenarios, a reset back to an untouched presentation state, and the previously approved documentation evidence (controlled-live canary, external-data chronology, M1-M10 sizing, final screenshots). No new product scope.",
-    "current_work":  "",
-    "files_changed":  [
-                          "backend/src/scripts/demoReset.js (new) - guarded disposable-demo database reset",
-                          "backend/src/scripts/demoPreflight.js (new) - non-contact demonstration readiness preflight",
-                          "backend/tests/unit/demoReset.test.js (new)",
-                          "backend/tests/unit/demoPreflight.test.js (new)",
-                          "backend/tests/unit/operationalOverviewIocProviderTruth.test.js (new) - AbuseIPDB label regression",
-                          "backend/src/services/dashboard/operationalOverviewService.js - report the IOC provider the execution path actually asks",
-                          "backend/tests/unit/operationalOverviewService.test.js - MOCK_PROVIDER removed from the closed status set",
-                          "backend/package.json - demo:reset and demo:preflight entries",
-                          "docker-compose.yml - parameterise POSTGRES_DB and host ports; forward provider base URLs",
-                          "docs/demo/DEMO-READINESS.md (new) - operator runbook",
-                          "docs/evidence/CONTROLLED-LIVE-CANARY.md (new) - Phase 10C-4 canary rescued from 914d582",
-                          "docs/evidence/EXTERNAL-DATA-ACCESS.md (new) - Shadowserver and Rapid7 chronology",
-                          "docs/evidence/PRODUCTION-SIZING.md (new) - M1-M10, every figure classified",
-                          "docs/evidence/DEMO-REHEARSAL-EVIDENCE.md (new) - S1-S11 results and contact count",
-                          "docs/evidence/screenshots/ (new) - four final screenshots captured after the post-rehearsal reset",
-                          "docs/ai/STATE.yaml",
-                          "docs/ai/HANDOFF.md"
-                      ],
-    "root_cause":  "Report ingestion schedules AUTOMATIC-lane enrichment when AUTO_ENRICHMENT_ENABLED is true. The rehearsed stack ran with it on, so all 11 seeded Findings accumulated INGESTION-trigger runs and fresh ProviderLookupJob rows. Freshness is keyed on (provider, subjectType, subjectValue) via repository.findFreshJobForSubject, so the analyst\u0027s first MANUAL request on such a Finding routes every item to SKIPPED_CACHED / FRESH_RESULT_EXISTS - the \u0027Skipped - a fresh result already exists\u0027 state. Correct production behaviour, unacceptable as a demonstration starting state. Compounding it, a blank *_MANUAL_DAILY_BUDGET means UNLIMITED rather than zero, and no tooling existed to prove a demonstration database was clean before presenting.",
-    "final_contract":  "Demonstration posture is a deliberate, documented deviation held ONLY in the operator\u0027s environment: AUTO_ENRICHMENT_ENABLED=false (unchanged default), ENRICHMENT_WORKER_ENABLED=true (the single deviation), every *_AUTOMATIC_DAILY_BUDGET=0 (unchanged default), and every *_MANUAL_DAILY_BUDGET set to an EXPLICIT small integer because blank means UNLIMITED. Excluded providers have their credentials blanked so no path - including the legacy unmetered synchronous routes - can reach them. Shipped repository defaults are unchanged: the worker is off, automatic enrichment is off, automatic budgets are 0, AI is off. No SMTP or webhook client was added. The reset can only act on a database whose name carries the \u0027demo\u0027 marker and is echoed back by DEMO_RESET_CONFIRM.",
-    "scope":  {
-                  "included":  [
-                                   "backend/src/scripts/demoReset.js and demoPreflight.js - two new operator entry points, never wired into CI or npm test, structurally incapable of provider contact (asserted by test)",
-                                   "One bounded product fix: operationalOverviewService no longer reports the IOC reputation provider from the vestigial IOC_ENRICHMENT_PROVIDER selector",
-                                   "docker-compose.yml - POSTGRES_DB and the three host ports parameterised with their previous literals as defaults; provider base URLs forwarded (blank = application default)",
-                                   "docs/demo/ and docs/evidence/ - runbook, canary record, external-data chronology, M1-M10 sizing, rehearsal evidence, four screenshots"
-                               ],
-                  "excluded":  [
-                                   "Any change to freshness, quota, authorization or provider-safety semantics - the demonstration was made deterministic by controlling STATE and CONFIGURATION, never by weakening a control",
-                                   "Multi-protocol ingestion. Accessible-RDP remains the only implemented report family; the future-scope families are recorded in the runbook as explicitly NOT existing today",
-                                   "Any new dependency anywhere in the repository",
-                                   "Removal of IOC_ENRICHMENT_PROVIDER or of the legacy synchronous provider routes",
-                                   "Any independent reviewer, Codex pass, or second polish cycle - explicitly not requested for this bounded closure",
-                                   "README rewrite and the final Master/Playbook/Handbook drafting - the next phase",
-                                   "The primary Desktop checkout, which holds unrelated protected work and was never modified"
-                               ]
-              },
-    "completed":  [
-                      "Contained the contaminated rehearsal stack (compose project tnxdemo, database \u0027threatnexus\u0027, built from the frontend-polish worktree) after preserving its diagnostics; removed its volume. The primary Desktop checkout was never modified.",
-                      "Resolved the AbuseIPDB mock-vs-real ambiguity from evidence, not speculation: the stored IocEnrichment row for 192.0.2.40 carried usageType=\u0027Reserved\u0027, isWhitelisted=true, totalReports=5 and lastReportedAt=2026-07-24, none of which mockIocEnrichmentProvider can produce (it always writes usageType:null, isWhitelisted:false, and totalReports of 0/2/20/150). Real AbuseIPDB was contacted. Mock output CANNOT be persisted under a provider-labelled orchestration row: enrichmentRunner resolves from record.provider, enrichmentBatchController from job.provider, and enrichmentRuntime forbids a mock fallback.",
-                      "Found and fixed the INVERSE defect that was real: operationalOverviewService read the vestigial IOC_ENRICHMENT_PROVIDER (default \u0027mock\u0027) and reported MOCK_PROVIDER - rendered as \u0027Mock provider\u0027 by Settings.jsx - while a configured deployment contacted the real AbuseIPDB API and spent its quota. No execution path anywhere reads that variable. The panel now reports the provider the execution path actually asks. RED-CHECKED: both regression tests fail against the old code with \u0027expected MOCK_PROVIDER to be CONFIGURED\u0027.",
-                      "Built demo:reset with five independent fail-closed guards (G1 not production, G2 database name carries the \u0027demo\u0027 marker, G3 not a reserved/long-lived name, G4 DEMO_RESET_CONFIRM echoes the exact database name, G5 AUTO_ENRICHMENT_ENABLED off). G5 is the one that matters: seeding with automatic enrichment on re-creates, during the seed itself, the runs the reset exists to clear. Proved the refusals live before using it for real.",
-                      "Built demo:preflight - 16 non-contact assertions. D2, the hard gate, calls the product\u0027s OWN freshness query (repository.findFreshJobForSubject) rather than a second definition, so it cannot pass while the product skips. S5 detects past legacy contact via the \u003cprovider\u003e.lookup.* audit signature (a provider-table row count would not, since the orchestration path writes those tables too); S7 keeps the legacy path inert forward by requiring excluded providers to be uncredentialed.",
-                      "Stood up a fresh disposable stack on threatnexus_demo (ports 15432/15000/15173) from current origin/main, ran demo:reset, and selected the demonstration Findings on evidence: A=7 (203.0.113.11), B=5 (198.51.100.21), C=8 (203.0.113.12). Confirmed ZERO Vulnerability and ZERO FindingVulnerability rows exist, so no CVE-bearing Finding is available and NVD is excluded rather than fabricated.",
-                      "Executed ONE bounded live rehearsal covering S1-S11 plus fresh-result prevention. 6 real external provider contacts total (censys 1, netlas 2, greynoise 3). Every scenario behaved truthfully: double-click deduplicated to one run, forced re-run refused without justification and recorded it with one, budget exhaustion produced SKIPPED_BUDGET with no HTTP status and no contact, worker-off produced PAUSED_WORKER_DISABLED with no contact, an unreachable provider produced FAILED/TIMEOUT and never a fake success.",
-                      "RED-CHECKED the preflight against the rehearsed database: DEMO NOT READY, D1 and D2 failing and naming every blocking Finding/provider/job pair.",
-                      "Reset the demonstration database again (the hard gate) and re-ran the non-contact preflight: 16/16, DEMO READY. Verified directly in PostgreSQL that FindingEnrichmentRun, FindingEnrichmentRunItem, ProviderLookupJob, ProviderLookupAttempt, ProviderDailyUsage and every provider table are at zero, and that A/B/C are untouched.",
-                      "Captured the four final screenshots ONLY after that reset, with 0 browser console errors. The enrichment panel shows every provider \u0027Not requested\u0027 and offers \u0027Request enrichment\u0027 - the state the demonstration must start from.",
-                      "Restored default-off: restarted with ENRICHMENT_WORKER_ENABLED=false and confirmed it by the ABSENCE of the worker-started line in the new container\u0027s own logs (a positive process-level check; the absence of a \u0027stopped\u0027 audit row is explicitly not accepted as evidence).",
-                      "Rescued the Phase-10C4 controlled-live GreyNoise canary from commit 914d582\u0027s HANDOFF.md - which every later handoff overwrites - into permanent evidence, WITHOUT re-running it.",
-                      "Recorded the external-data chronology (Shadowserver responded, Ms. Ayesha coordinated, the request was not approved by AD Threat Intelligence Mrs. Aasia Bibi, so Shadowserver access was never treated as available; Rapid7 Open Data ticket #140718 submitted 2026-08-11, followed up, nothing received as of 2026-08-19) in neutral language, inventing no RDP evidence.",
-                      "Ran the bounded M1-M10 sizing protocol with every figure classified MEASURED / REASONED RECOMMENDATION / NOT LOAD-TESTED. M6 was measured on a scratch database created and dropped for the purpose so the demonstration database was never touched. No concurrency capacity is claimed anywhere.",
-                      "Validation: full backend suite 3460 passed / 240 skipped / 0 failed; 43 new targeted tests across demoReset, demoPreflight and the AbuseIPDB label regression."
-                  ],
-    "validation":  {
-                       "passing":  [
-                                       "backend: npx vitest run -\u003e 3460 passed, 240 skipped, 0 failed (168 files, 100.33s)",
-                                       "backend: 27 demoPreflight assertions incl. both directions of every hard gate",
-                                       "backend: 16 demoReset guard tests incl. all five refusals reported at once",
-                                       "backend: 4 AbuseIPDB provider-label regression assertions, RED-CHECKED against the old code",
-                                       "live: demo:reset refusals proved (missing confirmation; reserved name + marker + auto-enrichment on)",
-                                       "live: demo:preflight 16/16 DEMO READY on the final reset state",
-                                       "live: demo:preflight DEMO NOT READY on the rehearsed state (D1, D2, P3)",
-                                       "live: S1-S11 rehearsal, 6 real provider contacts, all outcomes truthful",
-                                       "git diff --check clean",
-                                       "CI: GREEN at the exact PR tip 2612cbc - run 32239329856 (push) and run 32239427198 (pull_request), all six required jobs succeeded on both (Secrets and generated artifacts, Prisma schema and migration history, Backend tests, Frontend lint/tests/build, Browser suite (Chromium), Core evaluators). 'Mutation and concurrency gates' is manual-trigger-only and correctly skipped",
-                                       "post-CI re-verification, NO provider call: demo:preflight re-run inside the serving demonstration container returned 14/16, exactly reproducing recorded scenario S7a - S3 (ENRICHMENT_WORKER_ENABLED=false, expected=true) and P3 (EXECUTION_PAUSED). That is the documented post-demonstration resting posture of runbook section 10, not a regression. Every data gate passed: B1-B4, D1 (0 enrichment runs), D2 (no fresh job for any demo subject), S5 (0 legacy lookup audit rows)",
-                                       "post-CI database proof, direct SQL on threatnexus_demo: FindingEnrichmentRun=0, ProviderLookupJob=0, ProviderLookupAttempt=0, ProviderDailyUsage=0, Finding=11, Vulnerability=0. The demonstration dataset is reset and untouched"
-                                   ],
-                       "failing":  [
-
-                                   ],
-                       "red_check":  "PASS - the AbuseIPDB provider-label regression was confirmed FAILING against the pre-fix operationalOverviewService with 'expected MOCK_PROVIDER to be CONFIGURED' before the fix turned it green. demo:preflight was additionally red-checked live against the rehearsed database (DEMO NOT READY, D1/D2/P3 failing and naming every blocking Finding, provider and job pair), and each of demo:reset's five guards was proved to refuse before the script was used for real.",
-                       "secret_sweep":  "PASS - no .env committed, no credential-shaped literal in the diff, no tracked dist/ or node_modules. Provider keys reached the demonstration container only through docker compose --env-file against the operator's gitignored backend/.env; only variable NAMES were ever inspected or printed. CI job 'Secrets and generated artifacts' passed at the exact PR tip.",
-                       "live_provider_calls":  "BOUNDED AND AUTHORIZED - 6 real external provider contacts in ONE authorized rehearsal (censys 1, netlas 2, greynoise 3), plus 1 UNINTENDED contact recorded honestly in docs/evidence/DEMO-REHEARSAL-EVIDENCE.md: the first S10 outage attempt set NETLAS_BASE_URL through --env-file, which supplies compose SUBSTITUTION variables only and does not inject them into the container, so that attempt reached the real Netlas API. Zero provider contacts after the post-rehearsal reset, and zero during this closure. demo:reset and demo:preflight are structurally incapable of contact and that is asserted by unit test.",
-                       "git_status_before":  "Isolated worktree F:\\AI-Worktrees\\ThreatNeXus\\final-demo-doc-evidence created clean from 2bda0e5 (origin/main after PR #30 merged). The primary Desktop checkout, which holds unrelated uncommitted presentation work, was never read beyond git status, never staged and never modified.",
-                       "git_status_after":  "Clean, nothing uncommitted. One commit 2612cbc pushed: 21 files across backend/src/scripts, backend/tests/unit, backend/src/services/dashboard, backend/package.json, docker-compose.yml, docs/demo/, docs/evidence/ and docs/ai/. Nothing outside those paths was touched."
-                   },
-    "known_issues":  [
-                         "One UNINTENDED real provider contact occurred during the rehearsal and is recorded in docs/evidence/DEMO-REHEARSAL-EVIDENCE.md: the first S10 outage attempt set NETLAS_BASE_URL through --env-file, which only supplies compose substitution variables and does not inject them into the container, so that attempt reached the real Netlas API (HTTP 200) instead of the intended unreachable endpoint. docker-compose.yml now forwards provider base URLs explicitly so the fallback is genuinely rehearsable.",
-                         "Shodan is excluded from the demonstration provider set because its available credential returned HTTP 403 INVALID_KEY during the earlier rehearsal. This is external credential readiness, NOT a product defect. It was not re-proved, to avoid spending quota for no new information.",
-                         "NVD cannot be demonstrated: seed:demo creates zero Vulnerability and zero FindingVulnerability rows, so no Finding carries a qualifying CVE subject. Deliberately left as the honest S8 talking point rather than fabricating a CVE association.",
-                         "IOC_ENRICHMENT_PROVIDER is now read by no production code path at all (only seedDemo.js sets it and enrichmentCanaryPreflight.js asserts on it). Removing the variable entirely was out of scope for this bounded closure.",
-                         "The legacy synchronous per-provider routes remain an off-ledger contact path, disclosed and detected rather than fixed (their disposition is still unowned). Preflight S5 detects past use; S7 keeps them inert for the demonstration by requiring excluded providers to be uncredentialed.",
-                         "240 backend tests skip locally because the real-PostgreSQL suites gate on TEST_DATABASE_URL. A green local run is not equivalent to CI."
-                     ],
-    "next_action":  "Demonstration-readiness closure is COMPLETE. PR #32 is open at https://github.com/haiderchattha99-ali/ThreatNeXus/pull/32 and CI is green at its exact tip (2612cbc, runs 32239329856 and 32239427198). The demonstration database was re-verified untouched after CI without contacting any provider. Deliberately NOT auto-merged. To present: bring the disposable stack up with the section 1 demonstration profile (ENRICHMENT_WORKER_ENABLED=true is the single deviation), re-run demo:preflight and require DEMO READY. Next phase after merge: MASTER OFFICIAL SYSTEM AND HANDOVER DOCUMENT.",
-    "checkpoint_ref":  "2612cbcb5691b4d5348920ff239c5e7de75acea4",
-    "updated_at":  "2026-08-19T11:44:38.0000000Z",
-    "next_writer":  "unassigned"
+    "schema_version": 1,
+    "ticket": "TNX-FINAL-EVIDENCE-CONSOLIDATION",
+    "title": "Consolidate duplicate final-evidence documentation into one canonical source per subject",
+    "status": "pr_open",
+    "owner": "unassigned",
+    "reviewer": "none (bounded docs-only consolidation; no independent review requested)",
+    "branch": "docs/evidence-consolidation",
+    "worktree": "F:\\AI-Worktrees\\ThreatNeXus\\evidence-consolidation",
+    "starting_commit": "fbffbe325e94969d459b690cee4bf46414f970ed",
+    "goal": "PR #31 (TNX-DOC-EVIDENCE-PREP) and PR #32 (TNX-FINAL-DEMO-DOC-EVIDENCE) both merged to main and independently produced evidence documents on the same three subjects under different filenames, plus two overlapping screenshot directories. Leave exactly one canonical evidence source per subject with no loss of unique facts, provenance, measurements, limitations, source SHAs, dates or reproducibility metadata. Docs-only: no product code, no dependency, no README rewrite, no Master/Playbook/Handbook drafting, no provider call, no review loop.",
+    "current_work": "",
+    "files_changed": [
+        "docs/evidence/CONTROLLED-LIVE-CANARY-RECORD.md - canonical; folded in the compose port-mapping operational note from the superseded file",
+        "docs/evidence/CONTROLLED-LIVE-CANARY.md - superseded stub, points to canonical, full text retained in Git history at 2612cbc",
+        "docs/evidence/EXTERNAL-DATA-ACCESS-RECORD.md - canonical; folded in the 'no national exposure statistics' presentation caution as new section 5",
+        "docs/evidence/EXTERNAL-DATA-ACCESS.md - superseded stub",
+        "docs/evidence/PRODUCTION-SIZING-MEASUREMENTS.md - canonical; M8 rewritten to explicitly distinguish the authoritative CI-backed validation baseline (3417 at ee1146b, 3460 current at 2612cbc) from this session's own local resource-contention observation (3384/273/5 timeout-affected files, non-authoritative); appendix added for the superseded file's genuinely additional same-day measurements (process RSS, single-sample idle spot check, alternate cold-start definition)",
+        "docs/evidence/PRODUCTION-SIZING.md - superseded stub",
+        "docs/evidence/screenshots/README.md - superseded stub; the directory's two fully-redundant images removed, its two genuinely unique images moved (pixels unaltered) into the canonical library",
+        "docs/assets/screenshots/final/demo-readiness-finding-a-decision-first.png (moved, unaltered)",
+        "docs/assets/screenshots/final/demo-readiness-enrichment-before-request.png (moved, unaltered)",
+        "docs/assets/screenshots/final/README.md - new 'Demo-readiness supporting captures' section for the two moved images",
+        "docs/demo/DEMO-READINESS.md - one stale cross-reference corrected (CONTROLLED-LIVE-CANARY.md -> CONTROLLED-LIVE-CANARY-RECORD.md)",
+        "docs/ai/STATE.yaml, docs/ai/HANDOFF.md"
+    ],
+    "root_cause": "PR #31 and PR #32 branched from a common ancestor and were developed concurrently without either author aware of the other's evidence documents, so both independently wrote records covering the same three subjects (controlled live canary, external data access, production sizing) under different filenames, and both independently captured demonstration screenshots into different directories. Neither branch's CI nor the merge process detects semantic duplication of Markdown content by different filenames, so both merged cleanly and the duplication surfaced only on inspection after both were on main.",
+    "final_contract": "Exactly one canonical file per subject survives as a live, citable document: the -RECORD/-MEASUREMENTS suffixed files (originally from PR #31), because they had the stronger provenance structure (fact/attestation/status classification, source-commit tables, review-status records) even where the non-suffixed PR #32 files were sometimes more current. Every fact unique to a superseded file was identified by an explicit line-by-line comparison and folded into the canonical file before the duplicate was reduced to a supersession stub carrying a superseded-by pointer, date and source commit. No file was silently deleted; every superseded file's full original text remains recoverable from Git history at its authoring commit. The screenshot library at docs/assets/screenshots/final/ is canonical; the smaller docs/evidence/screenshots/ directory contributed its two genuinely unique captures (pixels unaltered) and was otherwise retired.",
+    "scope": {
+        "included": [
+            "Line-by-line comparison of all three duplicate document pairs, resolving conflicts only from repository evidence (grep-verified source commits, dated test-count provenance) never from preference for length",
+            "The M8 backend-validation-baseline conflict named explicitly by the ticket brief: 3417 (ee1146b, pre-PR32) vs 3460 (2612cbc, current, CI-backed) vs 3384/273/5-timeout (this session's own local contention observation) - resolved as three distinct, clearly labelled facts, none overwriting another",
+            "Screenshot library comparison by content, not just file count - two of four smaller-library images were fully redundant with the 40-image final library; two proved a fact (the pre-request enrichment state of the specific primary demonstration Finding) the larger library did not capture and were preserved",
+            "One stale cross-reference in docs/demo/DEMO-READINESS.md corrected to the canonical filename",
+            "Supersession stubs with superseded-by/date/source-commit headers on every retired file, per the brief's explicit requirement"
+        ],
+        "excluded": [
+            "Any product code, frontend behaviour, dependency, or provider-call change",
+            "README rewrite",
+            "Master/Playbook/Handbook drafting - the next phase",
+            "Any independent reviewer or review/audit cycle - explicitly not requested for this bounded closure",
+            "Re-running or re-measuring anything - every canonical figure is transcribed from an existing dated source, never re-observed"
+        ]
+    },
+    "completed": [
+        "Read all six evidence documents and both screenshot directories in full before making any keep/archive decision",
+        "CONTROLLED-LIVE-CANARY-RECORD.md kept as canonical (fuller provenance: 4-entry source-commit table with reproduction commands, reviewer-status record, explicit proves/does-not-prove scope). Its one gap versus the shorter file - the compose port-mapping operational note - was folded in as a new closing section",
+        "EXTERNAL-DATA-ACCESS-RECORD.md kept as canonical (fact/attestation/status classification, repository ticket #7ibziiin which the shorter file omitted entirely). Its one gap - the 'not national cyber exposure statistics' presentation caution - was folded in as new section 5",
+        "PRODUCTION-SIZING-MEASUREMENTS.md kept as canonical (rigorous three-sample M2, CPU/RAM/disk identity, M4 reporting-discrepancy disclosure, M6 real-denominator ingestion growth test, full A/B/C/D sizing tiers with TLS/retention/HA marked proposed). M8 rewritten to explicitly resolve the exact three-way validation-count conflict the brief named, rather than letting the contention run stand as the only backend-suite figure. An appendix preserves the shorter session's genuinely additional same-day data points (process RSS, spot idle sample, alternate cold-start definition) without duplicating the full protocol",
+        "Screenshots: verified by reading both README narratives, not by filename, that 2 of 4 images in the smaller library were fully redundant and 2 proved unique, necessary evidence (the exact pre-request state of the specific primary demonstration Finding used by docs/demo/DEMO-READINESS.md, as opposed to the unrelated Finding shown in the larger library's decision-first captures). Moved those two with git mv (no re-encoding, pixels unaltered), removed the two redundant ones, documented the addition in the canonical README",
+        "Verified via grep across the full repository which files reference the old filenames before editing anything; found and fixed the one live stale cross-reference (docs/demo/DEMO-READINESS.md); confirmed no other product, test, or evaluator file references any of the retired paths",
+        "git diff --check clean; confirmed zero backend/frontend/package.json/lockfile changes in the diff; confirmed zero provider calls made (docs-only task, no stack was started)"
+    ],
+    "validation": {
+        "passing": [
+            "git diff --check clean",
+            "git diff --stat confirms zero files under backend/src, backend/tests, frontend/, package.json or any lockfile",
+            "grep across HEAD for the three retired filenames and docs/evidence/screenshots/ found exactly one live stale reference (docs/demo/DEMO-READINESS.md line 227), which was fixed; the canonical -RECORD/-MEASUREMENTS filenames were already the ones referenced from docs/assets/screenshots/final/README.md and the canonical external-data file",
+            "Exactly one canonical .md source per subject remains citable (three canonical + three supersession stubs, all six files present, none deleted)",
+            "Screenshot index in docs/assets/screenshots/final/README.md resolves to real files: verified every new table row's filename exists on disk after the git mv",
+            "Every superseded stub carries superseded-by, date and source commit, per the brief"
+        ],
+        "failing": []
+    },
+    "known_issues": [
+        "The two sizing sessions were taken on the same host on the same day but four commits apart (2bda0e5 vs 2612cbc); their M2/M3/M7-equivalent figures differ slightly because they measure genuinely different things (three samples vs one, container memory vs process RSS, health-probe-ready vs first-200), not because either is wrong. This is disclosed in the canonical file's appendix rather than resolved by discarding one.",
+        "The four-commit gap between the two sizing sessions means the canonical file's M1-M7,M9,M10 protocol was measured at 2bda0e5, one commit before the demo:reset/demo:preflight tooling existed; this is unlikely to materially change idle/startup/bundle figures (that tooling is operator-invoked, not part of the running stack) but was not re-measured, per the brief's instruction not to re-run anything.",
+        "docs/ai/HANDOFF.md and docs/ai/STATE.yaml are rolling single-ticket files per this project's established convention; this commit overwrites the TNX-FINAL-DEMO-DOC-EVIDENCE ticket's entries. That ticket's outcome (PR #32 merged, fbffbe3) is preserved in Git history and in this file's own root_cause/scope narrative, not lost."
+    ],
+    "next_action": "Await CI on docs/evidence-consolidation and PR review. This closes engineering, security, frontend and demo-readiness work, and evidence documentation is now consolidated to one canonical source per subject. Next phase: MASTER OFFICIAL SYSTEM AND HANDOVER DOCUMENT.",
+    "checkpoint_ref": "68170e21dc9bc5dd627f205202bc110e34f9efd1",
+    "updated_at": "2026-08-19T18:30:00.0000000Z",
+    "next_writer": "unassigned"
 }

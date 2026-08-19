@@ -224,7 +224,7 @@ All eleven were executed against a real stack. Results are in
 
 **Fallback order if a provider misbehaves live:** GreyNoise (`NO_RECORD` is
 still a win) → Censys → Netlas → show
-`docs/evidence/CONTROLLED-LIVE-CANARY.md` → explain the closed failure state.
+`docs/evidence/CONTROLLED-LIVE-CANARY-RECORD.md` → explain the closed failure state.
 Never fabricate a result.
 
 > **A failed lookup gets a short (~5 min) freshness window**, not the 24 h a
