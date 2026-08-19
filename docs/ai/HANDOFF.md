@@ -1,211 +1,173 @@
-# Handoff: TNX-FINAL-FRONTEND-POLISH
+# Handoff: TNX-DOC-EVIDENCE-PREP
 
 - From: claude
-- Suggested next writer: unassigned — pass complete, PR open
-- Branch: `polish/final-frontend-pass` (from `origin/main` @ `702afee`)
-- Worktree: `F:\AI-Worktrees\ThreatNeXus\frontend-polish` (isolated — the primary checkout was never touched)
-- Writer lock: **released**
+- Suggested next writer: unassigned — evidence base complete, PR open
+- Branch: `docs/final-evidence-prep` (from `origin/main` @ `2bda0e5`, the merge of PR #30)
+- Worktree: `F:\AI-Worktrees\ThreatNeXus\final-doc-evidence` (isolated — the primary checkout was never touched)
+- Writer lease: `d3de04ef-2322-42f5-9d38-48752443e3aa`
 - Updated: 2026-08-19
 
-> Note for any future writer: `handoff-task.ps1` overwrites this file with a five-line template on
-> every run. If you run it, restore the detail below from the prior commit afterwards — the template
-> alone loses the root cause, the evidence and the traps.
+> Note for any future writer: `handoff-task.ps1` overwrites this file with a short template on every
+> run. If you run it, restore the detail below from the prior commit afterwards — the template alone
+> loses the evidence and the traps.
+>
+> The previous ticket's handoff (TNX-FINAL-FRONTEND-POLISH, PR #30) remains recoverable in full with
+> `git show 2bda0e5:docs/ai/HANDOFF.md`.
 
-**Status: complete.** One bounded pass implementing the five approved recommendations (R1–R5) from
-the read-only rendered UI/UX audit performed at `702afee`. Per the brief there is **no second polish
-cycle, no further audit, and no post-implementation design review**. The next phase after merge is
-professional final documentation.
+**Status: complete.** This ticket wrote **no final document, deleted nothing, reviewed nothing, and
+contacted no provider.** It exists only to close the factual blockers that stood between the merged
+product and the official documentation set.
 
-## What the audit found, and what shipped
+## What this ticket produced
 
-The audit's verdict was that the deficits were about **order and language**, not missing evidence.
-Everything the product knows was already on screen; it was arranged and worded as though nothing on
-it mattered more than anything else.
+### 1. `docs/evidence/CONTROLLED-LIVE-CANARY-RECORD.md`
 
-### R1 — Finding detail, decision-first
+The TNX-P10C4 controlled live GreyNoise canary, rescued out of Git history into a permanent current
+file.
 
-`Record triage` was the **last** thing on a ~3,700px page, below a disabled AI panel and a provider
-table that is empty in a fresh instance. Reading order is a claim about priority, and that order
-claimed the opposite of the truth.
+**The problem it fixes is structural, and it will recur.** `docs/ai/HANDOFF.md` and
+`docs/ai/STATE.yaml` are *rolling* documents — every ticket overwrites them. The canary evidence was
+merged to `main` at `914d582` and is still in Git, but it is no longer in either file's current
+checkout. The strongest live-provider evidence this project has was one `git log` away from being
+effectively lost.
 
-The page now answers, in order: what is this and how bad → what do I do about it → why is it scored
-that way → what else is known → optional subsystems.
+Everything required is preserved: ticket, provider, subject `1.1.1.1`, MANUAL lane, explicit human
+authorisation, 17/17 pre-live preflight, run/job/attempt IDs all `1`, exactly one contact,
+`NOT_FOUND` / HTTP 404, job `NO_RECORD`, run `SUCCEEDED`, attempt `FINISHED`/`NOT_FOUND`,
+`contactedProvider=true`, reservation 1 against a budget of 1, no retry, verified rollback to
+worker-off and `EXECUTION_PAUSED`, disposable volume destroyed, no secret exposure, no second
+contact, and 10C-5 closing the response-body residual afterwards.
 
-| Change | Detail |
-|---|---|
-| Decision summary strip | Five cells above everything: current risk (score at metric size, band beside it), exposure state, observation pressure, owning organization, triage + case linkage |
-| Triage promoted | From last panel to **first**, wrapped in a titled Panel that states triage is separate from the OPEN/CLOSED exposure state |
-| Section rail | Sticky under the app bar, one anchor per region, every target carrying a `scroll-margin-top` that clears the fixed bar |
-| Progressive disclosure | Non-contributing risk factors, enrichment coverage and AI assistance fold into native `<details>` |
+**No provider was contacted to produce this record and no API key value appears in it.**
 
-**Measured in the rendered app:** triage now sits at **474px on a 2,668px page**.
+The scope limitation is stated as prominently as the success: the canary proves the approved
+GreyNoise *direct-worker* path, and confers no live proof on `abuseipdb`, on the delegated lane, on
+the four legacy synchronous provider routes, or on any non-local environment.
 
-### R2 — the truth layer, in English (two shipped defects fixed)
+### 2. `docs/evidence/EXTERNAL-DATA-ACCESS-RECORD.md`
 
-**Defect 1 — a dead dictionary.** `FACTOR_LABEL` in `FindingDetail.jsx` was keyed on `EXPOSURE_BASE`,
-`IOC_REPUTATION`, `EPSS_PROBABILITY`… while the engine stores `exposureCriticality`,
-`iocReputationContext`, `epssScore`. **Not one key ever matched.** The dictionary was dead code and
-every factor rendered as its raw camelCase storage key.
+Three classes that are never blurred: **REPOSITORY-DOCUMENTED FACT**, **PROJECT-TEAM ATTESTATION**,
+**CURRENT STATUS**.
 
-The correct dictionary already existed in `components/dashboard/dashboardModel.js`, so the repair is a
-move to `constants/riskFactors.js` plus a re-export — one source, not a second copy. That module is
-now the only place a stored identifier becomes words: the repaired factor names, ~60 explanation-code
-sentences, and a de-casing fallback so a code the engine adds later is legible rather than invisible.
+Every repository claim was verified against the file it cites before being written — `STATUS.md` for
+Shadowserver ticket `#7ibziiin`, `PROJECT_PLAYBOOK.md` and `PROVIDER_GUIDE.md` for live scheduled
+ingestion being out of scope, `data/synthetic/README.md` for `accessible-rdp.synthetic.v1` not being
+an official Shadowserver schema, `README.md` for a real report being requested and not received, and
+a direct scan of every address in `data/synthetic` and `data/demo` confirming they all fall inside
+`192.0.2.0/24`, `198.51.100.0/24`, `203.0.113.0/24` or `198.18.0.0/15`.
 
-**The raw code is still rendered beside every sentence.** The words are for reading; the code is what
-an analyst quotes in a case note. Provenance was added to, not traded away.
+The attestation is recorded in neutral professional language, with no blame, no speculation about
+reasons, and no implication that the software failed or that Shadowserver data was received.
 
-**Defect 2 — two refusal dialects.** `ProtectedRoute` rendered its own `403 - Access Denied` card,
-bypassing the crafted, accessible `DeniedState` in `ui/States.jsx`. A route refusal and a panel
-refusal said the same thing in two different visual and verbal languages. `DeniedState` gained two
-optional props (`titleLevel`, `role`) so the route case keeps what was right about the old card — a
-real `<h1>`, because it replaces a whole page, and `role="alert"`, because arriving somewhere
-unreachable is an unexpected outcome of a deliberate navigation — without forking the component. The
-status code survives as a stated fact in the body rather than as a shouted heading.
+Both Shadowserver and Rapid7 are classified as **external-data / access dependencies**, never as
+software limitations. The record also preserves the category rule that must never be violated:
+**scanner-source IP addresses are not exposed-RDP destination hosts.**
 
-Also: ownership status and resolver reason codes read as English with their codes intact, and
-`FindingTriagePanel` moved off five hardcoded hexes onto tokens — including `#75899E`, the exact
-`textFaint` value Phase 6.2 **raised** for contrast and which this component had quietly kept.
+### 3. `docs/evidence/PRODUCTION-SIZING-MEASUREMENTS.md`
 
-### R3 — severity-first, and a row you can actually click
+The audit was right that no measured hardware evidence existed. It does now, and none of it was
+invented.
 
-Rows were **not clickable at all** (measured: cursor auto, no handler). The risk band was the quietest
-element while status and lifecycle chips shouted, and amber meant three unrelated things in one row.
+Every figure carries exactly one of **MEASURED**, **REASONED RECOMMENDATION**,
+**NOT LOAD-TESTED / SCALE ASSUMPTION**, or **NOT MEASURED**. Where the evidence did not support a
+number, the document says NOT MEASURED rather than interpolating.
 
-- Risk v1 leads the row, behind a 3px band-coloured spine (transparent when unscored, so the column
-  stays aligned).
-- Non-severity badges render `quiet`: the semantic **fill** is dropped, the icon and the words stay.
-  Severity is the only colour in a row now, and amber stops meaning three things. Colour was never
-  allowed to be the only carrier, so nothing accessible was lost.
-- The whole row navigates — and **stands aside twice**: when the click landed on the real link, and
-  when text is being selected. An evidence table whose rows swallow a selection is a table you cannot
-  copy an IP address out of. A stretched-anchor overlay would have been fewer lines and would have
-  taken text selection with it.
-- Exactly **one link per row** is preserved; the E2E suite locates a finding by it.
-- The dashboard priority queue got the same spine and band-leading treatment.
-- Row hover raised from a 4% tint (invisible on a near-black canvas) to 9%, plus a `focus-within`
-  band so a keyboard user can see *which row* the focused link belongs to.
+**No concurrency or load test was performed. No concurrent-analyst count, requests-per-second
+figure, throughput rate or HA capacity appears anywhere in it.**
 
-### R4 — below-fold dashboard hierarchy, tightly bounded
+Two results are worth carrying forward:
 
-Two named bands with a hairline and a one-line note — **"Why the risk looks like this"** and
-**"Work in flight"**. No panel moved between grids, nothing was re-laid-out or reordered.
+- **A per-finding byte constant would be fiction, and the measurement proves it.** The first M6
+  attempt used the committed historical fixtures; they produced `HISTORICAL` outcomes, created no
+  new Findings, and moved `pg_database_size` by *exactly zero bytes* three times out of four,
+  because PostgreSQL allocates in 8 KiB pages. A deterministic 500-new-indicator report was then
+  ingested three times to get a real denominator: ≈ 4.9 KB per newly created Finding, ≈ 1.2 KB per
+  subsequent observation — both explicitly labelled REASONED RECOMMENDATION, not constants.
+- **The demo database is 11.92 MiB and its `pg_dump` is 282 KB.** Almost none of that 11.92 MiB is
+  data; it is catalog, indexes and pre-allocated pages. Quoting the database size as the cost of 11
+  findings would overstate it by roughly 40×.
 
-### R5 — loading, continuity, and truthful pending state
+### 4. `docs/assets/screenshots/final/` — 41 masters plus an index
 
-- Skeletons shaped like the Finding detail and the dashboard they replace, instead of one generic
-  three-bar skeleton that made every layout pop into place.
-- Scroll resets on pathname change — **hash-aware**, so the R1 section rail still works — because
-  opening a finding from halfway down the list used to drop you halfway down the finding.
-- A 160ms opacity-only route-continuity animation keyed on pathname. Under reduced motion (OS setting
-  or the in-app opt-out) it is **not declared at all**, rather than declared and zeroed.
-- Pending is *stated*: `Refreshing` on the button, `aria-busy`, and an in-place status line saying the
-  visible values are the last ones the server confirmed. A control that goes quiet without saying why
-  reads as broken rather than busy.
+Captured from the **production build at this exact commit**, against a database created from zero
+and seeded deterministically, with providers, worker, automatic enrichment and AI all off. 1440×900
+at device pixel ratio 2, dark scheme, clean Chromium profile, animations frozen, **zero console
+errors across every capture.**
 
-## The one thing that must not be lost when a page gets shorter
+Both Master screenshots and all 18 Playbook captures are present. The index records route, role,
+state, viewport, capture date and source commit for each, and names no AI or tool as author.
 
-Folding the non-contributing risk factors away could have quietly flattened the distinction the whole
-risk section exists to preserve. So the disclosure **counts them by state in its own summary line**:
+### 5. Canonical state reconciled
 
-> 7 factors added no points — 2 measured and weighed nothing, 2 with no readable evidence, 3 that
-> cannot apply here
+`docs/ai/STATE.yaml` now carries a `program_status` block recording core engineering **closed**,
+security pass **closed** (PR #29), frontend polish **closed / merged** (PR #30), documentation
+blueprint **approved**, documentation evidence preparation **completed**, and next stage **MASTER
+OFFICIAL DOCUMENT DRAFTING**.
 
-"Measured and it added nothing", "we could not read the evidence" and "this cannot apply here" are
-three different facts that all draw an empty bar. And when **no** factor contributed, nothing is
-folded at all — each zero is then the entire answer.
+It also carries two new blocks the next writer needs: `documentation_fact_corrections` (the exact
+figures and wording corrections the final documents must apply) and `prior_ticket_evidence` (the
+commits where each previous ticket's evidence remains recoverable — the habit this ticket exists to
+establish).
 
-## Gates
+## Things that were done honestly rather than smoothly
 
-| Gate | Result |
-|---|---|
-| frontend lint | clean — exactly the 6 pre-existing fast-refresh warnings, none new |
-| frontend unit | **218 passed**, 17 files (baseline 202/15; +16 new, zero regressions) |
-| frontend build | clean |
-| Chromium Playwright | **71 / 71**, real backend + real PostgreSQL, rebuilt-from-zero database |
-| rendered overflow | **0px** at 390 / 768 / 1024 / 1366 / 1440 — collapsed **and** fully disclosed |
-| rendered console | **0 errors, 0 warnings** across ADMIN / ANALYST / REVIEWER / VIEWER |
-| backend | `git status --porcelain backend/` empty |
-| dependencies | no `package.json` / lockfile change anywhere |
-
-**CI: green on the first push**, at the code tip `5097367` —
-[run 32192035942](https://github.com/haiderchattha99-ali/ThreatNeXus/actions/runs/32192035942). All
-six required jobs succeeded: Secrets and generated artifacts, Prisma schema and migration history,
-Backend tests, Frontend lint/tests/build, Browser suite (Chromium), Core evaluators. "Mutation and
-concurrency gates" is manual-trigger-only and correctly skipped. **Green again at the final PR tip
-`206254a`** — [run 32192517312](https://github.com/haiderchattha99-ali/ThreatNeXus/actions/runs/32192517312).
-
-PR: <https://github.com/haiderchattha99-ali/ThreatNeXus/pull/30>
-
-### One red on the way there, and why it was not a regression
-
-The docs-only commit's first CI attempt failed **one** test:
-`tests/integration/dedupServiceConcurrency.test.js` › *concurrent new-Finding race*. That was
-diagnosed rather than assumed:
-
-- `git diff --name-only 5097367 206254a -- backend/` is **empty** — the entire delta is two
-  `docs/ai/` files.
-- The identical backend code had passed that same job minutes earlier at `5097367`.
-- Re-running the failed job **on unchanged code passed**.
-
-It is a genuine real-PostgreSQL race proof and worth keeping, but it is contention-sensitive on a
-shared GitHub-hosted runner. **A future writer should not read a single red from it as a regression
-without first checking whether `backend/` changed at all.**
-
-### Red-check — and the one that initially failed to fail
-
-The factor-label regression test **passed against the reintroduced defect** on the first attempt. The
-de-casing fallback renders `exposureCriticality` as "Exposure criticality" either way, so the
-assertion could not tell a working dictionary from a dead one. It was strengthened onto `epssScore`
-and `kevStatus`, where the curated name ("EPSS probability", "KEV status") and the mechanical fallback
-("Epss score", "Kev status") genuinely diverge, then confirmed failing against the broken keys and
-restored green. The full-row navigation test was confirmed failing with the row handler removed.
-
-## A real defect the browser suite caught that my own QA missed
-
-With the enrichment disclosure **open** at 390px, the document scrolled **607px**. A `<details>` inside
-a CSS grid is a grid item, and a grid item's default `min-width: auto` refuses to shrink below its
-content's min-content width — so a wide evidence table pushed the *document* sideways instead of
-scrolling inside its own already-correctly-configured `TableContainer`. One line (`minWidth: 0`) fixes
-it. My QA script had only ever measured the **collapsed** page; it now opens every disclosure at every
-viewport.
+- **One state was created for capture, and it is disclosed.** The demo seed requests *and approves*
+  a closure, so no pending closure request survives it and P-10/P-11 had nothing to photograph. A
+  second closure request was created on case 1 through the real API and deliberately left pending.
+  Its own justification text says why it exists. Nothing else was added and no image was edited.
+- **A literal `RESTRICTED`/`UNAVAILABLE` dashboard KPI tile could not be captured** and is marked
+  **NOT AVAILABLE FROM CURRENT DEMO DATA**. At demonstration scale every dashboard section resolves
+  to a real value; forcing a degraded tile would have meant removing a capability or breaking a data
+  source, i.e. staging a state the system is not in. The truthful distinctions that *are*
+  reproducible were captured instead: the four risk-factor applicability states, the
+  capability-restricted VIEWER section, and the unified route-level refusal.
+- **M8 peak memory is NOT MEASURED.** The host sampler failed on a path conversion and the run was
+  not repeated. Container samples from the same window could not be cleanly attributed, so they were
+  discarded rather than reported as if they meant something.
+- **Five backend test files failed locally on 10-second hook timeouts.** That is this machine's
+  documented contention pattern, not a regression — the failures are `beforeAll` timeouts and differ
+  between runs. Recorded rather than omitted; CI is the authoritative signal.
+- **Docker reports two different sizes for the same image on this host.** Both readings are recorded
+  with their method instead of quietly choosing the more convenient one.
 
 ## Traps worth carrying forward
 
-- **A closed `<details>` still reports non-zero bounding rects for its content in this Chromium.** The
-  E2E overflow helper's "widest offenders" diagnostic therefore named an innocent collapsed table
-  while the real overflow came from somewhere else. Trust `documentElement.scrollWidth`; treat the
-  offender list as a hint, not an accusation.
-- **A disclosure-heavy page needs its disclosures opened before a responsive check means anything.**
-- **`enrichmentOperability.spec.js` needs CI's deliberately fake `CENSYS_PAT`.** Without it every
-  provider is `NOT_CONFIGURED` and the `EXECUTION_PAUSED` readiness state is unreachable, so the spec
-  fails for an environment reason. The local stack was corrected to mirror CI's job env — the
-  assertion was **not** relaxed.
-- Local stack recipe: project `tnxpolish`, postgres `15432`, backend `5100`, preview `4273`, per-run
-  `JWT_SECRET`, `RATE_LIMIT_AUTH_MAX=1000`, `E2E_SKIP_WEBSERVER=1`. `docker compose down -v` still
-  fails without `JWT_SECRET` exported.
-
-## Honest gaps
-
-- **No manual pass in the user's own Chrome.** The `claude-in-chrome` extension still refuses to
-  connect (its OAuth token belongs to a different claude.ai account than Claude Code is signed into).
-  Verification was real Chromium via Playwright driving the production build against a real stack —
-  substantively equivalent, but a driven browser, not a hand-driven one.
-- **The optional subsystems are collapsed by default on every visit.** They stay mounted and still
-  fetch, so nothing is hidden from the network or from a denial, but an analyst who wants provider
-  coverage on every finding now pays one click. That is the trade R1 asked for; worth revisiting if
-  the demo audience reaches for that panel often.
-- **The severity spine is not demonstrably discriminating in the demo dataset** — every seeded finding
-  currently scores LOW, so the mechanism is visible but all one colour.
-- **The Findings list still has no risk-band sort**, only a filter, because the backend exposes none.
-  Severity leads the row visually; the default order remains `lastSeen`.
-- **No independent review of this pass.** The brief explicitly excludes a post-implementation
-  reviewer. That is a deliberate departure from `CLAUDE.md`'s "do not review your own final work as
-  the only reviewer" rule, recorded here rather than quietly honoured.
+- **A `-f` compose overlay concatenates its `ports` list with the base file's rather than replacing
+  it** — the operational note 10C-4 left behind. This session used a dedicated compose file in the
+  scratchpad with absolute build contexts, which avoids it entirely.
+- **The backend image does not contain `tests/`**, so the verification suite cannot be run inside
+  it. M8 has to run on the host.
+- **The backend suite is hermetic by default** (`TNX_SKIP_DOTENV`), and its real-PostgreSQL
+  integration tests gate on `TEST_DATABASE_URL`, not `DATABASE_URL`. Without it they self-skip and
+  the suite still reports green — 273 tests were skipped even *with* it set.
+- **Run `npx prisma generate` after `npm ci`.** A stale client is the documented cause of a large
+  block of phantom failures.
+- **`pg_database_size` moves in page-sized steps.** Any single before/after ingestion reading can
+  legitimately be `+0`. Measure across a batch large enough to clear page granularity.
+- **The dashboard KPI is a GSAP count-up.** Read `data-count-to`, never rendered text.
 
 ## Protected boundaries honoured
 
 - The primary checkout `C:\Users\LENOVO\Desktop\ThreatNeXus` was **never modified** — its foreign
-  Phase 9C presentation changes are exactly as found. All work happened in an isolated worktree.
+  presentation changes are exactly as found. All work happened in an isolated worktree.
+- A separate `tnxdemo` stack was already running on the default ports and was **left untouched**;
+  the measurement stack used isolated ports under its own compose project and was destroyed with
+  `docker compose down -v`.
 - No `git add -A`; every commit staged explicit paths.
 - `backend/.env` was never opened, read, printed or referenced.
+- No product source file, dependency, migration, schema or configuration was changed.
+
+## Next action
+
+**STOP.** Do not begin drafting in this session.
+
+The next stage is the **ThreatNeXus Official System & Handover Document** (18-page target, 20-page
+hard maximum), then the **Analyst & Operations Playbook**, then the **Knowledge & Defence
+Handbook**, and **README last**. Old-document cleanup does not begin until the new set exists.
+
+Before drafting, read `docs/ai/STATE.yaml` → `documentation_fact_corrections`. It carries the
+current counts (25 migrations, 165 backend test files, 17 frontend test files, 11 Playwright specs),
+the fact that a bounded security assessment *was* completed and that `README.md` currently contains
+a false statement to the contrary, the required Finding-versus-Case wording correction, the
+architecture-labelling rule, and the frozen document-control decisions on authorship, review status
+and adoption language.
