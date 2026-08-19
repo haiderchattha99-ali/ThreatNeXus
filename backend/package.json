@@ -25,7 +25,9 @@
     "smoke:greynoise": "node src/scripts/greyNoiseLiveSmoke.js",
     "smoke:shodan": "node src/scripts/shodanLiveSmoke.js",
     "smoke:netlas": "node src/scripts/netlasLiveSmoke.js",
-    "preflight:canary": "node src/scripts/enrichmentCanaryPreflight.js"
+    "preflight:canary": "node src/scripts/enrichmentCanaryPreflight.js",
+    "demo:reset": "node src/scripts/demoReset.js",
+    "demo:preflight": "node src/scripts/demoPreflight.js"
   },
   "keywords": [],
   "author": "",
