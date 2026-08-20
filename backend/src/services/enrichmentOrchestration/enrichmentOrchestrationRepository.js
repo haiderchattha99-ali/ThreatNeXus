@@ -142,7 +142,61 @@ async function findLatestRunItemForSubject(
     where: { findingId, provider, subjectType, subjectValue },
     orderBy: { id: "desc" },
     include: {
-      lookupJob: { include: { iocEnrichment: true, vulnerabilityEnrichmentJob: true } },
+      lookupJob: {
+        include: {
+          iocEnrichment: true,
+          vulnerabilityEnrichmentJob: true,
+          // The four Phase-8 EVIDENCE rows, narrowed by an explicit `select`
+          // to the analyst-facing columns the summary renders. The select is
+          // the serializer: a column that is not named here can never reach a
+          // client, so no transport/diagnostic field leaks by default.
+          censysEnrichment: {
+            select: {
+              queriedAt: true,
+              services: true,
+              autonomousSystemNumber: true,
+              autonomousSystemName: true,
+              certificateCount: true,
+            },
+          },
+          greyNoiseEnrichment: {
+            select: {
+              queriedAt: true,
+              noise: true,
+              riot: true,
+              classification: true,
+              actorName: true,
+              lastSeen: true,
+            },
+          },
+          shodanEnrichment: {
+            select: {
+              queriedAt: true,
+              services: true,
+              hostnames: true,
+              organization: true,
+              isp: true,
+              country: true,
+              city: true,
+              vulnerabilities: true,
+              lastUpdate: true,
+            },
+          },
+          netlasEnrichment: {
+            select: {
+              queriedAt: true,
+              services: true,
+              products: true,
+              hostnames: true,
+              organization: true,
+              asn: true,
+              asnOrg: true,
+              country: true,
+              lastSeen: true,
+            },
+          },
+        },
+      },
     },
   });
 }

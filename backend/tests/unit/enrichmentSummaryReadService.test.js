@@ -108,6 +108,86 @@ describe("resolving a terminal IOC delegate", () => {
   });
 });
 
+// `evidence` — the stored answer itself, so a finished lookup can say more
+// than "completed". Nothing here reads a new row: it is the SAME row the status
+// was already derived from, narrowed by the repository's explicit select.
+describe("attaching the stored evidence to a row", () => {
+  it("carries the direct provider's evidence row through, and only that row", () => {
+    const resolved = resolveSubjectState(
+      eligibleItem({
+        state: JOB_STATES.SUCCEEDED,
+        censysEnrichment: {
+          queriedAt: new Date("2026-08-11T10:00:00.000Z"),
+          services: [{ port: 3389, protocol: "TCP", serviceName: "RDP" }],
+          autonomousSystemNumber: 13335,
+          autonomousSystemName: "CLOUDFLARENET",
+          certificateCount: null,
+        },
+      }),
+      ASOF
+    );
+
+    expect(resolved.status).toBe(SUMMARY_STATUSES.COMPLETED);
+    expect(resolved.evidence.autonomousSystemName).toBe("CLOUDFLARENET");
+    expect(resolved.evidence.services).toHaveLength(1);
+    // A null column stays null — it is never defaulted into a number.
+    expect(resolved.evidence.certificateCount).toBeNull();
+  });
+
+  it("picks the AbuseIPDB delegate's analyst columns and no transport or key material", () => {
+    const resolved = resolveSubjectState(
+      eligibleItem({
+        state: JOB_STATES.WAITING_ON_DELEGATE,
+        iocEnrichment: {
+          status: "SUCCESS",
+          expiresAt: new Date("2026-08-13T00:00:00.000Z"),
+          queriedAt: new Date("2026-08-11T10:00:00.000Z"),
+          abuseConfidenceScore: 100,
+          totalReports: 412,
+          usageType: "Data Center",
+          isWhitelisted: false,
+          errorMessage: "TypeError: connect ECONNREFUSED 10.0.0.1:443",
+          cacheKey: "secret-cache-key",
+          claimToken: "secret-claim-token",
+        },
+      }),
+      ASOF
+    );
+
+    expect(resolved.source).toBe(SUMMARY_SOURCES.IOC_ENRICHMENT);
+    expect(resolved.evidence.abuseConfidenceScore).toBe(100);
+    expect(resolved.evidence.isWhitelisted).toBe(false);
+    expect(Object.keys(resolved.evidence)).not.toEqual(
+      expect.arrayContaining(["errorMessage", "cacheKey", "claimToken", "httpStatus", "errorCode"])
+    );
+  });
+
+  it("attaches no evidence to a row that has no answer to show", () => {
+    expect(resolveSubjectState(null, ASOF).evidence).toBeNull();
+    expect(
+      resolveSubjectState(
+        {
+          decision: RUN_ITEM_DECISIONS.SKIPPED_NOT_CONFIGURED,
+          skipReason: SKIP_REASONS.PROVIDER_NOT_CONFIGURED,
+          lookupJob: null,
+        },
+        ASOF
+      ).evidence
+    ).toBeNull();
+    // The vulnerability batch finishing is not a per-source provider result,
+    // and this layer cannot read one — so it claims none.
+    expect(
+      resolveSubjectState(
+        eligibleItem({
+          state: JOB_STATES.WAITING_ON_DELEGATE,
+          vulnerabilityEnrichmentJob: { status: "COMPLETED" },
+        }),
+        ASOF
+      ).evidence
+    ).toBeNull();
+  });
+});
+
 describe("resolving one subject", () => {
   it("distinguishes never-asked from refused", () => {
     expect(resolveSubjectState(null, ASOF)).toMatchObject({

@@ -198,6 +198,58 @@ const JOB_STATE_TO_EXECUTION_SKIP_REASON = Object.freeze({
   [JOB_STATES.SKIPPED_BUDGET]: EXECUTION_SKIP_REASONS.EXECUTION_BUDGET_EXHAUSTED,
 });
 
+// ===========================================================================
+// `evidence` — WHAT the provider actually said, from rows already stored
+// ===========================================================================
+// The summary answered "did we ask, and did an answer arrive" but never "what
+// was the answer", which left an analyst at "Lookup completed" with nowhere to
+// go. This adds the already-persisted, analyst-facing columns of the SAME row
+// the status was derived from. It reads nothing new: the four direct evidence
+// relations arrive pre-narrowed by an explicit Prisma `select` in the
+// repository, and the IOC delegate is narrowed here by the same explicit pick.
+//
+// The rules it does not break:
+//   - a field that is null in storage stays null; nothing is defaulted to 0,
+//     "Unknown" or "N/A", and the renderer drops absent fields rather than
+//     printing a placeholder
+//   - no transport or diagnostic column (httpStatus, errorCode, errorMessage,
+//     cacheKey, claimToken) is ever picked, so a provider body or an exception
+//     string has no path to a client
+//   - a NO_RECORD row still carries whatever its provider row stored; "the
+//     provider has no record" is itself the answer and is never dressed up as
+//     evidence by the status mapping above
+//   - the vulnerability path returns null, because this layer never reads
+//     VulnerabilityProviderStatus and so has no per-source result to show
+
+// AbuseIPDB's delegate row is included whole (its status and expiry drive the
+// status mapping), so its analyst-facing columns are picked explicitly here.
+function pickIocEvidence(row) {
+  if (!row) return null;
+  return {
+    queriedAt: row.queriedAt || null,
+    abuseConfidenceScore: row.abuseConfidenceScore,
+    totalReports: row.totalReports,
+    countryCode: row.countryCode,
+    isp: row.isp,
+    domain: row.domain,
+    usageType: row.usageType,
+    isWhitelisted: row.isWhitelisted,
+    lastReportedAt: row.lastReportedAt,
+  };
+}
+
+// The one direct evidence row this job links, if any. The CHECK constraint on
+// ProviderLookupJob allows at most one, so the first match is the only match.
+function directEvidence(job) {
+  return (
+    job.censysEnrichment ||
+    job.greyNoiseEnrichment ||
+    job.shodanEnrichment ||
+    job.netlasEnrichment ||
+    null
+  );
+}
+
 /**
  * Resolves ONE (provider, subject) pair into a summary row body.
  *
@@ -205,7 +257,8 @@ const JOB_STATE_TO_EXECUTION_SKIP_REASON = Object.freeze({
  *   with `lookupJob` and its delegate rows included
  * @param {Date} asOf
  * @returns {{status: string, skipReason: string|null, source: string,
- *   freshUntil: Date|null, isStale: boolean, evidenceAvailable: boolean}}
+ *   freshUntil: Date|null, isStale: boolean, evidenceAvailable: boolean,
+ *   evidence: object|null}}
  */
 function resolveSubjectState(item, asOf) {
   if (!item) {
@@ -216,6 +269,7 @@ function resolveSubjectState(item, asOf) {
       freshUntil: null,
       isStale: false,
       evidenceAvailable: false,
+      evidence: null,
     };
   }
 
@@ -229,6 +283,7 @@ function resolveSubjectState(item, asOf) {
       freshUntil: null,
       isStale: false,
       evidenceAvailable: false,
+      evidence: null,
     };
   }
 
@@ -244,6 +299,7 @@ function resolveSubjectState(item, asOf) {
       freshUntil: null,
       isStale: false,
       evidenceAvailable: false,
+      evidence: null,
     };
   }
 
@@ -251,6 +307,8 @@ function resolveSubjectState(item, asOf) {
   let source;
   let freshUntil;
   let skipReason = null;
+  // Always the row the STATUS was read from, so the two can never disagree.
+  let evidence = null;
 
   // A terminal Phase-10 job outranks a non-terminal (PENDING) delegate
   // (invariant 2, closing defect 6): a delegated job can be dead-lettered
@@ -269,6 +327,7 @@ function resolveSubjectState(item, asOf) {
     // Phase-10 job merely waits on it.
     source = SUMMARY_SOURCES.IOC_ENRICHMENT;
     status = summaryForIocDelegate(job.iocEnrichment);
+    evidence = pickIocEvidence(job.iocEnrichment);
     freshUntil = job.iocEnrichment.expiresAt || null;
     if (status === SUMMARY_STATUSES.SKIPPED) {
       skipReason = IOC_STATUS_TO_EXECUTION_SKIP_REASON[job.iocEnrichment.status] || null;
@@ -283,6 +342,9 @@ function resolveSubjectState(item, asOf) {
     // as "fresh forever" — isStale stays false and evidenceAvailable depends
     // only on the status.
     freshUntil = null;
+    // No per-source vulnerability result is readable from this layer, so there
+    // is nothing truthful to show beyond the batch's own state.
+    evidence = null;
   } else {
     // Either a plain direct provider's own job, or a terminal Phase-10 job
     // that just outranked its still-PENDING delegate above — either way the
@@ -295,6 +357,7 @@ function resolveSubjectState(item, asOf) {
       skipReason = JOB_STATE_TO_EXECUTION_SKIP_REASON[job.state] || null;
     }
     freshUntil = job.freshUntil || null;
+    evidence = directEvidence(job);
   }
 
   const isStale = Boolean(freshUntil) && freshUntil.getTime() <= asOf.getTime();
@@ -321,6 +384,11 @@ function resolveSubjectState(item, asOf) {
       source !== SUMMARY_SOURCES.VULNERABILITY_ENRICHMENT &&
       status === SUMMARY_STATUSES.COMPLETED &&
       !isStale,
+    // Deliberately independent of `evidenceAvailable`: that flag answers "is
+    // there a current, positive answer", this field answers "what does the
+    // stored row say". A stale COMPLETED row still has readable content, and
+    // the renderer keeps labelling it stale.
+    evidence,
   };
 }
 
@@ -368,6 +436,7 @@ async function getFindingEnrichmentSummary(findingId, options = {}) {
             freshUntil: null,
             isStale: false,
             evidenceAvailable: false,
+            evidence: null,
             subjects: Object.freeze([]),
           })
         );

@@ -62,6 +62,7 @@ function providerRow(overrides = {}) {
     freshUntil: null,
     isStale: false,
     evidenceAvailable: false,
+    evidence: null,
     ...overrides,
   }
 }
@@ -219,7 +220,85 @@ describe('provider status rendering', () => {
 
   it('a SKIPPED row shows its specific reason, not a bare "skipped"', async () => {
     await renderPanel(VIEWER_CAPABILITIES)
-    expect(screen.getByText(/No credential configured for this provider/i)).toBeInTheDocument()
+    expect(
+      screen.getByText(/no usable credential is currently configured/i),
+    ).toBeInTheDocument()
+  })
+
+  // The result reading. Before this, a finished lookup stopped at the
+  // "Lookup completed" badge and the analyst had no way to answer "what did
+  // this provider tell me?" without leaving the screen.
+  it('a COMPLETED row states what the provider returned and lists the stored facts', async () => {
+    findingEnrichmentOrchestrationService.getSummary.mockResolvedValue(
+      fullSummary({
+        providers: [
+          providerRow({ provider: 'abuseipdb' }),
+          providerRow({
+            provider: 'censys',
+            purpose: 'EXPOSURE',
+            status: 'COMPLETED',
+            source: 'ORCHESTRATION_JOB',
+            evidenceAvailable: true,
+            evidence: {
+              queriedAt: '2026-08-19T10:30:00.000Z',
+              services: [{ port: 3389, protocol: 'TCP', serviceName: 'RDP' }],
+              autonomousSystemNumber: 13335,
+              autonomousSystemName: 'CLOUDFLARENET',
+              certificateCount: null,
+            },
+          }),
+          providerRow({ provider: 'greynoise' }),
+          providerRow({ provider: 'netlas' }),
+          providerRow({ provider: 'nvd', purpose: 'VULNERABILITY', status: 'NO_SUBJECT', subjects: [] }),
+          providerRow({ provider: 'shodan' }),
+        ],
+      }),
+    )
+    await renderPanel(VIEWER_CAPABILITIES)
+
+    expect(screen.getByTestId('enrichment-result-summary-censys')).toHaveTextContent(
+      'Censys returned host intelligence for this indicator.',
+    )
+    const facts = screen.getByTestId('enrichment-result-facts-censys')
+    expect(facts).toHaveTextContent('Observed services: 3389/tcp RDP')
+    expect(facts).toHaveTextContent('ASN: AS13335')
+    // certificateCount was null in storage, so no row claims a count.
+    expect(facts).not.toHaveTextContent(/Certificates/i)
+    expect(screen.getByText(/Retrieved 2026-08-19 10:30Z/)).toBeInTheDocument()
+  })
+
+  it('a NO_RECORD row says the provider was reached and has nothing — never a bare code', async () => {
+    findingEnrichmentOrchestrationService.getSummary.mockResolvedValue(
+      fullSummary({
+        providers: [
+          providerRow({ provider: 'abuseipdb' }),
+          providerRow({ provider: 'censys' }),
+          providerRow({
+            provider: 'greynoise',
+            purpose: 'IOC_REPUTATION',
+            status: 'NO_RECORD',
+            source: 'ORCHESTRATION_JOB',
+          }),
+          providerRow({ provider: 'netlas' }),
+          providerRow({ provider: 'nvd', purpose: 'VULNERABILITY', status: 'NO_SUBJECT', subjects: [] }),
+          providerRow({ provider: 'shodan' }),
+        ],
+      }),
+    )
+    await renderPanel(VIEWER_CAPABILITIES)
+
+    expect(screen.getByTestId('enrichment-result-summary-greynoise')).toHaveTextContent(
+      'GreyNoise was contacted successfully, but it has no matching record for this indicator.',
+    )
+    // The status chip stays distinct from COMPLETED at the same time.
+    expect(screen.getByText('Nothing on file')).toBeInTheDocument()
+  })
+
+  it('an NVD row with no verified CVE says it was intentionally not queried', async () => {
+    await renderPanel(VIEWER_CAPABILITIES)
+    expect(screen.getByTestId('enrichment-result-summary-nvd')).toHaveTextContent(
+      'No qualifying CVE is associated with this finding, so NVD was not queried.',
+    )
   })
 
   it('renders one row per verified CVE subject on NVD, each with its own status', async () => {
