@@ -66,6 +66,7 @@ import {
   formatJobState,
   describeEnrichmentError,
 } from '../constants/findingEnrichment'
+import { summarizeProviderEvidence } from '../utils/enrichmentEvidence'
 
 // One row per (provider, subject). A provider with verified CVE subjects
 // (nvd) contributes one row per CVE instead of one aggregate row, so each
@@ -89,6 +90,7 @@ function flattenProviderRows(providers) {
         source: p.source,
         freshUntil: p.freshUntil,
         isStale: p.isStale,
+        evidence: p.evidence,
       })
     }
   }
@@ -97,6 +99,9 @@ function flattenProviderRows(providers) {
 
 function ProviderRow({ row }) {
   const sourceLabel = SUMMARY_SOURCE_LABELS[row.source]
+  // Deterministic, derived only from this row's own stored evidence — see
+  // utils/enrichmentEvidence.js. Never a model, never another provider's data.
+  const result = summarizeProviderEvidence(row)
   return (
     <TableRow>
       <TableCell>
@@ -118,7 +123,35 @@ function ProviderRow({ row }) {
       </TableCell>
       <TableCell>
         <StatusBadge dictionary={ENRICHMENT_SUMMARY_STATUS} value={row.status} size="small" />
-        {row.skipReason && (
+        {result.summary && (
+          <Box
+            sx={{ ...type.small, color: color.text, mt: 0.75 }}
+            data-testid={`enrichment-result-summary-${row.provider}`}
+          >
+            {result.summary}
+          </Box>
+        )}
+        {result.facts.length > 0 && (
+          <Box
+            component="ul"
+            sx={{ m: 0, mt: 0.5, pl: 2.25, ...type.caption, color: color.text }}
+            data-testid={`enrichment-result-facts-${row.provider}`}
+          >
+            {result.facts.map((item) => (
+              <Box component="li" key={item.label} sx={{ overflowWrap: 'anywhere' }}>
+                <Box component="span" sx={{ color: color.textMuted }}>{`${item.label}: `}</Box>
+                {item.value}
+              </Box>
+            ))}
+          </Box>
+        )}
+        {result.retrievedAt && (
+          <Box sx={{ ...type.caption, color: color.textFaint, mt: 0.5, fontFamily: font.mono }}>
+            {`Retrieved ${result.retrievedAt}`}
+          </Box>
+        )}
+        {/* The raw code only when no sentence above already said it in words. */}
+        {row.skipReason && !result.summary && (
           <Box sx={{ ...type.caption, color: color.textMuted, mt: 0.5 }}>
             {SKIP_REASON_LABELS[row.skipReason] || row.skipReason}
           </Box>
