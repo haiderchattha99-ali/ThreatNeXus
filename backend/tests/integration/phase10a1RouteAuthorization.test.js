@@ -290,6 +290,7 @@ const RUN_ITEM_KEYS = [
 ];
 const SUMMARY_ROW_KEYS = [
   "asOf",
+  "evidence",
   "evidenceAvailable",
   "freshUntil",
   "isStale",
@@ -706,7 +707,9 @@ describe("GET /api/findings/:id/enrichment/summary", () => {
     // Nothing has been requested for this Finding yet.
     expect(censys.status).toBe("NOT_REQUESTED");
     expect(censys.source).toBe("NONE");
+    expect(censys.evidence).toBeNull();
     expect(censys.evidenceAvailable).toBe(false);
+
     expect(censys.isStale).toBe(false);
   });
 
@@ -739,6 +742,7 @@ describe("GET /api/findings/:id/enrichment/summary", () => {
     expect(censys.source).toBe("ORCHESTRATION_JOB");
     // Recorded, not executed: no evidence exists.
     expect(censys.evidenceAvailable).toBe(false);
+
     expect(res.body.data.executionState).toBe("PAUSED_WORKER_DISABLED");
 
     // THE claim: a summary read is a pure read. It writes nothing at all.
