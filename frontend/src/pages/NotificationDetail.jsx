@@ -4,7 +4,6 @@ import {
   Alert,
   Box,
   Button,
-  Card,
   Chip,
   CircularProgress,
   Divider,
@@ -25,6 +24,7 @@ import { notificationService } from '../services/api'
 import { useAuth } from '../hooks/useAuth'
 import { CAPABILITIES } from '../constants/capabilities'
 import { hasCapability } from '../utils/permissions'
+import { PageHeader, Panel, Disclosure, SectionLabel } from '../components/ui'
 import {
   DELIVERY_STATUS_COLORS,
   DELIVERY_STATUS_LABELS,
@@ -77,26 +77,6 @@ function parseDatetimeInputValue(value) {
   if (typeof value !== 'string' || value.trim() === '') return null
   const parsed = new Date(value)
   return Number.isNaN(parsed.getTime()) ? null : parsed
-}
-
-function Section({ title, subtitle, children, testId, action }) {
-  return (
-    <Card className="surface" sx={{ p: 3, mb: 3 }} data-testid={testId}>
-      <Box
-        sx={{ display: 'flex', gap: 2, alignItems: 'flex-start', justifyContent: 'space-between' }}
-      >
-        <Box>
-          <Typography sx={{ fontSize: 15, fontWeight: 700, color: '#EAF1F9' }}>{title}</Typography>
-          {subtitle && (
-            <Typography sx={{ fontSize: 12, color: '#9DAFC2', mt: 0.5 }}>{subtitle}</Typography>
-          )}
-        </Box>
-        {action}
-      </Box>
-      <Divider sx={{ my: 2, borderColor: '#243549' }} />
-      {children}
-    </Card>
-  )
 }
 
 const EMPTY_EDIT = {
@@ -325,30 +305,20 @@ export const NotificationDetail = () => {
   const showDeliveryForm = canRecordDelivery && actions.canRecordDelivery
   const showResponseForm = canRecordResponse && actions.canRecordOrganizationResponse
 
+  const title = notification.notificationReference || `Notification ${notification.id}`
+
   return (
     <Box sx={{ p: 3 }}>
-      <Box
-        sx={{
-          display: 'flex',
-          flexWrap: 'wrap',
-          gap: 2,
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          mb: 3,
-        }}
-      >
-        <Box>
-          <Button
-            startIcon={<FiArrowLeft />}
-            onClick={() => navigate('/notifications')}
-            data-testid="back"
-          >
-            Back to notifications
-          </Button>
-          <Typography sx={{ fontSize: 22, fontWeight: 700, color: '#EAF1F9', mt: 1 }}>
-            {notification.notificationReference || `Notification ${notification.id}`}
-          </Typography>
-          <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mt: 1, flexWrap: 'wrap' }}>
+      <PageHeader
+        eyebrow="Analyst workspace / notification"
+        title={title}
+        breadcrumbs={[
+          { label: 'ThreatNeXus', to: '/dashboard' },
+          { label: 'Notifications', to: '/notifications' },
+          { label: title },
+        ]}
+        meta={
+          <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
             <Chip
               size="small"
               label={NOTIFICATION_STATE_LABELS[state] || state}
@@ -372,14 +342,29 @@ export const NotificationDetail = () => {
               </Button>
             )}
           </Box>
-        </Box>
-
-        <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'center' }}>
-          <Button variant="outlined" startIcon={<FiRefreshCw />} onClick={load} data-testid="refresh">
-            Refresh
-          </Button>
-        </Box>
-      </Box>
+        }
+        actions={
+          <>
+            <Button
+              startIcon={<FiArrowLeft />}
+              onClick={() => navigate('/notifications')}
+              size="small"
+              data-testid="back"
+            >
+              Back to notifications
+            </Button>
+            <Button
+              variant="outlined"
+              startIcon={<FiRefreshCw />}
+              onClick={load}
+              size="small"
+              data-testid="refresh"
+            >
+              Refresh
+            </Button>
+          </>
+        }
+      />
 
       {/* The no-send guarantee, stated on the screen rather than only in the
           documentation. */}
@@ -388,16 +373,17 @@ export const NotificationDetail = () => {
         sent by you; delivery is only ever what you record here afterwards.
       </Alert>
 
-      <Section
+      <Panel
         title="Current revision"
-        subtitle={
+        description={
           currentRevision
             ? `Revision ${currentRevision.revisionNumber} · content fingerprint ${shortChecksum(
                 currentRevision.contentChecksum,
               )}`
             : 'No current revision.'
         }
-        testId="current-revision"
+        data-testid="current-revision"
+        sx={{ mb: 3 }}
       >
         {currentRevision && (
           <>
@@ -542,13 +528,14 @@ export const NotificationDetail = () => {
             )}
           </>
         )}
-      </Section>
+      </Panel>
 
       {showReviewPanel && (
-        <Section
+        <Panel
           title="Reviewer decision"
-          subtitle="You are deciding on the exact revision shown above. An approval is bound to it and does not carry over to a later edit."
-          testId="review-panel"
+          description="You are deciding on the exact revision shown above. An approval is bound to it and does not carry over to a later edit."
+          data-testid="review-panel"
+          sx={{ mb: 3 }}
         >
           <Box sx={{ display: 'grid', gap: 2 }}>
             <TextField
@@ -609,14 +596,15 @@ export const NotificationDetail = () => {
               </Button>
             </Box>
           </Box>
-        </Section>
+        </Panel>
       )}
 
       {showExport && (
-        <Section
+        <Panel
           title="Manual export"
-          subtitle="Downloads the approved revision as a file. Nothing is transmitted."
-          testId="export-panel"
+          description="Downloads the approved revision as a file. Nothing is transmitted."
+          data-testid="export-panel"
+          sx={{ mb: 3 }}
         >
           <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'flex-start', flexWrap: 'wrap' }}>
             <TextField
@@ -650,13 +638,23 @@ export const NotificationDetail = () => {
               {exportRefusal}
             </Alert>
           )}
-        </Section>
+        </Panel>
       )}
 
-      <Section
-        title="Export history"
-        subtitle="Every download is a recorded act. Exporting is not delivery."
-        testId="export-history"
+      {/* ---------------- Secondary context & history: every export, delivery
+          observation, organization response and revision stays reachable —
+          folded behind disclosure so the decision surfaces above are what the
+          screen opens on. Each summary states a count, and the delivery
+          summary additionally flags a bounced/failed event so a real problem
+          is never hidden by the fold. ------------------------------------- */}
+      <SectionLabel component="h2" sx={{ mb: 1.5 }}>
+        Secondary context &amp; history
+      </SectionLabel>
+      <Box sx={{ display: 'grid', gap: 2 }}>
+      <Disclosure
+        summary={`Export history — ${detail.exports.length} export${detail.exports.length === 1 ? '' : 's'}`}
+        hint="Every download is a recorded act. Exporting is not delivery."
+        data-testid="export-history"
       >
         {detail.exports.length === 0 ? (
           <Typography sx={{ fontSize: 13, color: '#9DAFC2' }}>
@@ -694,12 +692,19 @@ export const NotificationDetail = () => {
             </Table>
           </TableContainer>
         )}
-      </Section>
+      </Disclosure>
 
-      <Section
-        title="Delivery timeline"
-        subtitle="What a human observed after sending the exported file. Nothing here is ever inferred."
-        testId="delivery-timeline"
+      <Disclosure
+        summary={
+          detail.deliveryEvents.length === 0
+            ? 'Delivery timeline — nothing recorded'
+            : `Delivery timeline — ${detail.deliveryEvents.length} event${detail.deliveryEvents.length === 1 ? '' : 's'}` +
+              (detail.deliveryEvents.some((e) => e.status === 'FAILED' || e.status === 'BOUNCED')
+                ? ' · a delivery issue was reported'
+                : '')
+        }
+        hint="What a human observed after sending the exported file. Nothing here is ever inferred."
+        data-testid="delivery-timeline"
       >
         {showDeliveryForm && (
           <Box sx={{ display: 'grid', gap: 2, mb: 3 }} data-testid="delivery-form">
@@ -811,12 +816,16 @@ export const NotificationDetail = () => {
             </Table>
           </TableContainer>
         )}
-      </Section>
+      </Disclosure>
 
-      <Section
-        title="Organization responses"
-        subtitle="The case's own response timeline — the same rows the case screen shows. A response never closes anything."
-        testId="response-timeline"
+      <Disclosure
+        summary={
+          detail.caseResponses.length === 0
+            ? 'Organization responses — none recorded'
+            : `Organization responses — ${detail.caseResponses.length} recorded`
+        }
+        hint="The case's own response timeline — the same rows the case screen shows. A response never closes anything."
+        data-testid="response-timeline"
       >
         {showResponseForm && (
           <Box sx={{ display: 'grid', gap: 2, mb: 3 }} data-testid="response-form">
@@ -920,12 +929,12 @@ export const NotificationDetail = () => {
             </Table>
           </TableContainer>
         )}
-      </Section>
+      </Disclosure>
 
-      <Section
-        title="Revision history"
-        subtitle="Immutable. A revision is never rewritten; an edit appends a new one."
-        testId="revision-history"
+      <Disclosure
+        summary={`Revision history — ${detail.revisions.length} revision${detail.revisions.length === 1 ? '' : 's'}`}
+        hint="Immutable. A revision is never rewritten; an edit appends a new one."
+        data-testid="revision-history"
       >
         <TableContainer sx={{ overflowX: 'auto' }}>
           <Table size="small">
@@ -964,12 +973,12 @@ export const NotificationDetail = () => {
             </TableBody>
           </Table>
         </TableContainer>
-      </Section>
+      </Disclosure>
 
-      <Section
-        title="Lifecycle and review history"
-        subtitle="Append-only. A rejection survives a later approval."
-        testId="lifecycle-history"
+      <Disclosure
+        summary={`Lifecycle and review history — ${detail.lifecycleEvents.length} event${detail.lifecycleEvents.length === 1 ? '' : 's'}`}
+        hint="Append-only. A rejection survives a later approval."
+        data-testid="lifecycle-history"
       >
         <TableContainer sx={{ overflowX: 'auto' }}>
           <Table size="small">
@@ -997,7 +1006,8 @@ export const NotificationDetail = () => {
             </TableBody>
           </Table>
         </TableContainer>
-      </Section>
+      </Disclosure>
+      </Box>
     </Box>
   )
 }

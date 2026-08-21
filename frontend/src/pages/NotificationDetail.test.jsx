@@ -180,7 +180,11 @@ describe('shared presentation', () => {
   it('renders the reference, state, organization and current revision', async () => {
     renderDetail(ANALYST_CAPABILITIES)
 
-    expect(await screen.findByText('TNX-NOT-2026-000007')).toBeInTheDocument()
+    // The reference also appears as the trailing breadcrumb crumb now, so
+    // this scopes to the page's one <h1> rather than an ambiguous text match.
+    expect(
+      await screen.findByRole('heading', { name: 'TNX-NOT-2026-000007' }),
+    ).toBeInTheDocument()
     expect(screen.getByTestId('lifecycle-state')).toHaveTextContent('Draft')
     expect(screen.getByText('Acme Bank')).toBeInTheDocument()
     expect(screen.getByTestId('current-revision')).toHaveTextContent('Revision 2')
@@ -558,5 +562,73 @@ describe('no transport from the browser either', () => {
     expect(container.querySelector('a[href^="mailto:"]')).toBeNull()
     expect(screen.queryByText(/^send$/i)).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /send (now|email|notification)/i })).toBeNull()
+  })
+})
+
+// True when `first` appears before `second` in document order.
+function precedes(first, second) {
+  // eslint-disable-next-line no-bitwise
+  return Boolean(first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING)
+}
+
+describe('UX Ticket B: decision-first hierarchy', () => {
+  it('puts current revision, export and the export/delivery/history disclosures in that order', async () => {
+    renderDetail(
+      ANALYST_CAPABILITIES,
+      detailView({
+        state: 'APPROVED',
+        permittedActions: { canExport: true, exportRefusalCode: null },
+      }),
+    )
+
+    const current = await screen.findByTestId('current-revision')
+    const exportPanel = screen.getByTestId('export-panel')
+    const exportHistory = screen.getByTestId('export-history')
+    const lifecycleHistory = screen.getByTestId('lifecycle-history')
+
+    expect(precedes(current, exportPanel)).toBe(true)
+    expect(precedes(exportPanel, exportHistory)).toBe(true)
+    expect(precedes(exportHistory, lifecycleHistory)).toBe(true)
+  })
+
+  it('collapses history disclosures by default, without losing any of it', async () => {
+    renderDetail(
+      ANALYST_CAPABILITIES,
+      detailView({
+        deliveryEvents: [
+          {
+            id: 101,
+            status: 'BOUNCED',
+            revisionNumber: 2,
+            occurredAt: '2026-08-03T14:00:00.000Z',
+            recordedAt: '2026-08-03T14:05:00.000Z',
+            reference: 'TICKET-9',
+            note: 'Mailbox full.',
+          },
+        ],
+      }),
+    )
+
+    const deliveryTimeline = await screen.findByTestId('delivery-timeline')
+    const revisionHistory = screen.getByTestId('revision-history')
+    expect(deliveryTimeline).not.toHaveAttribute('open')
+    expect(revisionHistory).not.toHaveAttribute('open')
+    // Collapsed never means removed — a real delivery problem is still
+    // findable, and its summary line surfaces it without opening anything.
+    expect(deliveryTimeline).toHaveTextContent('TICKET-9')
+    expect(screen.getByText(/Delivery timeline .* a delivery issue was reported/)).toBeInTheDocument()
+  })
+
+  it('opens a history disclosure on click, reaching the content inside it', async () => {
+    const user = userEvent.setup()
+    renderDetail(ANALYST_CAPABILITIES)
+
+    const revisionHistory = await screen.findByTestId('revision-history')
+    expect(revisionHistory).not.toHaveAttribute('open')
+
+    await user.click(screen.getByText(/Revision history — 2 revisions/))
+
+    expect(revisionHistory).toHaveAttribute('open')
+    expect(screen.getByTestId('revision-2')).toBeInTheDocument()
   })
 })
