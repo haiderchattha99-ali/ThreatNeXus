@@ -36,6 +36,35 @@ function isReadable(section) {
   return section?.availability === 'AVAILABLE'
 }
 
+// UX Ticket A — the full entrance choreography below (header/KPI/queue
+// fade-in, the count-up, the below-the-fold scroll reveals) is a first-look
+// flourish, not a re-introduction. An analyst who leaves for a Finding and
+// comes straight back to Dashboard should find it calm, not replaying the
+// same ~900ms show every single time.
+//
+// Session-scoped only, and read defensively — the same pattern
+// useReducedMotion.js's readOptOut uses: private mode or storage disabled
+// fails toward "animate", never toward a thrown error, because this flag only
+// ever gates a flourish and must never be able to affect data visibility.
+export const DASHBOARD_ENTRANCE_SESSION_KEY = 'tnx.dashboard.entranceShown'
+
+export function hasDashboardEntranceRun() {
+  try {
+    return window.sessionStorage.getItem(DASHBOARD_ENTRANCE_SESSION_KEY) === 'true'
+  } catch {
+    return false
+  }
+}
+
+export function markDashboardEntranceRun() {
+  try {
+    window.sessionStorage.setItem(DASHBOARD_ENTRANCE_SESSION_KEY, 'true')
+  } catch {
+    /* storage unavailable — nothing to persist; the tab simply animates on
+       every visit, which is the safe direction to fail in. */
+  }
+}
+
 // Below the first screen this page was eleven panels in a row, all the same
 // weight, with no statement of what the run of them was for. A reader who
 // scrolled past the queue had no way to tell whether the next panel continued
@@ -146,8 +175,17 @@ export const Dashboard = () => {
   // Order encodes the hierarchy the dashboard is supposed to teach: command
   // header, then the exact metrics, then the primary queue, then risk posture,
   // then everything else on scroll.
+  //
+  // Runs at most once per browser session (see hasDashboardEntranceRun
+  // above). Skipping it is byte-for-byte the same code path reducedMotion
+  // already takes — every element's resting state is its plain, fully
+  // visible DOM state with no inline transform/opacity, because nothing here
+  // is ever hidden except by a running GSAP tween. A return visit is
+  // therefore never at risk of stranding content invisible; it just renders
+  // instantly instead of animating in.
   useGSAP(() => {
-    if (!overview || reducedMotion) return undefined
+    if (!overview || reducedMotion || hasDashboardEntranceRun()) return undefined
+    markDashboardEntranceRun()
 
     const timeline = gsap.timeline({ defaults: { ease: 'power3.out' } })
     const addEntrance = (selector, from, to, position) => {

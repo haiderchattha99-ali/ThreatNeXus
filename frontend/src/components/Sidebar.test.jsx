@@ -67,6 +67,24 @@ describe('Sidebar navigation visibility', () => {
     ].forEach((label) => expect(screen.getByText(label)).toBeInTheDocument())
   })
 
+  // UX Ticket A: Analytics/ATT&CK navigator moved out of "Administration" into
+  // their own "Insight" group. All four headings must render, and the two
+  // moved items must sit under the new heading rather than the old one.
+  it('renders four groups with Analytics and ATT&CK navigator under Insight, not Administration', () => {
+    renderSidebar(CAPABILITY_VALUES)
+
+    ;['Operations', 'Response', 'Insight', 'Administration'].forEach((heading) =>
+      expect(screen.getByText(heading)).toBeInTheDocument()
+    )
+
+    const insightList = document.querySelector('[aria-labelledby="nav-group-Insight"]')
+    const adminList = document.querySelector('[aria-labelledby="nav-group-Administration"]')
+    expect(insightList).toContainElement(screen.getByText('Analytics'))
+    expect(insightList).toContainElement(screen.getByText('ATT&CK navigator'))
+    expect(adminList).toContainElement(screen.getByText('Organizations'))
+    expect(adminList).toContainElement(screen.getByText('Settings'))
+  })
+
   it('hides ADMIN-only navigation from ANALYST', () => {
     renderSidebar(ANALYST_CAPABILITIES)
 

@@ -21,8 +21,15 @@ import { PkcertAttribution } from './ui/Brand'
 export const DRAWER_WIDTH = layout.sidebarWidth
 
 // Grouped so the navigation communicates the workflow's shape rather than being
-// a flat list of eight equal things. The order follows the operational spine:
-// evidence in -> findings -> cases -> constituent notification -> oversight.
+// a flat list of nine equal things. The order follows the operational spine:
+// evidence in -> findings -> cases -> constituent notification -> analyst
+// insight -> administration.
+//
+// Insight was split out of Administration (UX Ticket A): Analytics and the
+// ATT&CK navigator are analyst-facing oversight/context surfaces, not
+// configuration — grouping them with Organizations/Settings mislabelled two
+// read-mostly analysis tools as admin work. No route, permission or item
+// changed; only which heading each already-existing item sits under.
 export const NAV_GROUPS = [
   {
     heading: 'Operations',
@@ -40,10 +47,15 @@ export const NAV_GROUPS = [
     ],
   },
   {
-    heading: 'Administration',
+    heading: 'Insight',
     items: [
       { label: 'Analytics', path: '/analytics', icon: FiBarChart2, permission: 'analytics' },
       { label: 'ATT&CK navigator', path: '/attack', icon: FiTarget, permission: 'attack' },
+    ],
+  },
+  {
+    heading: 'Administration',
+    items: [
       { label: 'Organizations', path: '/organizations', icon: FiUsers, permission: 'organizations' },
       { label: 'Settings', path: '/settings', icon: FiSettings, permission: 'settings' },
     ],

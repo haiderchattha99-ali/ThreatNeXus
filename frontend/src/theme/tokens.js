@@ -181,7 +181,41 @@ export const motion = {
   opening: 1800,
   ease: 'cubic-bezier(0.22, 0.61, 0.36, 1)',
   easeOut: 'cubic-bezier(0.16, 1, 0.3, 1)',
+  // Named aliases for the two future surfaces UX Ticket A grounds this for
+  // (the provider evidence drawer and disclosure transitions), so that work
+  // reaches for a named purpose rather than picking a raw duration by feel.
+  // Both point at existing primitives above — no new value was invented.
+  overlay: 220, // a drawer/panel entering or leaving the viewport — same as `base`
+  disclosure: 160, // an in-place expand/collapse — same as `fast`, quicker than an overlay because nothing changes position on screen
 }
+
+// ---------------------------------------------------------------------------
+// The one motion convention every future component reuses
+// ---------------------------------------------------------------------------
+// UX Ticket A establishes this rather than a new drawer/disclosure component,
+// so Ticket B (the provider evidence drawer, Finding/Case/Notification
+// disclosures) has one obvious, already-proven pattern to extend instead of
+// inventing its own:
+//
+//   1. Gate on useReducedMotion() (hooks/useReducedMotion.js) — never animate
+//      unconditionally. A reduced-motion or narrow-viewport reader gets the
+//      resting state immediately, exactly like every existing consumer.
+//   2. Animate with GSAP `fromTo`, never `from`/`to` alone and never
+//      ScrollTrigger for anything that gates whether content is visible.
+//      `fromTo` states both ends explicitly, so a StrictMode double-invoke or
+//      an interrupted transition can never strand an element at its "from"
+//      value — see components/ui/Reveal.jsx's own comment for the bug this
+//      already fixed once.
+//   3. Use `motion.overlay`/`motion.disclosure` above (not a bespoke number)
+//      with `motion.easeOut`, and clear inline styles on completion
+//      (`clearProps`) so nothing survives to interfere with layout, focus, or
+//      print.
+//   4. No new animation dependency. GSAP is already a project dependency and
+//      MUI's own Drawer/Collapse transitions are reduced-motion-safe by
+//      default — reach for those before writing a new tween.
+//
+// Reveal.jsx and AppShell.jsx's route-change fade are the two reference
+// implementations; read either before adding a third variant.
 
 // ---------------------------------------------------------------------------
 // Status semantics
