@@ -3,7 +3,12 @@ import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 
-import { Dashboard } from './Dashboard'
+import {
+  Dashboard,
+  DASHBOARD_ENTRANCE_SESSION_KEY,
+  hasDashboardEntranceRun,
+  markDashboardEntranceRun,
+} from './Dashboard'
 import { dashboardService } from '../services/api'
 
 vi.mock('@gsap/react', () => ({ useGSAP: () => undefined }))
@@ -115,8 +120,39 @@ function renderDashboard(role) {
   return render(<MemoryRouter><Dashboard /></MemoryRouter>)
 }
 
-beforeEach(() => vi.clearAllMocks())
+beforeEach(() => {
+  vi.clearAllMocks()
+  window.sessionStorage.clear()
+})
 afterEach(() => vi.restoreAllMocks())
+
+// UX Ticket A — the entrance choreography itself is exercised only through
+// the mocked useGSAP above (it never actually runs in jsdom), so this checks
+// the session gate it now reads/writes directly: false until the first
+// paint's effect marks it, true and durable for the rest of the tab's
+// session after that.
+describe('dashboard entrance session gate', () => {
+  it('has not run before anything marks it', () => {
+    expect(hasDashboardEntranceRun()).toBe(false)
+  })
+
+  it('is recorded per browser session, not reset by re-rendering', () => {
+    expect(hasDashboardEntranceRun()).toBe(false)
+    markDashboardEntranceRun()
+    expect(hasDashboardEntranceRun()).toBe(true)
+    expect(window.sessionStorage.getItem(DASHBOARD_ENTRANCE_SESSION_KEY)).toBe('true')
+  })
+
+  it('fails toward "animate" rather than throwing when storage is unavailable', () => {
+    const original = window.sessionStorage.getItem
+    window.sessionStorage.getItem = () => {
+      throw new Error('storage disabled')
+    }
+    expect(() => hasDashboardEntranceRun()).not.toThrow()
+    expect(hasDashboardEntranceRun()).toBe(false)
+    window.sessionStorage.getItem = original
+  })
+})
 
 describe('operations dashboard', () => {
   it('puts analyst decisions and truthful risk navigation above supporting analysis', async () => {
