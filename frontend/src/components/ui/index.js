@@ -6,6 +6,7 @@
 
 export { Panel, SectionLabel, Field, FieldGrid } from './Panel'
 export { PageHeader } from './PageHeader'
+export { Disclosure } from './Disclosure'
 export { StatusBadge, RiskBandBadge } from './StatusBadge'
 export {
   MetricTile,

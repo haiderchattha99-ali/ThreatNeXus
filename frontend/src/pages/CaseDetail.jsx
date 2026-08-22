@@ -6,7 +6,6 @@ import {
   Card,
   Chip,
   CircularProgress,
-  Divider,
   MenuItem,
   Table,
   TableBody,
@@ -26,6 +25,7 @@ import { CAPABILITIES } from '../constants/capabilities'
 import { hasCapability } from '../utils/permissions'
 import { FindingTriagePanel } from '../components/FindingTriagePanel'
 import { FrameworkMappingPanel } from '../components/FrameworkMappingPanel'
+import { PageHeader, Panel, Disclosure, SectionLabel } from '../components/ui'
 import {
   CASE_STATE_COLORS,
   CASE_STATE_LABELS,
@@ -61,19 +61,6 @@ function parseDatetimeInputValue(value) {
   if (typeof value !== 'string' || value.trim() === '') return null
   const parsed = new Date(value)
   return Number.isNaN(parsed.getTime()) ? null : parsed
-}
-
-function Section({ title, subtitle, children, testId }) {
-  return (
-    <Card className="surface" sx={{ p: 3, mb: 3 }} data-testid={testId}>
-      <Typography sx={{ fontSize: 15, fontWeight: 700, color: '#EAF1F9' }}>{title}</Typography>
-      {subtitle && (
-        <Typography sx={{ fontSize: 12, color: '#9DAFC2', mt: 0.5 }}>{subtitle}</Typography>
-      )}
-      <Divider sx={{ my: 2, borderColor: '#243549' }} />
-      {children}
-    </Card>
-  )
 }
 
 /**
@@ -216,32 +203,44 @@ export const CaseDetail = () => {
   const hasRemediatedResponse = organizationResponses.some((r) => r.responseType === 'REMEDIATED')
   const closureNeedsRemediation = closureForm.closureReason === 'REMEDIATED'
 
+  const stateChip = (
+    <Chip
+      size="small"
+      label={CASE_STATE_LABELS[record.lifecycleState] || record.lifecycleState}
+      data-testid="case-lifecycle-state"
+      sx={{
+        bgcolor: `${CASE_STATE_COLORS[record.lifecycleState] || '#7C8AA0'}20`,
+        color: CASE_STATE_COLORS[record.lifecycleState] || '#7C8AA0',
+        fontWeight: 700,
+      }}
+    />
+  )
+
   return (
     <Box sx={{ p: { xs: 2, md: 4 }, maxWidth: 1540, mx: 'auto' }}>
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 2, flexWrap: 'wrap', mb: 3 }}>
-        <Box>
-          <Button
-            startIcon={<FiArrowLeft />}
-            onClick={() => navigate('/cases')}
-            sx={{ color: '#9DAFC2', mb: 1 }}
-          >
-            All cases
-          </Button>
-          <Typography className="page-title">{record.title}</Typography>
-          <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mt: 1.5, flexWrap: 'wrap' }}>
+      <PageHeader
+        eyebrow="Analyst workspace / case"
+        title={record.title}
+        breadcrumbs={[
+          { label: 'ThreatNeXus', to: '/dashboard' },
+          { label: 'Cases', to: '/cases' },
+          { label: record.title },
+        ]}
+        description={
+          <>
+            {record.ownerOrganization
+              ? `${record.ownerOrganization.name} · ${record.ownerOrganization.sector}`
+              : 'Legacy case — not bound to an organization'}
+            {' · '}
+            {record.threatType} · {record.priority} · {record.analyst}
+          </>
+        }
+        meta={
+          <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
             <Typography className="mono" sx={{ fontSize: 12, color: '#9DAFC2' }}>
               {record.caseReference || `#${record.id}`}
             </Typography>
-            <Chip
-              size="small"
-              label={CASE_STATE_LABELS[record.lifecycleState] || record.lifecycleState}
-              data-testid="case-lifecycle-state"
-              sx={{
-                bgcolor: `${CASE_STATE_COLORS[record.lifecycleState] || '#7C8AA0'}20`,
-                color: CASE_STATE_COLORS[record.lifecycleState] || '#7C8AA0',
-                fontWeight: 700,
-              }}
-            />
+            {stateChip}
             {record.reopenedByRecurrence && (
               <Chip
                 size="small"
@@ -258,24 +257,24 @@ export const CaseDetail = () => {
               />
             )}
           </Box>
-          <Typography sx={{ mt: 1.5, fontSize: 13, color: '#9DAFC2' }}>
-            {record.ownerOrganization
-              ? `${record.ownerOrganization.name} · ${record.ownerOrganization.sector}`
-              : 'Legacy case — not bound to an organization'}
-            {' · '}
-            {record.threatType} · {record.priority} · {record.analyst}
-          </Typography>
-        </Box>
-
-        <Button
-          startIcon={<FiRefreshCw />}
-          onClick={load}
-          variant="outlined"
-          sx={{ borderColor: '#33485F', color: '#9DAFC2', alignSelf: 'flex-start' }}
-        >
-          Refresh
-        </Button>
-      </Box>
+        }
+        actions={
+          <>
+            <Button startIcon={<FiArrowLeft />} onClick={() => navigate('/cases')} size="small">
+              All cases
+            </Button>
+            <Button
+              startIcon={<FiRefreshCw />}
+              onClick={load}
+              variant="outlined"
+              size="small"
+              sx={{ borderColor: '#33485F', color: '#9DAFC2' }}
+            >
+              Refresh
+            </Button>
+          </>
+        }
+      />
 
       {!permittedActions.isOrganizationBound && (
         <Card className="surface" sx={{ p: 2, mb: 3, borderColor: '#E8A33D' }}>
@@ -286,12 +285,16 @@ export const CaseDetail = () => {
         </Card>
       )}
 
-      {/* ---------------- Lifecycle controls ---------------- */}
+      {/* ---------------- Lifecycle controls: the primary "what state, what's
+          blocking" question. Kept first and always visible when actionable —
+          this and Closure review below are the REQUIRED ACTION / DECISION
+          tier the ticket's hierarchy puts ahead of evidence and history. ---- */}
       {canManage && permittedActions.isOrganizationBound && (
-        <Section
+        <Panel
           title="Case state"
-          subtitle="Only OPEN and WAITING_FOR_ORG are settable here. Closure needs a request and a reviewer; leaving CLOSED needs an explicit reopen."
-          testId="state-controls"
+          description="Only OPEN and WAITING_FOR_ORG are settable here. Closure needs a request and a reviewer; leaving CLOSED needs an explicit reopen."
+          data-testid="state-controls"
+          sx={{ mb: 3 }}
         >
           {permittedActions.availableStates.length > 0 ? (
             <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -356,14 +359,15 @@ export const CaseDetail = () => {
               </Button>
             </Box>
           )}
-        </Section>
+        </Panel>
       )}
 
-      {/* ---------------- Linked findings ---------------- */}
-      <Section
+      {/* ---------------- Linked findings: core evidence, stays visible. ---- */}
+      <Panel
         title="Linked findings"
-        subtitle="Evidence. Linking copies nothing — every finding stays in its own record and is read from there."
-        testId="linked-findings"
+        description="Evidence. Linking copies nothing — every finding stays in its own record and is read from there."
+        data-testid="linked-findings"
+        sx={{ mb: 3 }}
       >
         {canManage && permittedActions.canLinkFindings && (
           <Box sx={{ display: 'flex', gap: 1, mb: 2, flexWrap: 'wrap' }}>
@@ -492,237 +496,17 @@ export const CaseDetail = () => {
             </Table>
           </TableContainer>
         )}
-      </Section>
+      </Panel>
 
-      {/* ---------------- Organization responses ---------------- */}
-      {canReadNotifications && (
-        <Section
-          title="Notifications"
-          subtitle="Constituent notifications drafted from this case's evidence. ThreatNeXus never sends one — an approved notification is exported manually."
-          testId="case-notifications"
-        >
-          {canManageNotifications && (
-            <Box sx={{ mb: 2 }}>
-              <Button
-                variant="contained"
-                size="small"
-                disabled={busy || !permittedActions.isOrganizationBound}
-                onClick={async () => {
-                  setBusy(true)
-                  try {
-                    const res = await notificationService.createDraft(Number(id))
-                    toast.success('Notification draft created from this case.')
-                    navigate(`/notifications/${res.data.data.notification.id}`)
-                  } catch (error) {
-                    toast.error(
-                      describeWorkflowError(error, 'The notification draft could not be created.'),
-                    )
-                  } finally {
-                    setBusy(false)
-                  }
-                }}
-                data-testid="draft-notification"
-              >
-                Draft notification
-              </Button>
-              {!permittedActions.isOrganizationBound && (
-                <Typography sx={{ fontSize: 12, color: '#9DAFC2', mt: 1 }}>
-                  This legacy case has no organization, so a notification cannot be addressed from
-                  it.
-                </Typography>
-              )}
-            </Box>
-          )}
-
-          {notifications.length === 0 ? (
-            <Typography sx={{ fontSize: 13, color: '#9DAFC2' }} data-testid="no-case-notifications">
-              No notification has been drafted from this case.
-            </Typography>
-          ) : (
-            <TableContainer sx={{ overflowX: 'auto' }}>
-              <Table size="small">
-                <TableHead>
-                  <TableRow>
-                    <TableCell>Reference</TableCell>
-                    <TableCell>Subject</TableCell>
-                    <TableCell>State</TableCell>
-                    <TableCell align="right">Rev</TableCell>
-                    <TableCell align="right">Exports</TableCell>
-                    <TableCell align="right">Actions</TableCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {notifications.map((row) => (
-                    <TableRow key={row.id} data-testid={`case-notification-${row.id}`}>
-                      <TableCell sx={{ whiteSpace: 'nowrap' }}>
-                        {row.notificationReference || '—'}
-                      </TableCell>
-                      <TableCell sx={{ maxWidth: 280 }}>
-                        {row.currentRevision?.subject || '—'}
-                      </TableCell>
-                      <TableCell>
-                        <Chip
-                          size="small"
-                          label={
-                            NOTIFICATION_STATE_LABELS[row.lifecycleState] || row.lifecycleState
-                          }
-                          sx={{
-                            bgcolor: `${NOTIFICATION_STATE_COLORS[row.lifecycleState]}22`,
-                            color: NOTIFICATION_STATE_COLORS[row.lifecycleState],
-                            fontWeight: 700,
-                          }}
-                        />
-                      </TableCell>
-                      <TableCell align="right">
-                        {row.currentRevision?.revisionNumber ?? '—'}
-                      </TableCell>
-                      <TableCell align="right">{row.exportCount}</TableCell>
-                      <TableCell align="right">
-                        <Button
-                          size="small"
-                          onClick={() => navigate(`/notifications/${row.id}`)}
-                          data-testid={`open-notification-${row.id}`}
-                        >
-                          Open
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </TableContainer>
-          )}
-        </Section>
-      )}
-
-      <Section
-        title="Organization responses"
-        subtitle="What the affected organization told us. A response is a claim, never proof — none of these closes anything on its own."
-        testId="organization-responses"
-      >
-        {canManage && permittedActions.canRecordResponse && (
-          <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 2, alignItems: 'flex-start' }}>
-            <TextField
-              select
-              size="small"
-              label="Response"
-              value={responseForm.responseType}
-              onChange={(e) => setResponseForm({ ...responseForm, responseType: e.target.value })}
-              sx={{ minWidth: 190 }}
-            >
-              {ORGANIZATION_RESPONSE_TYPES.map((type) => (
-                <MenuItem key={type} value={type}>
-                  {RESPONSE_LABELS[type]}
-                </MenuItem>
-              ))}
-            </TextField>
-            <TextField
-              size="small"
-              label="Summary (required)"
-              value={responseForm.summary}
-              onChange={(e) => setResponseForm({ ...responseForm, summary: e.target.value })}
-              sx={{ minWidth: 280, flex: 1 }}
-            />
-            <TextField
-              size="small"
-              label="Reference (optional)"
-              value={responseForm.reference}
-              onChange={(e) => setResponseForm({ ...responseForm, reference: e.target.value })}
-              sx={{ width: 180 }}
-            />
-            <TextField
-              size="small"
-              type="datetime-local"
-              label="Occurred at"
-              data-testid="response-occurred-at"
-              value={responseForm.occurredAt}
-              onChange={(e) => setResponseForm({ ...responseForm, occurredAt: e.target.value })}
-              error={parseDatetimeInputValue(responseForm.occurredAt) === null}
-              helperText={
-                parseDatetimeInputValue(responseForm.occurredAt) === null
-                  ? 'Enter a valid date and time.'
-                  : ' '
-              }
-              slotProps={{ inputLabel: { shrink: true } }}
-              sx={{ minWidth: 210 }}
-            />
-            <Button
-              variant="contained"
-              disabled={
-                busy ||
-                responseForm.summary.trim() === '' ||
-                parseDatetimeInputValue(responseForm.occurredAt) === null
-              }
-              data-testid="record-response"
-              onClick={async () => {
-                const occurredAt = parseDatetimeInputValue(responseForm.occurredAt)
-                if (occurredAt === null) {
-                  toast.error('Enter a valid response date and time.')
-                  return
-                }
-                const payload = {
-                  responseType: responseForm.responseType,
-                  summary: responseForm.summary.trim(),
-                  occurredAt: occurredAt.toISOString(),
-                }
-                if (responseForm.reference.trim()) payload.reference = responseForm.reference.trim()
-                const ok = await run(
-                  () => caseWorkflowService.recordResponse(record.id, payload),
-                  'Organization response recorded',
-                  'Failed to record response',
-                )
-                if (ok) {
-                  setResponseForm({
-                    responseType: 'ACKNOWLEDGED',
-                    summary: '',
-                    reference: '',
-                    occurredAt: toLocalDatetimeInputValue(new Date()),
-                  })
-                }
-              }}
-              sx={{ bgcolor: '#35C477', color: '#06100A' }}
-            >
-              Record
-            </Button>
-          </Box>
-        )}
-
-        {organizationResponses.length === 0 ? (
-          <Typography sx={{ fontSize: 13, color: '#9DAFC2' }}>
-            No responses recorded yet. That is different from a recorded &ldquo;no response&rdquo;.
-          </Typography>
-        ) : (
-          organizationResponses.map((response) => (
-            <Box key={response.id} sx={{ mb: 1.5 }} data-testid={`response-${response.id}`}>
-              <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
-                <Chip
-                  size="small"
-                  label={RESPONSE_LABELS[response.responseType] || response.responseType}
-                  sx={{
-                    bgcolor: `${RESPONSE_COLORS[response.responseType] || '#7C8AA0'}20`,
-                    color: RESPONSE_COLORS[response.responseType] || '#7C8AA0',
-                    fontWeight: 700,
-                    fontSize: 10,
-                  }}
-                />
-                <Typography sx={{ fontSize: 11, color: '#9DAFC2' }}>
-                  {formatInstant(response.occurredAt)}
-                  {response.reference ? ` · ref ${response.reference}` : ''}
-                </Typography>
-              </Box>
-              <Typography sx={{ fontSize: 13, color: '#EAF1F9', mt: 0.5 }}>
-                {response.summary}
-              </Typography>
-            </Box>
-          ))
-        )}
-      </Section>
-
-      {/* ---------------- Closure workflow ---------------- */}
-      <Section
+      {/* ---------------- Closure review: the decision surface. Kept beside
+          the evidence above rather than after the secondary/history group
+          below — this and Case state are the REQUIRED ACTION / DECISION tier
+          the ticket's hierarchy puts ahead of secondary context. ---------- */}
+      <Panel
         title="Closure review"
-        subtitle="Closing a case takes two people: an analyst requests, a reviewer decides. The requester may not approve their own request."
-        testId="closure-workflow"
+        description="Closing a case takes two people: an analyst requests, a reviewer decides. The requester may not approve their own request."
+        data-testid="closure-workflow"
+        sx={{ mb: 3 }}
       >
         {pendingClosureRequest ? (
           <Box data-testid="pending-closure-request">
@@ -873,27 +657,260 @@ export const CaseDetail = () => {
             ))}
           </Box>
         )}
-      </Section>
+      </Panel>
 
-      {/* ---------------- Phase 5: framework mapping workspace ---------------- */}
-      {/* Placed after the evidence and response sections and before the
-          timeline: a framework mapping is a judgement made ABOUT the evidence
-          above it, and it should be read after that evidence rather than
-          before. The panel fetches its own data and renders its own capability
-          gates, so this screen neither knows nor decides who may map what. */}
-      <Section
-        title="Framework mapping"
-        subtitle="Analyst-associated framework context for this case. Not a compliance determination."
-        testId="framework-mapping-section"
+      {/* ---------------- Secondary context & history: real evidence and
+          audit trail, none of it removed — folded behind disclosure so it
+          stops competing with the decision above for the first screen. Each
+          summary line states a count so the fact is visible even collapsed. */}
+      <SectionLabel component="h2" sx={{ mb: 1.5 }}>
+        Secondary context &amp; history
+      </SectionLabel>
+      <Box sx={{ display: 'grid', gap: 2, mb: 3 }}>
+        {canReadNotifications && (
+          <Disclosure
+            summary={`Notifications — ${notifications.length} drafted from this case`}
+            hint="Constituent notifications drafted from this case's evidence. ThreatNeXus never sends one — an approved notification is exported manually."
+            data-testid="case-notifications"
+          >
+          {canManageNotifications && (
+            <Box sx={{ mb: 2 }}>
+              <Button
+                variant="contained"
+                size="small"
+                disabled={busy || !permittedActions.isOrganizationBound}
+                onClick={async () => {
+                  setBusy(true)
+                  try {
+                    const res = await notificationService.createDraft(Number(id))
+                    toast.success('Notification draft created from this case.')
+                    navigate(`/notifications/${res.data.data.notification.id}`)
+                  } catch (error) {
+                    toast.error(
+                      describeWorkflowError(error, 'The notification draft could not be created.'),
+                    )
+                  } finally {
+                    setBusy(false)
+                  }
+                }}
+                data-testid="draft-notification"
+              >
+                Draft notification
+              </Button>
+              {!permittedActions.isOrganizationBound && (
+                <Typography sx={{ fontSize: 12, color: '#9DAFC2', mt: 1 }}>
+                  This legacy case has no organization, so a notification cannot be addressed from
+                  it.
+                </Typography>
+              )}
+            </Box>
+          )}
+
+          {notifications.length === 0 ? (
+            <Typography sx={{ fontSize: 13, color: '#9DAFC2' }} data-testid="no-case-notifications">
+              No notification has been drafted from this case.
+            </Typography>
+          ) : (
+            <TableContainer sx={{ overflowX: 'auto' }}>
+              <Table size="small">
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Reference</TableCell>
+                    <TableCell>Subject</TableCell>
+                    <TableCell>State</TableCell>
+                    <TableCell align="right">Rev</TableCell>
+                    <TableCell align="right">Exports</TableCell>
+                    <TableCell align="right">Actions</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {notifications.map((row) => (
+                    <TableRow key={row.id} data-testid={`case-notification-${row.id}`}>
+                      <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                        {row.notificationReference || '—'}
+                      </TableCell>
+                      <TableCell sx={{ maxWidth: 280 }}>
+                        {row.currentRevision?.subject || '—'}
+                      </TableCell>
+                      <TableCell>
+                        <Chip
+                          size="small"
+                          label={
+                            NOTIFICATION_STATE_LABELS[row.lifecycleState] || row.lifecycleState
+                          }
+                          sx={{
+                            bgcolor: `${NOTIFICATION_STATE_COLORS[row.lifecycleState]}22`,
+                            color: NOTIFICATION_STATE_COLORS[row.lifecycleState],
+                            fontWeight: 700,
+                          }}
+                        />
+                      </TableCell>
+                      <TableCell align="right">
+                        {row.currentRevision?.revisionNumber ?? '—'}
+                      </TableCell>
+                      <TableCell align="right">{row.exportCount}</TableCell>
+                      <TableCell align="right">
+                        <Button
+                          size="small"
+                          onClick={() => navigate(`/notifications/${row.id}`)}
+                          data-testid={`open-notification-${row.id}`}
+                        >
+                          Open
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          )}
+          </Disclosure>
+        )}
+
+        <Disclosure
+          summary={
+            organizationResponses.length === 0
+              ? 'Organization responses — none recorded'
+              : `Organization responses — ${organizationResponses.length} recorded`
+          }
+          hint="What the affected organization told us. A response is a claim, never proof — none of these closes anything on its own."
+          data-testid="organization-responses"
+        >
+        {canManage && permittedActions.canRecordResponse && (
+          <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 2, alignItems: 'flex-start' }}>
+            <TextField
+              select
+              size="small"
+              label="Response"
+              value={responseForm.responseType}
+              onChange={(e) => setResponseForm({ ...responseForm, responseType: e.target.value })}
+              sx={{ minWidth: 190 }}
+            >
+              {ORGANIZATION_RESPONSE_TYPES.map((type) => (
+                <MenuItem key={type} value={type}>
+                  {RESPONSE_LABELS[type]}
+                </MenuItem>
+              ))}
+            </TextField>
+            <TextField
+              size="small"
+              label="Summary (required)"
+              value={responseForm.summary}
+              onChange={(e) => setResponseForm({ ...responseForm, summary: e.target.value })}
+              sx={{ minWidth: 280, flex: 1 }}
+            />
+            <TextField
+              size="small"
+              label="Reference (optional)"
+              value={responseForm.reference}
+              onChange={(e) => setResponseForm({ ...responseForm, reference: e.target.value })}
+              sx={{ width: 180 }}
+            />
+            <TextField
+              size="small"
+              type="datetime-local"
+              label="Occurred at"
+              data-testid="response-occurred-at"
+              value={responseForm.occurredAt}
+              onChange={(e) => setResponseForm({ ...responseForm, occurredAt: e.target.value })}
+              error={parseDatetimeInputValue(responseForm.occurredAt) === null}
+              helperText={
+                parseDatetimeInputValue(responseForm.occurredAt) === null
+                  ? 'Enter a valid date and time.'
+                  : ' '
+              }
+              slotProps={{ inputLabel: { shrink: true } }}
+              sx={{ minWidth: 210 }}
+            />
+            <Button
+              variant="contained"
+              disabled={
+                busy ||
+                responseForm.summary.trim() === '' ||
+                parseDatetimeInputValue(responseForm.occurredAt) === null
+              }
+              data-testid="record-response"
+              onClick={async () => {
+                const occurredAt = parseDatetimeInputValue(responseForm.occurredAt)
+                if (occurredAt === null) {
+                  toast.error('Enter a valid response date and time.')
+                  return
+                }
+                const payload = {
+                  responseType: responseForm.responseType,
+                  summary: responseForm.summary.trim(),
+                  occurredAt: occurredAt.toISOString(),
+                }
+                if (responseForm.reference.trim()) payload.reference = responseForm.reference.trim()
+                const ok = await run(
+                  () => caseWorkflowService.recordResponse(record.id, payload),
+                  'Organization response recorded',
+                  'Failed to record response',
+                )
+                if (ok) {
+                  setResponseForm({
+                    responseType: 'ACKNOWLEDGED',
+                    summary: '',
+                    reference: '',
+                    occurredAt: toLocalDatetimeInputValue(new Date()),
+                  })
+                }
+              }}
+              sx={{ bgcolor: '#35C477', color: '#06100A' }}
+            >
+              Record
+            </Button>
+          </Box>
+        )}
+
+        {organizationResponses.length === 0 ? (
+          <Typography sx={{ fontSize: 13, color: '#9DAFC2' }}>
+            No responses recorded yet. That is different from a recorded &ldquo;no response&rdquo;.
+          </Typography>
+        ) : (
+          organizationResponses.map((response) => (
+            <Box key={response.id} sx={{ mb: 1.5 }} data-testid={`response-${response.id}`}>
+              <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
+                <Chip
+                  size="small"
+                  label={RESPONSE_LABELS[response.responseType] || response.responseType}
+                  sx={{
+                    bgcolor: `${RESPONSE_COLORS[response.responseType] || '#7C8AA0'}20`,
+                    color: RESPONSE_COLORS[response.responseType] || '#7C8AA0',
+                    fontWeight: 700,
+                    fontSize: 10,
+                  }}
+                />
+                <Typography sx={{ fontSize: 11, color: '#9DAFC2' }}>
+                  {formatInstant(response.occurredAt)}
+                  {response.reference ? ` · ref ${response.reference}` : ''}
+                </Typography>
+              </Box>
+              <Typography sx={{ fontSize: 13, color: '#EAF1F9', mt: 0.5 }}>
+                {response.summary}
+              </Typography>
+            </Box>
+          ))
+        )}
+      </Disclosure>
+
+      {/* Framework mapping is a judgement made ABOUT the evidence above it, so
+          it is read after that evidence rather than before. The panel fetches
+          its own data and renders its own capability gates regardless of
+          whether this disclosure is open, so collapsing it never delays or
+          skips that fetch — only what is shown by default changes. */}
+      <Disclosure
+        summary="Framework mapping"
+        hint="Analyst-associated framework context for this case. Not a compliance determination."
+        data-testid="framework-mapping-section"
       >
         <FrameworkMappingPanel caseId={id} />
-      </Section>
+      </Disclosure>
 
-      {/* ---------------- Lifecycle timeline ---------------- */}
-      <Section
-        title="Lifecycle timeline"
-        subtitle="Immutable. One row per accepted transition, written in the same transaction as the change it describes."
-        testId="lifecycle-timeline"
+      <Disclosure
+        summary={`Lifecycle timeline — ${lifecycleEvents.length} event${lifecycleEvents.length === 1 ? '' : 's'}`}
+        hint="Immutable. One row per accepted transition, written in the same transaction as the change it describes."
+        data-testid="lifecycle-timeline"
       >
         {lifecycleEvents.map((event) => (
           <Box key={event.id} sx={{ mb: 1.25 }} data-testid={`lifecycle-event-${event.id}`}>
@@ -909,14 +926,13 @@ export const CaseDetail = () => {
             </Typography>
           </Box>
         ))}
-      </Section>
+      </Disclosure>
 
-      {/* ---------------- Recurrence ledger ---------------- */}
       {recurrenceReopens.length > 0 && (
-        <Section
-          title="Recurrence evaluations"
-          subtitle="Every recurrence evaluated against this case, including the ones that decided NOT to reopen it."
-          testId="recurrence-ledger"
+        <Disclosure
+          summary={`Recurrence evaluations — ${recurrenceReopens.length}`}
+          hint="Every recurrence evaluated against this case, including the ones that decided NOT to reopen it."
+          data-testid="recurrence-ledger"
         >
           {recurrenceReopens.map((row) => (
             <Typography key={row.id} sx={{ fontSize: 12, color: '#9DAFC2', mb: 0.75 }}>
@@ -924,8 +940,9 @@ export const CaseDetail = () => {
               {RECURRENCE_OUTCOME_LABELS[row.outcome] || row.outcome}
             </Typography>
           ))}
-        </Section>
+        </Disclosure>
       )}
+      </Box>
     </Box>
   )
 }

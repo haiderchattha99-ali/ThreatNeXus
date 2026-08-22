@@ -274,7 +274,11 @@ describe('case detail — shared presentation', () => {
   it('renders the reference, lifecycle state, organization and linked evidence', async () => {
     renderDetail(VIEWER_CAPABILITIES)
 
-    expect(await screen.findByText('Accessible RDP on a constituent host')).toBeInTheDocument()
+    // The title also appears as the trailing breadcrumb crumb now, so this
+    // scopes to the page's one <h1> rather than an ambiguous text match.
+    expect(
+      await screen.findByRole('heading', { name: 'Accessible RDP on a constituent host' }),
+    ).toBeInTheDocument()
     expect(screen.getByText('TNX-2026-000004')).toBeInTheDocument()
     expect(screen.getByTestId('case-lifecycle-state')).toHaveTextContent('Open')
     expect(screen.getByText(/Acme Bank · FINANCE/)).toBeInTheDocument()
@@ -786,5 +790,66 @@ describe('case detail — ADMIN', () => {
       ),
     )
     expect(await screen.findByTestId('triage-state-2')).toHaveTextContent('Dismissed')
+  })
+})
+
+// True when `first` appears before `second` in document order.
+function precedes(first, second) {
+  // eslint-disable-next-line no-bitwise
+  return Boolean(first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING)
+}
+
+describe('case detail — UX Ticket B: decision-first hierarchy', () => {
+  it('puts closure review and linked findings ahead of the secondary/history disclosures', async () => {
+    renderDetail(ANALYST_CAPABILITIES)
+
+    const closure = await screen.findByTestId('closure-workflow')
+    const linkedFindings = screen.getByTestId('linked-findings')
+    const orgResponses = screen.getByTestId('organization-responses')
+    const lifecycle = screen.getByTestId('lifecycle-timeline')
+
+    expect(precedes(closure, orgResponses)).toBe(true)
+    expect(precedes(linkedFindings, orgResponses)).toBe(true)
+    expect(precedes(orgResponses, lifecycle)).toBe(true)
+  })
+
+  it('collapses secondary context and history by default, without losing any of it', async () => {
+    renderDetail(
+      ANALYST_CAPABILITIES,
+      workflowView({
+        organizationResponses: [
+          {
+            id: 41,
+            caseId: 4,
+            responseType: 'REMEDIATED',
+            summary: 'Port closed at the perimeter',
+            occurredAt: '2026-08-03T09:00:00.000Z',
+            recordedAt: '2026-08-03T09:00:00.000Z',
+          },
+        ],
+      }),
+    )
+
+    const orgResponses = await screen.findByTestId('organization-responses')
+    const lifecycle = screen.getByTestId('lifecycle-timeline')
+    // Native <details>, collapsed by default: no `open` attribute yet.
+    expect(orgResponses).not.toHaveAttribute('open')
+    expect(lifecycle).not.toHaveAttribute('open')
+    // Collapsed never means removed — the fact is still in the document.
+    expect(orgResponses).toHaveTextContent('Port closed at the perimeter')
+    expect(orgResponses).toHaveTextContent('1 recorded')
+  })
+
+  it('opens a secondary disclosure on click, reaching the record-response control inside it', async () => {
+    const user = userEvent.setup()
+    renderDetail(ANALYST_CAPABILITIES)
+
+    const orgResponses = await screen.findByTestId('organization-responses')
+    expect(orgResponses).not.toHaveAttribute('open')
+
+    await user.click(screen.getByText(/Organization responses — none recorded/))
+
+    expect(orgResponses).toHaveAttribute('open')
+    expect(screen.getByTestId('record-response')).toBeInTheDocument()
   })
 })
