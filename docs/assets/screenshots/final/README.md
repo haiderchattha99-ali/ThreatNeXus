@@ -4,6 +4,13 @@ Canonical screenshot masters for the ThreatNeXus official documentation set. The
 earlier screenshot in this repository: all previous captures predate the final frontend polish pass
 (PR #30) and no longer show the shipped interface.
 
+> **Two capture generations live in this directory.** The bulk of the library was captured at
+> `2bda0e5`. The two files prefixed `final-` were captured at `fd804ea`, after UX Tickets A/B/C and
+> the demonstration accounts merged, and are the only ones that show the current navigation grouping
+> and the Provider Intelligence Evidence viewer. Each generation records its own capture conditions —
+> see "Official System & Handover Document captures" below. Use the `final-` pair for any new
+> document that describes the shipped interface.
+
 **Do not edit these files.** Cropping, scaling and annotation belong to document production. Keeping
 the masters unaltered is what allows any figure in the final documents to be traced back to a real
 application state.
@@ -89,6 +96,36 @@ Not part of the required sets, but truthful states the documentation may need.
 | `supporting-settings-provider-evidence.png` | `/settings` | ADMIN | Stored provider evidence freshness and the disabled AI assistance block. |
 | `supporting-settings-fullpage.png` | `/settings` | ADMIN | Settings end to end. |
 | `supporting-findings-fullpage.png` | `/findings` | ANALYST | Findings workspace end to end. |
+
+## Official System & Handover Document captures (`fd804ea`)
+
+**These two, and only these two, are current for the shipped interface.** Every other capture in this
+file was taken at `2bda0e5`, which predates UX Tickets A, B and C (PRs #35, #36, #39) and the
+demonstration accounts (PR #38). The earlier captures remain valid evidence of the states they
+recorded and are unaltered, but the navigation grouping, the decision-first Finding Detail layout and
+the Provider Intelligence Evidence viewer that the current build has are not visible in them.
+
+Capture conditions differ from the block at the top of this file in exactly two respects:
+
+| Property | Value |
+|---|---|
+| Source commit | `fd804ea` (`origin/main`, after PRs #38 and #39) |
+| Capture date | 2026-08-22 |
+| Providers | **Live**, credentialed, MANUAL lane only — see below |
+| Enrichment worker | On (MANUAL lane only); automatic enrichment off |
+| Everything else | As the conditions block above: production nginx build, PostgreSQL 16, database from zero then `seed:users` + `seed:demo`, Chromium clean profile, 1440 × 900 at DPR 2, dark, motion frozen, **zero console errors** |
+
+The provider departure is the point. The Provider Intelligence Evidence viewer cannot be shown
+truthfully against a stack holding no provider evidence, so one MANUAL-lane enrichment run was
+performed against the demonstration Finding using real credentials. **The evidence in
+`final-provider-evidence-drawer.png` is a genuine provider answer, not a fixture:** AbuseIPDB returned
+0 % abuse confidence over 9 reports for a reserved documentation address, which is the correct answer
+for such an address. Nothing in either capture is fabricated beyond the synthetic dataset itself.
+
+| File | Route | Role | What it demonstrates |
+|---|---|---|---|
+| `final-dashboard-analyst.png` | `/dashboard` | ANALYST | Figure 1 of the handover document. The shipped navigation grouping (Operations / Response / Insight / Administration) and the analyst operations overview, every figure carrying its own snapshot time and a "loaded dataset only" qualifier. |
+| `final-provider-evidence-drawer.png` | `/findings/11` | ANALYST | Figure 2. The Provider Intelligence Evidence viewer open on a real AbuseIPDB result, showing the stored normalised evidence alongside the execution record — provider contacted, recorded via, retrieved, freshness. Demonstrates that the row summary is a preview and the drawer is the detail, and that the panel itself states raw upstream bodies are never retained. |
 
 ## Demo-readiness supporting captures
 

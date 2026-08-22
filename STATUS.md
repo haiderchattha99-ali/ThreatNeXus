@@ -66,6 +66,9 @@ open.
 - **Legacy frontend docs archived** to `frontend/docs/archive/` behind an explicit notice. They
   claimed "production-ready", documented deleted `/api/threats` endpoints, referenced an
   uninstalled charting library, and carried committed credential literals.
+  *(Later removed outright during the final documentation consolidation: the folder declared itself
+  non-authoritative, and this entry is the only unique fact it carried. Recoverable from Git
+  history.)*
 
 #### Phase 6.2 exit gate — measured 2026-08-05, every command re-run from a fresh process
 
