@@ -42,7 +42,7 @@ import {
   TableHead,
   TableRow,
 } from '@mui/material'
-import { FiSend, FiRefreshCw } from 'react-icons/fi'
+import { FiSend, FiRefreshCw, FiArrowRight } from 'react-icons/fi'
 import toast from 'react-hot-toast'
 
 import { findingEnrichmentOrchestrationService } from '../services/api'
@@ -67,6 +67,7 @@ import {
   describeEnrichmentError,
 } from '../constants/findingEnrichment'
 import { summarizeProviderEvidence } from '../utils/enrichmentEvidence'
+import { ProviderEvidenceDrawer } from './ProviderEvidenceDrawer'
 
 // One row per (provider, subject). A provider with verified CVE subjects
 // (nvd) contributes one row per CVE instead of one aggregate row, so each
@@ -97,7 +98,7 @@ function flattenProviderRows(providers) {
   return rows
 }
 
-function ProviderRow({ row }) {
+function ProviderRow({ row, onViewResult }) {
   const sourceLabel = SUMMARY_SOURCE_LABELS[row.source]
   // Deterministic, derived only from this row's own stored evidence — see
   // utils/enrichmentEvidence.js. Never a model, never another provider's data.
@@ -162,6 +163,20 @@ function ProviderRow({ row }) {
             {row.freshUntil ? ` — expired ${formatAsOf(row.freshUntil)}` : ''}.
           </StaleNotice>
         )}
+        {/* The row above is a PREVIEW — one sentence and at most five facts.
+            This opens the full stored evidence for the same row, from data
+            already in hand: it triggers no request, of any kind, ever. It is
+            offered for EVERY status, because "why was this skipped" needs the
+            execution record just as much as a completed lookup does. */}
+        <Button
+          size="small"
+          onClick={() => onViewResult(row)}
+          endIcon={<FiArrowRight size={12} />}
+          sx={{ mt: 0.75, ml: -1 }}
+          data-testid={`enrichment-view-result-${row.provider}`}
+        >
+          View result
+        </Button>
       </TableCell>
       <TableCell>
         <Box sx={{ ...type.caption, color: color.textFaint }}>
@@ -191,6 +206,9 @@ export function FindingEnrichmentPanel({ findingId }) {
   const [forceFormOpen, setForceFormOpen] = useState(false)
   const [justification, setJustification] = useState('')
   const [justificationError, setJustificationError] = useState('')
+  // The row the evidence drawer is showing. Pure view state over data already
+  // fetched — setting it performs no read and no write.
+  const [evidenceRow, setEvidenceRow] = useState(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -392,8 +410,12 @@ export function FindingEnrichmentPanel({ findingId }) {
           </TableHead>
           <TableBody>
             {rows.map((row, i) => (
-              // eslint-disable-next-line react/no-array-index-key
-              <ProviderRow key={`${row.provider}-${row.subjectValue || i}`} row={row} />
+              <ProviderRow
+                // eslint-disable-next-line react/no-array-index-key
+                key={`${row.provider}-${row.subjectValue || i}`}
+                row={row}
+                onViewResult={setEvidenceRow}
+              />
             ))}
           </TableBody>
         </Table>
@@ -403,6 +425,12 @@ export function FindingEnrichmentPanel({ findingId }) {
         source="Finding enrichment summary (stored orchestration state)"
         asOf={summary.asOf}
         sx={{ mt: 2 }}
+      />
+
+      <ProviderEvidenceDrawer
+        row={evidenceRow}
+        open={Boolean(evidenceRow)}
+        onClose={() => setEvidenceRow(null)}
       />
 
       {lastRun && (

@@ -524,3 +524,158 @@ describe('requesting a run', () => {
     expect(screen.getByText('Rate limited')).toBeInTheDocument()
   })
 })
+
+// ===========================================================================
+// UX Ticket C — the Provider Intelligence Evidence drawer
+// ===========================================================================
+// What these tests defend: the one-line/five-fact row is a PREVIEW, and every
+// row — completed or not — can be opened to see every safe stored field plus
+// the execution record. The single most important assertion in this block is
+// the read-only one: opening, closing and switching provider evidence must
+// issue ZERO requests, so no provider is contacted and nothing is mutated.
+
+const ABUSEIPDB_EVIDENCE = {
+  queriedAt: '2026-08-12T09:00:00.000Z',
+  abuseConfidenceScore: 0,
+  totalReports: 0,
+  countryCode: 'PK',
+  isp: 'Example Telecom',
+  domain: 'example.pk',
+  usageType: 'Fixed Line ISP',
+  isWhitelisted: false,
+  lastReportedAt: '2026-08-11T22:15:00.000Z',
+}
+
+const openEvidenceFor = async (user, provider) => {
+  await user.click(screen.getByTestId(`enrichment-view-result-${provider}`))
+  return screen.findByTestId('provider-evidence-drawer')
+}
+
+describe('provider intelligence evidence drawer', () => {
+  it('opens the full stored evidence for a completed AbuseIPDB lookup', async () => {
+    const user = userEvent.setup()
+    findingEnrichmentOrchestrationService.getSummary.mockResolvedValue(
+      fullSummary({
+        providers: [
+          providerRow({ provider: 'abuseipdb', purpose: 'IOC_REPUTATION', status: 'COMPLETED', source: 'IOC_ENRICHMENT', subjectValue: '203.0.113.5', evidenceAvailable: true, evidence: ABUSEIPDB_EVIDENCE }),
+        ],
+      }),
+    )
+    await renderPanel(VIEWER_CAPABILITIES)
+
+    // The row itself stays a concise preview: five facts, not eight.
+    const preview = screen.getByTestId('enrichment-result-facts-abuseipdb')
+    expect(within(preview).getAllByRole('listitem')).toHaveLength(5)
+
+    const drawer = await openEvidenceFor(user, 'abuseipdb')
+
+    // Every stored column is inspectable, including the three the preview cut.
+    expect(within(drawer).getByText('Domain')).toBeInTheDocument()
+    expect(within(drawer).getByText('example.pk')).toBeInTheDocument()
+    expect(within(drawer).getByText('Country')).toBeInTheDocument()
+    expect(within(drawer).getByText('Whitelisted by AbuseIPDB')).toBeInTheDocument()
+    // A stored 0 and a stored false are answers, and survive as such.
+    expect(within(drawer).getByText('0%')).toBeInTheDocument()
+    expect(within(drawer).getByText('No')).toBeInTheDocument()
+    // Provenance, and the product-truth language about what is retained.
+    expect(within(drawer).getByTestId('provider-evidence-provenance')).toBeInTheDocument()
+    expect(within(drawer).getByText(/raw upstream\s+response bodies are never retained/i)).toBeInTheDocument()
+    expect(within(drawer).queryByText(/complete api response|raw provider response/i)).not.toBeInTheDocument()
+  })
+
+  it('opening, switching and closing evidence issues no request at all', async () => {
+    const user = userEvent.setup()
+    await renderPanel(ANALYST_CAPABILITIES)
+    expect(findingEnrichmentOrchestrationService.getSummary).toHaveBeenCalledTimes(1)
+
+    await openEvidenceFor(user, 'abuseipdb')
+    await user.click(screen.getByRole('button', { name: /Close provider evidence/i }))
+    await waitFor(() => expect(screen.queryByTestId('provider-evidence-drawer')).not.toBeInTheDocument())
+    await openEvidenceFor(user, 'netlas')
+
+    // No second read, no run creation, no run poll — the drawer reads only
+    // what the panel already holds.
+    expect(findingEnrichmentOrchestrationService.getSummary).toHaveBeenCalledTimes(1)
+    expect(findingEnrichmentOrchestrationService.createRun).not.toHaveBeenCalled()
+    expect(findingEnrichmentOrchestrationService.getRun).not.toHaveBeenCalled()
+  })
+
+  it('is a real button: keyboard reachable, and the drawer is named for a screen reader', async () => {
+    const user = userEvent.setup()
+    await renderPanel(VIEWER_CAPABILITIES)
+
+    const trigger = screen.getByTestId('enrichment-view-result-abuseipdb')
+    expect(trigger.tagName).toBe('BUTTON')
+    trigger.focus()
+    expect(trigger).toHaveFocus()
+    await user.keyboard('{Enter}')
+
+    const drawer = await screen.findByTestId('provider-evidence-drawer')
+    expect(within(drawer).getByRole('heading', { level: 2 })).toHaveTextContent(/AbuseIPDB/)
+    expect(drawer).toHaveAttribute('aria-labelledby', 'provider-evidence-drawer-title')
+    expect(within(drawer).getByRole('button', { name: /Close provider evidence/i })).toBeInTheDocument()
+  })
+
+  it('explains a skipped lookup instead of showing an empty evidence surface', async () => {
+    const user = userEvent.setup()
+    await renderPanel(VIEWER_CAPABILITIES)
+
+    const drawer = await openEvidenceFor(user, 'netlas')
+    expect(within(drawer).getByTestId('provider-evidence-empty')).toBeInTheDocument()
+    expect(within(drawer).getByText(/No credential configured for this provider/i)).toBeInTheDocument()
+    expect(within(drawer).getByText('No — the lookup was never sent')).toBeInTheDocument()
+  })
+
+  it('explains NO_SUBJECT without implying a failed lookup', async () => {
+    const user = userEvent.setup()
+    await renderPanel(VIEWER_CAPABILITIES)
+
+    const drawer = await openEvidenceFor(user, 'nvd')
+    expect(within(drawer).getByText(/No qualifying CVE is associated with this finding/i)).toBeInTheDocument()
+    expect(within(drawer).getByText(/^No — there was no qualifying subject/)).toBeInTheDocument()
+  })
+
+  it('shows NVD, CISA KEV and FIRST EPSS as three separately attributed sources', async () => {
+    const user = userEvent.setup()
+    findingEnrichmentOrchestrationService.getSummary.mockResolvedValue(
+      fullSummary({
+        providers: [
+          providerRow({
+            provider: 'nvd',
+            purpose: 'VULNERABILITY',
+            status: 'COMPLETED',
+            source: 'VULNERABILITY_ENRICHMENT',
+            subjects: [
+              {
+                subjectValue: 'CVE-2024-6387',
+                status: 'COMPLETED',
+                skipReason: null,
+                source: 'VULNERABILITY_ENRICHMENT',
+                freshUntil: null,
+                isStale: false,
+                evidenceAvailable: false,
+                evidence: {
+                  sources: [
+                    { provider: 'NVD', status: 'SUCCESS', cvssBaseScoreTenths: 98, cvssSeverity: 'CRITICAL', queriedAt: '2026-08-12T09:00:00.000Z' },
+                    { provider: 'CISA_KEV', status: 'SUCCESS', isKnownExploited: true, dueDate: '2026-09-01T00:00:00.000Z', queriedAt: '2026-08-12T09:00:00.000Z' },
+                    { provider: 'FIRST_EPSS', status: 'TIMEOUT', queriedAt: '2026-08-12T09:00:00.000Z' },
+                  ],
+                },
+              },
+            ],
+          }),
+        ],
+      }),
+    )
+    await renderPanel(VIEWER_CAPABILITIES)
+
+    const drawer = await openEvidenceFor(user, 'nvd')
+    expect(within(drawer).getByTestId('provider-evidence-group-NVD')).toBeInTheDocument()
+    expect(within(drawer).getByTestId('provider-evidence-group-CISA KEV')).toBeInTheDocument()
+    const epss = within(drawer).getByTestId('provider-evidence-group-FIRST EPSS')
+    // The batch completed, but EPSS did not answer — and says so on its own.
+    expect(within(epss).getByText('Timed out')).toBeInTheDocument()
+    expect(within(drawer).getByText('9.8')).toBeInTheDocument()
+    expect(within(drawer).getByText(/never proof that this CVE was exploited here/i)).toBeInTheDocument()
+  })
+})
