@@ -120,8 +120,7 @@ const SECTIONS = [
   { id: 'tnx-identity', label: 'Identity and owner' },
   { id: 'tnx-risk', label: 'Risk v1' },
   { id: 'tnx-context', label: 'Reputation and CVEs' },
-  { id: 'tnx-timeline', label: 'Observations' },
-  { id: 'tnx-cases', label: 'Cases' },
+  { id: 'tnx-record', label: 'Evidence of record' },
   { id: 'tnx-optional', label: 'Enrichment and AI' },
 ]
 
@@ -848,66 +847,78 @@ export const FindingDetail = () => {
         </Box>
       </Section>
 
-      <Section id="tnx-timeline">
-        <Panel
-          title="Observation timeline"
-          description={`Most recent ${finding.occurrenceLimit} occurrences. Every row is immutable evidence of what one ingestion did.`}
+      {/* Evidence of record — what this finding's history IS, as opposed to
+          what to do about it. Both panels are immutable record: the occurrences
+          are what ingestion observed, the case links are where that record is
+          already cited. Neither changes a triage decision on its own, so they
+          sit together behind one disclosure instead of two full-height panels
+          between the decision surfaces and the optional subsystems. Nothing is
+          unmounted — both still load and are one click from view. */}
+      <Section id="tnx-record">
+        <Disclosure
+          summary="Evidence of record"
+          hint="What was observed for this indicator, and where that record is already cited."
         >
-          <Timeline
-            items={finding.occurrences.map((o) => ({
-              id: o.id,
-              title: OCCURRENCE_ACTION[o.action]?.label || o.action,
-              at: o.observedAt,
-              detail: `Report #${o.rawReportId}`,
-              tone:
-                o.action === 'RECURRED'
-                  ? color.danger
-                  : o.action === 'PERSISTED'
-                    ? color.warning
-                    : color.borderStrong,
-            }))}
-            emptyLabel="No occurrences recorded."
-            dense
-          />
-        </Panel>
-      </Section>
+          <Box sx={{ display: 'grid', gap: 2 }}>
+            <Panel
+              title="Observation timeline"
+              description={`Most recent ${finding.occurrenceLimit} occurrences. Every row is immutable evidence of what one ingestion did.`}
+            >
+              <Timeline
+                items={finding.occurrences.map((o) => ({
+                  id: o.id,
+                  title: OCCURRENCE_ACTION[o.action]?.label || o.action,
+                  at: o.observedAt,
+                  detail: `Report #${o.rawReportId}`,
+                  tone:
+                    o.action === 'RECURRED'
+                      ? color.danger
+                      : o.action === 'PERSISTED'
+                        ? color.warning
+                        : color.borderStrong,
+                }))}
+                emptyLabel="No occurrences recorded."
+                dense
+              />
+            </Panel>
 
-      <Section id="tnx-cases">
-        <Panel
-          title="Cases citing this finding"
-          description="Where this evidence is currently linked."
-        >
-          {caseLinks.length ? (
-            <Box component="ul" sx={{ listStyle: 'none', m: 0, p: 0, display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-              {caseLinks.map((l) => (
-                <Box
-                  component="li"
-                  key={l.caseId}
-                  sx={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    gap: 2,
-                    flexWrap: 'wrap',
-                    border: `1px solid ${color.border}`,
-                    borderRadius: `${radius.sm}px`,
-                    px: 2,
-                    py: 1.5,
-                  }}
-                >
-                  <Link component={RouterLink} to={`/cases/${l.caseId}`} sx={{ fontFamily: font.mono, fontSize: 13 }}>
-                    {l.caseReference || `Case ${l.caseId}`}
-                  </Link>
-                  <StatusBadge dictionary={CASE_STATE} value={l.lifecycleState} size="small" />
+            <Panel
+              title="Cases citing this finding"
+              description="Where this evidence is currently linked."
+            >
+              {caseLinks.length ? (
+                <Box component="ul" sx={{ listStyle: 'none', m: 0, p: 0, display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+                  {caseLinks.map((l) => (
+                    <Box
+                      component="li"
+                      key={l.caseId}
+                      sx={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: 2,
+                        flexWrap: 'wrap',
+                        border: `1px solid ${color.border}`,
+                        borderRadius: `${radius.sm}px`,
+                        px: 2,
+                        py: 1.5,
+                      }}
+                    >
+                      <Link component={RouterLink} to={`/cases/${l.caseId}`} sx={{ fontFamily: font.mono, fontSize: 13 }}>
+                        {l.caseReference || `Case ${l.caseId}`}
+                      </Link>
+                      <StatusBadge dictionary={CASE_STATE} value={l.lifecycleState} size="small" />
+                    </Box>
+                  ))}
                 </Box>
-              ))}
-            </Box>
-          ) : (
-            <EmptyState title="Not currently linked to a case" dense>
-              Escalating this Finding during triage is what creates or joins a case.
-            </EmptyState>
-          )}
-        </Panel>
+              ) : (
+                <EmptyState title="Not currently linked to a case" dense>
+                  Escalating this Finding during triage is what creates or joins a case.
+                </EmptyState>
+              )}
+            </Panel>
+          </Box>
+        </Disclosure>
       </Section>
 
       {/* Optional subsystems, last and folded away by default.

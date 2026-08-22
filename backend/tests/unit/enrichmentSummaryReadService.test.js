@@ -174,8 +174,17 @@ describe("attaching the stored evidence to a row", () => {
         ASOF
       ).evidence
     ).toBeNull();
-    // The vulnerability batch finishing is not a per-source provider result,
-    // and this layer cannot read one — so it claims none.
+    // A batch that recorded no per-source result at all shows none — "nothing
+    // was recorded" must stay distinct from "a result was recorded and empty".
+    expect(
+      resolveSubjectState(
+        eligibleItem({
+          state: JOB_STATES.WAITING_ON_DELEGATE,
+          vulnerabilityEnrichmentJob: { status: "COMPLETED", providerResults: [] },
+        }),
+        ASOF
+      ).evidence
+    ).toBeNull();
     expect(
       resolveSubjectState(
         eligibleItem({
@@ -185,6 +194,80 @@ describe("attaching the stored evidence to a row", () => {
         ASOF
       ).evidence
     ).toBeNull();
+  });
+
+  // UX Ticket C — the NVD / CISA KEV / FIRST EPSS gap. The batch's own
+  // immutable per-source results are now read, so the evidence viewer can show
+  // what was stored; the ROW-level claim is deliberately unchanged.
+  it("carries each vulnerability source separately, with its own status", () => {
+    const resolved = resolveSubjectState(
+      eligibleItem({
+        state: JOB_STATES.WAITING_ON_DELEGATE,
+        vulnerabilityEnrichmentJob: {
+          status: "COMPLETED",
+          providerResults: [
+            {
+              provider: "NVD",
+              status: "SUCCESS",
+              queriedAt: new Date("2026-08-11T10:00:00.000Z"),
+              expiresAt: new Date("2026-08-18T10:00:00.000Z"),
+              cvssBaseScoreTenths: 98,
+              cvssSeverity: "CRITICAL",
+              englishDescription: "A signal handler race condition.",
+              primaryCweIds: ["CWE-364"],
+            },
+            { provider: "CISA_KEV", status: "SUCCESS", isKnownExploited: false, catalogVersion: "2026.08.10" },
+            { provider: "FIRST_EPSS", status: "TIMEOUT", epssProbabilityBasisPoints: null },
+          ],
+        },
+      }),
+      ASOF
+    );
+
+    expect(resolved.source).toBe(SUMMARY_SOURCES.VULNERABILITY_ENRICHMENT);
+    expect(resolved.evidence.sources.map((s) => s.provider)).toEqual([
+      "NVD",
+      "CISA_KEV",
+      "FIRST_EPSS",
+    ]);
+    expect(resolved.evidence.sources[0].cvssBaseScoreTenths).toBe(98);
+    // A successfully-fetched catalogue saying "no" is usable negative evidence
+    // and must survive as false, never be dropped as falsy.
+    expect(resolved.evidence.sources[1].isKnownExploited).toBe(false);
+    // A source that did not answer keeps its own non-SUCCESS status rather
+    // than inheriting the batch's COMPLETED.
+    expect(resolved.evidence.sources[2].status).toBe("TIMEOUT");
+    // The batch finishing still does not claim a current positive answer.
+    expect(resolved.evidenceAvailable).toBe(false);
+  });
+
+  it("exposes no transport or internal column from a vulnerability result", () => {
+    const resolved = resolveSubjectState(
+      eligibleItem({
+        state: JOB_STATES.WAITING_ON_DELEGATE,
+        vulnerabilityEnrichmentJob: {
+          status: "COMPLETED",
+          providerResults: [
+            {
+              id: 42,
+              jobId: 7,
+              provider: "NVD",
+              status: "FAILED",
+              httpStatus: 503,
+              errorCode: "PROVIDER_UNAVAILABLE",
+              retryAfterSeconds: 60,
+              createdAt: new Date("2026-08-11T10:00:00.000Z"),
+            },
+          ],
+        },
+      }),
+      ASOF
+    );
+
+    expect(Object.keys(resolved.evidence.sources[0])).not.toEqual(
+      expect.arrayContaining(["id", "jobId", "httpStatus", "errorCode", "retryAfterSeconds", "createdAt"])
+    );
+    expect(resolved.evidence.sources[0].status).toBe("FAILED");
   });
 });
 
