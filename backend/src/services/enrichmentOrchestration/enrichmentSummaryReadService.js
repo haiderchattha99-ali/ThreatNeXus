@@ -218,8 +218,13 @@ const JOB_STATE_TO_EXECUTION_SKIP_REASON = Object.freeze({
 //   - a NO_RECORD row still carries whatever its provider row stored; "the
 //     provider has no record" is itself the answer and is never dressed up as
 //     evidence by the status mapping above
-//   - the vulnerability path returns null, because this layer never reads
-//     VulnerabilityProviderStatus and so has no per-source result to show
+//   - the vulnerability path now carries the batch's own immutable per-source
+//     results (UX Ticket C), each with its OWN VulnerabilityProviderStatus, so
+//     NVD / CISA KEV / FIRST EPSS stay three separately-attributed answers and
+//     the batch's COMPLETED state is never read as "all three succeeded". The
+//     row-level `evidenceAvailable` flag is deliberately UNCHANGED and still
+//     false for this source (gate P1-1): this adds readable content, not a new
+//     claim that a current positive answer exists
 
 // AbuseIPDB's delegate row is included whole (its status and expiry drive the
 // status mapping), so its analyst-facing columns are picked explicitly here.
@@ -236,6 +241,58 @@ function pickIocEvidence(row) {
     isWhitelisted: row.isWhitelisted,
     lastReportedAt: row.lastReportedAt,
   };
+}
+
+// The columns of ONE VulnerabilityProviderResult that are analyst-facing
+// evidence. Named explicitly, exactly like the repository's `select`, so a
+// future column is opt-in rather than leaked by default: id/jobId and the
+// httpStatus/errorCode/retryAfterSeconds transport trio are never picked.
+//
+// Only SUCCESS may carry normalized data (the schema's own rule), so a
+// non-SUCCESS entry truthfully arrives with nulls beside its own status rather
+// than being dropped — "FIRST EPSS timed out" is an answer an analyst needs,
+// and omitting the row would make it indistinguishable from "never asked".
+function pickVulnerabilityResult(result) {
+  return {
+    provider: result.provider,
+    status: result.status,
+    queriedAt: result.queriedAt || null,
+    expiresAt: result.expiresAt || null,
+    nvdCveStatus: result.nvdCveStatus,
+    publishedAt: result.publishedAt,
+    lastModifiedAt: result.lastModifiedAt,
+    englishDescription: result.englishDescription,
+    cvssVersion: result.cvssVersion,
+    cvssBaseScoreTenths: result.cvssBaseScoreTenths,
+    cvssSeverity: result.cvssSeverity,
+    primaryCweIds: result.primaryCweIds,
+    sourceIdentifier: result.sourceIdentifier,
+    isKnownExploited: result.isKnownExploited,
+    dateAdded: result.dateAdded,
+    dueDate: result.dueDate,
+    knownRansomwareCampaignUse: result.knownRansomwareCampaignUse,
+    requiredAction: result.requiredAction,
+    catalogVersion: result.catalogVersion,
+    catalogReleasedAt: result.catalogReleasedAt,
+    epssProbabilityBasisPoints: result.epssProbabilityBasisPoints,
+    epssPercentileBasisPoints: result.epssPercentileBasisPoints,
+    modelDate: result.modelDate,
+  };
+}
+
+/**
+ * The vulnerability batch's stored per-source evidence, or null when the batch
+ * recorded no result at all (still PENDING, or dead-lettered before any
+ * provider answered) — null keeps "no result was recorded" distinct from "a
+ * result was recorded and it was empty".
+ *
+ * @param {{providerResults?: Array<object>}} job
+ * @returns {{sources: Array<object>}|null}
+ */
+function pickVulnerabilityEvidence(job) {
+  const results = Array.isArray(job.providerResults) ? job.providerResults : [];
+  if (results.length === 0) return null;
+  return { sources: results.map(pickVulnerabilityResult) };
 }
 
 // The one direct evidence row this job links, if any. The CHECK constraint on
@@ -342,9 +399,10 @@ function resolveSubjectState(item, asOf) {
     // as "fresh forever" — isStale stays false and evidenceAvailable depends
     // only on the status.
     freshUntil = null;
-    // No per-source vulnerability result is readable from this layer, so there
-    // is nothing truthful to show beyond the batch's own state.
-    evidence = null;
+    // The batch's own immutable per-source results. Each carries its own
+    // status, so the reader can attribute (and disbelieve) NVD, CISA KEV and
+    // FIRST EPSS separately instead of inheriting the batch's verdict.
+    evidence = pickVulnerabilityEvidence(job.vulnerabilityEnrichmentJob);
   } else {
     // Either a plain direct provider's own job, or a terminal Phase-10 job
     // that just outranked its still-PENDING delegate above — either way the
@@ -377,9 +435,10 @@ function resolveSubjectState(item, asOf) {
     // A real, positive answer that is still current. NO_RECORD, a stale
     // answer, and every VULNERABILITY_ENRICHMENT row are never evidence: a
     // vulnerability orchestration JOB reaching COMPLETED proves only that the
-    // batch finished, not that a per-source provider result exists — this
-    // layer never reads VulnerabilityProviderStatus or its freshness horizon,
-    // so it cannot truthfully claim otherwise (gate P1-1).
+    // batch finished, not that every per-source provider answered — the
+    // per-source rows `evidence` now carries each keep their OWN status and
+    // freshness horizon, and this row-level flag deliberately does not try to
+    // roll them up into a single claim (gate P1-1 unchanged).
     evidenceAvailable:
       source !== SUMMARY_SOURCES.VULNERABILITY_ENRICHMENT &&
       status === SUMMARY_STATUSES.COMPLETED &&
@@ -532,6 +591,7 @@ module.exports = {
   statusForJobState,
   refineUnavailableJobStatus,
   summaryForIocDelegate,
+  pickVulnerabilityEvidence,
   resolveSubjectState,
   rollUp,
   getFindingEnrichmentSummary,

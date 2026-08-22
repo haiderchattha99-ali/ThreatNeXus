@@ -145,11 +145,56 @@ async function findLatestRunItemForSubject(
       lookupJob: {
         include: {
           iocEnrichment: true,
-          vulnerabilityEnrichmentJob: true,
+          // The batch's own state drives the summary status; its immutable
+          // per-source results carry the NVD / CISA KEV / FIRST EPSS evidence
+          // the analyst-facing viewer reads. Narrowed by the same explicit
+          // `select` rule as the four rows below — a read widening only, with
+          // no schema, write-path or provider-execution change.
+          vulnerabilityEnrichmentJob: {
+            include: {
+              providerResults: {
+                select: {
+                  provider: true,
+                  status: true,
+                  queriedAt: true,
+                  expiresAt: true,
+                  // NVD
+                  nvdCveStatus: true,
+                  publishedAt: true,
+                  lastModifiedAt: true,
+                  englishDescription: true,
+                  cvssVersion: true,
+                  cvssBaseScoreTenths: true,
+                  cvssSeverity: true,
+                  primaryCweIds: true,
+                  sourceIdentifier: true,
+                  // CISA KEV
+                  isKnownExploited: true,
+                  dateAdded: true,
+                  dueDate: true,
+                  knownRansomwareCampaignUse: true,
+                  requiredAction: true,
+                  catalogVersion: true,
+                  catalogReleasedAt: true,
+                  // FIRST EPSS
+                  epssProbabilityBasisPoints: true,
+                  epssPercentileBasisPoints: true,
+                  modelDate: true,
+                },
+                orderBy: { provider: "asc" },
+              },
+            },
+          },
           // The four Phase-8 EVIDENCE rows, narrowed by an explicit `select`
           // to the analyst-facing columns the summary renders. The select is
           // the serializer: a column that is not named here can never reach a
           // client, so no transport/diagnostic field leaks by default.
+          //
+          // UX Ticket C widened these to EVERY normalized analyst-facing column
+          // each provider already stores, so the evidence viewer can show what
+          // was actually retained rather than the subset the preview needed.
+          // httpStatus / errorCode / errorMessage / retryAfterSeconds stay
+          // unnamed on purpose — they are transport diagnostics, not evidence.
           censysEnrichment: {
             select: {
               queriedAt: true,
@@ -167,6 +212,8 @@ async function findLatestRunItemForSubject(
               classification: true,
               actorName: true,
               lastSeen: true,
+              link: true,
+              message: true,
             },
           },
           shodanEnrichment: {
@@ -177,9 +224,11 @@ async function findLatestRunItemForSubject(
               organization: true,
               isp: true,
               country: true,
+              countryCode: true,
               city: true,
               vulnerabilities: true,
               lastUpdate: true,
+              link: true,
             },
           },
           netlasEnrichment: {
@@ -188,11 +237,17 @@ async function findLatestRunItemForSubject(
               services: true,
               products: true,
               hostnames: true,
+              dnsNames: true,
               organization: true,
               asn: true,
               asnOrg: true,
               country: true,
+              certificateSubject: true,
+              certificateIssuer: true,
+              certificateSan: true,
+              firstSeen: true,
               lastSeen: true,
+              link: true,
             },
           },
         },
