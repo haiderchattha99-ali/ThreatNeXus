@@ -171,7 +171,7 @@ async function main() {
   const prisma = new PrismaClient();
 
   try {
-    process.stdout.write("  1/4 dropping schema\n");
+    process.stdout.write("  1/5 dropping schema\n");
     // The destructive step. Reached only with every guard satisfied.
     await prisma.$executeRawUnsafe("DROP SCHEMA IF EXISTS public CASCADE");
     await prisma.$executeRawUnsafe("CREATE SCHEMA public");
@@ -179,13 +179,20 @@ async function main() {
     await prisma.$disconnect();
   }
 
-  process.stdout.write("  2/4 applying migrations\n");
+  process.stdout.write("  2/5 applying migrations\n");
   run("npx", ["prisma", "migrate", "deploy"]);
 
-  process.stdout.write("  3/4 seeding users\n");
+  process.stdout.write("  3/5 seeding users\n");
   run("node", ["src/scripts/seedUsers.js"]);
 
-  process.stdout.write("  4/4 seeding demonstration dataset\n");
+  // Demo-only login accounts with a published shared password. Run as a child
+  // process like every other step, so it re-evaluates these same guards in its
+  // own process rather than trusting this one — it is the only reason those
+  // deliberately weak credentials are safe to commit.
+  process.stdout.write("  4/5 provisioning demo login accounts\n");
+  run("node", ["src/scripts/seedDemoAccounts.js"]);
+
+  process.stdout.write("  5/5 seeding demonstration dataset\n");
   run("node", ["src/scripts/seedDemo.js"]);
 
   process.stdout.write("\nDEMO RESET COMPLETE — run `npm run demo:preflight` before presenting.\n");

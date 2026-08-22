@@ -27,6 +27,7 @@
     "smoke:netlas": "node src/scripts/netlasLiveSmoke.js",
     "preflight:canary": "node src/scripts/enrichmentCanaryPreflight.js",
     "demo:reset": "node src/scripts/demoReset.js",
+    "demo:accounts": "node src/scripts/seedDemoAccounts.js",
     "demo:preflight": "node src/scripts/demoPreflight.js"
   },
   "keywords": [],
