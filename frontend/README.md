@@ -6,8 +6,11 @@ prototype** built for PKCERT. It is not a deployed product; see `/STATUS.md` for
 the current state and the documented gaps.
 
 Authoritative context lives at the repository root: `/README.md`, `/STATUS.md`,
-`/AGENTS.md`. The superseded pre-Phase-0 scaffold documentation is archived under
-`docs/archive/` and should not be trusted — see the notice in that folder.
+`/AGENTS.md`, and `/docs/OFFICIAL-SYSTEM-AND-HANDOVER.md` for the consolidated
+system and handover account. The pre-Phase-0 scaffold documentation that once sat
+under `docs/archive/` has been removed: it described a product that no longer
+exists, claimed "production-ready", and carried placeholder credential literals.
+It remains recoverable from Git history if provenance is ever needed.
 
 ## Stack
 
